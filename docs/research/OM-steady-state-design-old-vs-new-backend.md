@@ -44,16 +44,53 @@ MVP 优先 Path A；Path B 作为可互操作的第二阶段。
      结果 .mat / OMEdit           Python API / Continuation
 ```
 
-### 1.1 新增编译/仿真入口（共享）
+### 1.1 模式如何进入稳态（对齐 OCT：显式选择，不自动猜测）
+
+OCT 不靠“扫到没有 `der()`”判断稳态，而是 **Impact Analysis=Steady-State / 脚本 `interactive_fmu`** 显式选模式。OM 应对齐同一原则：
+
+```text
+OMEdit: Simulation → Analysis type = Steady-State
+  或 mos:  setCommandLineOptions("--steadyStateMode=builtin");
+           solveSteadyState(MyModel);
+  或 OMPython 同等调用
+        │
+        ▼
+Flags.STEADY_STATE_MODE ≠ off
+        │
+        ├─ builtin      → Path A（内建 NLE，解完退出）
+        └─ interactiveFmu → Path B（导出 Interactive FMU）
+        │
+后端读 flag 分流（旧: Initialization/SteadyState 旁路；新: Kind.STEADY）
+        │
+运行时 / 外部 Solver 解 f(x)=0
+```
+
+**不要做的事：**
+
+- 不要仅因模型无 `der()` 就自动走稳态（纯代数模型仍可能是 DAE-mode/初始化路径）。
+- 不要复用/混淆现有仿真 flag `-steadyState`（那是**动态仿真中检测**导数变小并提前停）。
+- 不要依赖注解（`tearingSelect` / 未来 ResidualEquation）决定是否稳态——注解只影响撕裂质量。
+
+**建议命名对照：**
+
+| OCT / Impact | OpenModelica 建议 |
+|---|---|
+| Analysis = Steady-State | OMEdit Analysis = Steady-State；内部设 `--steadyStateMode` |
+| `interactive_fmu=true` | `--steadyStateMode=interactiveFmu` |
+| 内建稳态实验（Impact 一键） | `--steadyStateMode=builtin` + `solveSteadyState` |
+| `-steadyState`（无此 OCT 语义） | OM 保留原义：**detect**，与 **solve** 分开 |
+
+### 1.2 新增编译/仿真入口（共享）
 
 | 入口 | 建议 |
 |---|---|
 | 编译 flag | `--steadyStateMode=off\|builtin\|interactiveFmu`（默认 `off`） |
-| 仿真 flag | `-nls=kinsol`（稳态默认）、`-steadyStateTol` 复用为收敛容差别名或独立 `-nleTol` |
-| Scripting | `solveSteadyState(model, ...)` 或 `simulate(..., simflags="-steadySolve")` |
-| OMEdit | Analysis 类型增加 **Steady-State**（对标 Impact） |
+| 仿真 flag | Path A：`-steadySolve`（或由 builtin 模式自动带上）；NLS 默认 `-nls=kinsol`；收敛用 `-nleTol`（勿复用 `-steadyStateTol` 语义） |
+| Scripting | 首选独立 API：`solveSteadyState(model, ...)`；内部设置 mode 并编译运行 |
+| OMPython | `omc.sendExpression('solveSteadyState(MyModel)')` 或 `ModelicaSystem.solveSteadyState()` |
+| OMEdit | Analysis 类型增加 **Steady-State**（对标 Impact），选中后写 `--steadyStateMode=builtin` |
 
-### 1.2 注解策略（共享，前端）
+### 1.3 注解策略（共享，前端）
 
 现有：
 
@@ -76,7 +113,7 @@ Real T annotation(__OpenModelica_IterationVariable(nominal = 300));
 解析落点：`NFBackendExtension`（已有 `tearingSelect`）→ 写入 `VariableAttributes` / 方程 attributes，供旧 `Tearing.mo` 与新 `NBTearing.mo` 消费。  
 旧后端可用现有 `--setTearingVars` / `--setResidualEqns` 作为过渡；新后端优先注解 + `guruTearing`。
 
-### 1.3 稳态问题构造规则（共享语义）
+### 1.4 稳态问题构造规则（共享语义）
 
 对动态模型进入稳态模式时：
 

@@ -98,7 +98,7 @@ Flags.STEADY_STATE_MODE ≠ off
 Real p annotation(__OpenModelica_tearingSelect = TearingSelect.prefer);
 ```
 
-扩展（兼容 OCT 思路，命名走 OM 前缀）：
+扩展（兼容 OCT 思路，命名走 OM 前缀；`__Modelon(...)` 别名已解析）：
 
 ```modelica
 // 配对：残差方程 ↔ 迭代变量
@@ -108,9 +108,25 @@ Real p annotation(__OpenModelica_tearingSelect = TearingSelect.prefer);
 // 非配对：仅标记 IV / 残差，由编译器完成配对
 Real T annotation(__OpenModelica_IterationVariable(nominal = 300));
 0 = energyBalance(...) annotation(__OpenModelica_ResidualEquation);
+
+// OCT 别名（前端已接受）
+0 = f(x) annotation(__Modelon(ResidualEquation(iterationVariable = x)));
+Real y annotation(__Modelon(IterationVariable(hold = true)));
 ```
 
-解析落点：`NFBackendExtension`（已有 `tearingSelect`）→ 写入 `VariableAttributes` / 方程 attributes，供旧 `Tearing.mo` 与新 `NBTearing.mo` 消费。  
+**前端实现状态（已落地）：**
+
+| 落点 | 内容 |
+|---|---|
+| `NFBackendExtension.HgtIterationVariable` / `HgtResidualEquation` | 解析 `enabled/level/nominal/min/max/start/hold/name/iterationVariable`；裸注解 `ResidualEquation` / `IterationVariable`（NOMOD）也识别 |
+| `Annotations.iterationVariable` | 变量级 IV，经 `Annotations.create` 写入 `BackendInfo` |
+| `NBEquation.EquationAttributes.residualHgt` | 方程级残差，经 `NBackendDAE.lowerEquationAttributes` + `ElementSource` 写入 |
+| `BVariable.getHgtIterationVariable` / `hasHgtIterationVariable` | 后端读取入口 |
+| `Obfuscate.mo` | 白名单保留 `__OpenModelica_*` / `__Modelon` |
+
+下一阶段：`NBTearing` / 旧 `Tearing.mo` 消费配对；class 级 `tearingPairs` 尚未实现。详见 [`OM-hgt-annotation-frontend.md`](./OM-hgt-annotation-frontend.md)。
+
+解析落点：`NFBackendExtension`（已有 `tearingSelect`）→ 写入变量 `Annotations` / 方程 `residualHgt`，供旧 `Tearing.mo` 与新 `NBTearing.mo` 消费。  
 旧后端可用现有 `--setTearingVars` / `--setResidualEqns` 作为过渡；新后端优先注解 + `guruTearing`。
 
 ### 1.4 稳态问题构造规则（共享语义）

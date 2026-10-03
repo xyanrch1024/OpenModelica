@@ -1137,6 +1137,25 @@ function isJacobianResultVar
     end match;
   end getTearingSelect;
 
+  function getHgtIterationVariable
+    "Returns parsed __OpenModelica_IterationVariable / __Modelon(IterationVariable) if present."
+    input PointerCyclic<Variable> varPointer;
+    output Option<BackendExtension.HgtIterationVariable> hgtIv = NONE();
+  algorithm
+    hgtIv := match PointerCyclic.access(varPointer)
+      local
+        BackendExtension.Annotations annotations;
+      case NFVariable.VARIABLE(backendinfo = BackendExtension.BACKEND_INFO(annotations = annotations))
+        then annotations.iterationVariable;
+      else NONE();
+    end match;
+  end getHgtIterationVariable;
+
+  function hasHgtIterationVariable
+    input PointerCyclic<Variable> varPointer;
+    output Boolean b = isSome(getHgtIterationVariable(varPointer));
+  end hasHgtIterationVariable;
+
   function setVarKind
     "use with caution: some variable kinds have extra information that needs to be correct"
     input PointerCyclic<Variable> varPointer;

@@ -49,7 +49,7 @@ public
   // New Frontend imports
   import Algorithm = NFAlgorithm;
   import BackendDAE = NBackendDAE;
-  import NFBackendExtension.{VariableAttributes, OptimizerExpression};
+  import NFBackendExtension.{VariableAttributes, OptimizerExpression, HgtResidualEquation};
   import Binding = NFBinding;
   import Call = NFCall;
   import Class = NFClass;
@@ -4253,6 +4253,7 @@ public
       Evaluation.Stages evalStages                    "evaluation stages (prior used for DAE mode, still necessary?)";
       EquationKind kind                               "continuous, clocked, discrete, empty";
       Option<OptimizerExpression> optimizerExpression "dynamic optimization component: Mayer, Lagrange, Path, Boundary";
+      Option<HgtResidualEquation> residualHgt         "parsed __OpenModelica_ResidualEquation / __Modelon(ResidualEquation)";
     end EQUATION_ATTRIBUTES;
 
     function toString
@@ -4267,6 +4268,9 @@ public
         then indent + "(" + ComponentRef.toString(BVariable.getVarName(residualVar)) + ")";
         else "";
       end match;
+      if isSome(attr.residualHgt) then
+        str := str + (if str == "" then indent else " ") + HgtResidualEquation.toString(Util.getOption(attr.residualHgt));
+      end if;
     end toString;
 
     function setKind
@@ -4284,6 +4288,18 @@ public
     algorithm
       attr.residualVar := SOME(residualVar);
     end setResidualVar;
+
+    function setResidualHgt
+      input output EquationAttributes attr;
+      input Option<HgtResidualEquation> residualHgt;
+    algorithm
+      attr.residualHgt := residualHgt;
+    end setResidualHgt;
+
+    function getResidualHgt
+      input EquationAttributes attr;
+      output Option<HgtResidualEquation> residualHgt = attr.residualHgt;
+    end getResidualHgt;
 
     function getResidualVar
       input EquationAttributes attr;
@@ -4323,7 +4339,8 @@ public
       exclusively_initial = exclusively_initial,
       evalStages          = NBEvaluation.DEFAULT_STAGES,
       kind                = kind,
-      optimizerExpression = optimizerExpression);
+      optimizerExpression = optimizerExpression,
+      residualHgt         = NONE());
   end default;
 
   type EquationKind = enumeration(CONTINUOUS, DISCRETE, CLOCKED, EMPTY, UNKNOWN);

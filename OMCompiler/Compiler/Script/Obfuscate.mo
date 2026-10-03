@@ -583,6 +583,10 @@ encapsulated package Obfuscate
 
     obfuscate_binding := match mod.ident
       case "__OpenModelica_tearingSelect" then false;
+      case "__OpenModelica_IterationVariable" then false;
+      case "__OpenModelica_ResidualEquation" then false;
+      case "__OpenModelica_name" then false;
+      case "__Modelon" then false;
       else true;
     end match;
 

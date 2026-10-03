@@ -46,6 +46,7 @@ protected
   import AbsynUtil;
   import DAE;
   import Dump;
+  import ElementSource;
   import SCode;
   import SCodeUtil;
 
@@ -90,9 +91,15 @@ public
     function toString
       input BackendInfo backendInfo;
       output String str;
+    protected
+      String anno_str;
     algorithm
       str := VariableAttributes.toString(backendInfo.attributes);
       str := VariableKind.toString(backendInfo.varKind) + (if str == "" then "" else " " + str);
+      anno_str := Annotations.toString(backendInfo.annotations);
+      if anno_str <> "" then
+        str := str + (if str == "" then "" else " ") + anno_str;
+      end if;
     end toString;
 
     function map
@@ -1682,6 +1689,274 @@ public
     end DISTRIBUTION;
   end Distribution;
 
+  uniontype HgtIterationVariable
+    "Parsed OCT/OpenModelica Hand-Guided Tearing iteration variable annotation.
+     Mirrors Modelon IterationVariable / __OpenModelica_IterationVariable fields."
+    record HGT_ITERATION_VARIABLE
+      Option<Absyn.ComponentRef> name   "IV cref when provided as binding (= x)";
+      Option<Absyn.Exp> min;
+      Option<Absyn.Exp> max;
+      Option<Absyn.Exp> nominal;
+      Option<Absyn.Exp> start;
+      Option<Absyn.Exp> hold            "Boolean literal or parameter cref";
+      Boolean enabled;
+      Integer level;
+    end HGT_ITERATION_VARIABLE;
+
+    function toString
+      input HgtIterationVariable iv;
+      output String str;
+    algorithm
+      str := "IterationVariable(enabled=" + boolString(iv.enabled)
+           + ", level=" + intString(iv.level)
+           + (if isSome(iv.name) then ", name=" + Dump.printComponentRefStr(Util.getOption(iv.name)) else "")
+           + absynOptStr(", min=", iv.min)
+           + absynOptStr(", max=", iv.max)
+           + absynOptStr(", nominal=", iv.nominal)
+           + absynOptStr(", start=", iv.start)
+           + absynOptStr(", hold=", iv.hold)
+           + ")";
+    end toString;
+
+    function default
+      "Bare IterationVariable / IterationVariable() with no fields."
+      output HgtIterationVariable iv =
+        HGT_ITERATION_VARIABLE(NONE(), NONE(), NONE(), NONE(), NONE(), NONE(), true, 1);
+    end default;
+
+    function createFromMod
+      "Parse IterationVariable(...) or __OpenModelica_IterationVariable(...) modifier.
+       Bare NOMOD still yields a default IV marker (annotation present)."
+      input SCode.Mod mod;
+      output Option<HgtIterationVariable> result = NONE();
+    protected
+      Option<Absyn.ComponentRef> name = NONE();
+      Option<Absyn.Exp> min_ = NONE(), max_ = NONE(), nominal_ = NONE(), start_ = NONE(), hold_ = NONE();
+      Boolean enabled = true;
+      Integer level = 1;
+      Option<Absyn.Exp> binding;
+      Absyn.Exp e;
+    algorithm
+      // Bare annotation(IterationVariable) is stored as NAMEMOD(..., NOMOD()).
+      if SCodeUtil.isEmptyMod(mod) then
+        result := SOME(default());
+        return;
+      end if;
+
+      binding := SCodeUtil.getModifierBinding(mod);
+      if isSome(binding) then
+        SOME(e) := binding;
+        name := absynExpToCref(e);
+      end if;
+
+      () := match mod
+        case SCode.MOD() algorithm
+          for submod in mod.subModLst loop
+            () := match submod
+              case SCode.NAMEMOD(ident = "enabled", mod = SCode.MOD(binding = SOME(Absyn.BOOL(enabled)))) then ();
+              case SCode.NAMEMOD(ident = "level", mod = SCode.MOD(binding = SOME(Absyn.INTEGER(level)))) then ();
+              case SCode.NAMEMOD(ident = "min", mod = SCode.MOD(binding = SOME(e))) algorithm min_ := SOME(e); then ();
+              case SCode.NAMEMOD(ident = "max", mod = SCode.MOD(binding = SOME(e))) algorithm max_ := SOME(e); then ();
+              case SCode.NAMEMOD(ident = "nominal", mod = SCode.MOD(binding = SOME(e))) algorithm nominal_ := SOME(e); then ();
+              case SCode.NAMEMOD(ident = "start", mod = SCode.MOD(binding = SOME(e))) algorithm start_ := SOME(e); then ();
+              case SCode.NAMEMOD(ident = "hold", mod = SCode.MOD(binding = SOME(e))) algorithm hold_ := SOME(e); then ();
+              case SCode.NAMEMOD(ident = "name", mod = SCode.MOD(binding = SOME(e))) algorithm name := absynExpToCref(e); then ();
+              else ();
+            end match;
+          end for;
+        then ();
+        else ();
+      end match;
+
+      result := SOME(HGT_ITERATION_VARIABLE(name, min_, max_, nominal_, start_, hold_, enabled, level));
+    end createFromMod;
+
+    function createFromComment
+      "Look up __OpenModelica_IterationVariable or __Modelon(IterationVariable=...)."
+      input SCode.Comment cmt;
+      output Option<HgtIterationVariable> result = NONE();
+    protected
+      Option<SCode.Annotation> opt_anno;
+      SCode.Annotation anno;
+      SCode.Mod mod;
+      Boolean found;
+    algorithm
+      opt_anno := SCodeUtil.commentAnnotation(cmt);
+      if isNone(opt_anno) then
+        return;
+      end if;
+      SOME(anno) := opt_anno;
+      (found, mod) := tryLookupAnnotation(anno, "__OpenModelica_IterationVariable");
+      if not found then
+        (found, mod) := tryLookupModelonSubAnnotation(anno, "IterationVariable");
+      end if;
+      if found then
+        result := createFromMod(mod);
+      end if;
+    end createFromComment;
+  end HgtIterationVariable;
+
+  uniontype HgtResidualEquation
+    "Parsed OCT/OpenModelica Hand-Guided Tearing residual equation annotation."
+    record HGT_RESIDUAL_EQUATION
+      Option<HgtIterationVariable> iterationVariable;
+      Option<Absyn.Exp> nominal;
+      Option<Absyn.Exp> hold;
+      Option<String> name           "Optional equation name tag (__Modelon(name=...))";
+      Boolean enabled;
+      Integer level;
+    end HGT_RESIDUAL_EQUATION;
+
+    function toString
+      input HgtResidualEquation res;
+      output String str;
+    algorithm
+      str := "ResidualEquation(enabled=" + boolString(res.enabled)
+           + ", level=" + intString(res.level)
+           + (if isSome(res.name) then ", name=" + Util.getOption(res.name) else "")
+           + absynOptStr(", nominal=", res.nominal)
+           + absynOptStr(", hold=", res.hold)
+           + (if isSome(res.iterationVariable)
+                then ", " + HgtIterationVariable.toString(Util.getOption(res.iterationVariable))
+                else "")
+           + ")";
+    end toString;
+
+    function default
+      "Bare ResidualEquation / ResidualEquation() with no fields."
+      output HgtResidualEquation res =
+        HGT_RESIDUAL_EQUATION(NONE(), NONE(), NONE(), NONE(), true, 1);
+    end default;
+
+    function createFromMod
+      "Parse ResidualEquation(...) modifier. Bare NOMOD still marks the equation."
+      input SCode.Mod mod;
+      output Option<HgtResidualEquation> result = NONE();
+    protected
+      Option<HgtIterationVariable> iv = NONE();
+      Option<Absyn.Exp> nominal_ = NONE(), hold_ = NONE();
+      Option<String> name = NONE();
+      Boolean enabled = true;
+      Integer level = 1;
+      Absyn.Exp e;
+      SCode.Mod iv_mod;
+      String s;
+    algorithm
+      if SCodeUtil.isEmptyMod(mod) then
+        result := SOME(default());
+        return;
+      end if;
+
+      () := match mod
+        case SCode.MOD() algorithm
+          for submod in mod.subModLst loop
+            () := match submod
+              case SCode.NAMEMOD(ident = "enabled", mod = SCode.MOD(binding = SOME(Absyn.BOOL(enabled)))) then ();
+              case SCode.NAMEMOD(ident = "level", mod = SCode.MOD(binding = SOME(Absyn.INTEGER(level)))) then ();
+              case SCode.NAMEMOD(ident = "nominal", mod = SCode.MOD(binding = SOME(e))) algorithm nominal_ := SOME(e); then ();
+              case SCode.NAMEMOD(ident = "hold", mod = SCode.MOD(binding = SOME(e))) algorithm hold_ := SOME(e); then ();
+              case SCode.NAMEMOD(ident = "name", mod = SCode.MOD(binding = SOME(Absyn.STRING(value = s))))
+                algorithm name := SOME(s); then ();
+              case SCode.NAMEMOD(ident = "name", mod = SCode.MOD(binding = SOME(Absyn.CREF(componentRef = Absyn.ComponentRef.CREF_IDENT(name = s)))))
+                algorithm name := SOME(s); then ();
+              case SCode.NAMEMOD(ident = "iterationVariable", mod = iv_mod)
+                algorithm
+                  // iterationVariable present even as bare NOMOD → default IV.
+                  iv := HgtIterationVariable.createFromMod(iv_mod);
+                then ();
+              else ();
+            end match;
+          end for;
+        then ();
+        else ();
+      end match;
+
+      result := SOME(HGT_RESIDUAL_EQUATION(iv, nominal_, hold_, name, enabled, level));
+    end createFromMod;
+
+    function createFromComment
+      "Look up __OpenModelica_ResidualEquation, __Modelon(ResidualEquation=...), or __Modelon(name=...)."
+      input SCode.Comment cmt;
+      output Option<HgtResidualEquation> result = NONE();
+    protected
+      Option<SCode.Annotation> opt_anno;
+      SCode.Annotation anno;
+      SCode.Mod mod, name_mod;
+      Option<Absyn.Exp> name_bind;
+      Option<String> eq_name = NONE();
+      Absyn.Exp e;
+      String s;
+      Boolean found, name_found;
+    algorithm
+      opt_anno := SCodeUtil.commentAnnotation(cmt);
+      if isNone(opt_anno) then
+        return;
+      end if;
+      SOME(anno) := opt_anno;
+
+      // Optional equation name tag used by system-level tearingPairs.
+      // Prefer OM prefix, then __Modelon(name=...), then bare annotation(name=...).
+      (name_found, name_mod) := tryLookupAnnotation(anno, "__OpenModelica_name");
+      if not name_found then
+        (name_found, name_mod) := tryLookupModelonSubAnnotation(anno, "name");
+      end if;
+      if not name_found then
+        (name_found, name_mod) := tryLookupAnnotation(anno, "name");
+      end if;
+      if name_found then
+        name_bind := SCodeUtil.getModifierBinding(name_mod);
+        if isSome(name_bind) then
+          SOME(e) := name_bind;
+          eq_name := match e
+            case Absyn.STRING(value = s) then SOME(s);
+            case Absyn.CREF(componentRef = Absyn.ComponentRef.CREF_IDENT(name = s)) then SOME(s);
+            else NONE();
+          end match;
+        end if;
+      end if;
+
+      (found, mod) := tryLookupAnnotation(anno, "__OpenModelica_ResidualEquation");
+      if not found then
+        (found, mod) := tryLookupModelonSubAnnotation(anno, "ResidualEquation");
+      end if;
+
+      if found then
+        result := createFromMod(mod);
+        if isSome(result) and isSome(eq_name) then
+          result := SOME(setName(Util.getOption(result), Util.getOption(eq_name)));
+        end if;
+      elseif isSome(eq_name) then
+        // Only a name tag: store as residual name without pairing info.
+        result := SOME(setName(default(), Util.getOption(eq_name)));
+      end if;
+    end createFromComment;
+
+    function createFromSource
+      "Parse residual HGT annotation from DAE.ElementSource comments."
+      input DAE.ElementSource source;
+      output Option<HgtResidualEquation> result = NONE();
+    protected
+      list<SCode.Comment> comments;
+      Option<HgtResidualEquation> parsed;
+    algorithm
+      comments := ElementSource.getComments(source);
+      for cmt in comments loop
+        parsed := createFromComment(cmt);
+        if isSome(parsed) then
+          result := parsed;
+          return;
+        end if;
+      end for;
+    end createFromSource;
+
+    function setName
+      input output HgtResidualEquation res;
+      input String name;
+    algorithm
+      res.name := SOME(name);
+    end setName;
+  end HgtResidualEquation;
+
   uniontype Annotations
     record ANNOTATIONS
       "all annotations that are vendor specific
@@ -1690,6 +1965,7 @@ public
       Boolean resizable;
       Boolean optimizable;
       Option<OptimizerExpression> optimizerExpression;
+      Option<HgtIterationVariable> iterationVariable  "HGT unpaired / variable-level IterationVariable";
     end ANNOTATIONS;
 
     function create
@@ -1747,13 +2023,87 @@ public
         then ();
         else ();
       end match;
+
+      annotations.iterationVariable := HgtIterationVariable.createFromComment(comment);
     end create;
+
+    function toString
+      input Annotations annotations;
+      output String str = "";
+    algorithm
+      if isSome(annotations.iterationVariable) then
+        str := HgtIterationVariable.toString(Util.getOption(annotations.iterationVariable));
+      end if;
+    end toString;
   end Annotations;
 
   // TODO: how to use Initial or Final state? - better state-pair Real x_0 = x (initialState = true);  -> binding only for initial time / optimizer?
   type OptimizerExpression = enumeration(MAYER, LAGRANGE, PATH_CONSTRAINT, INITIAL_CONSTRAINT, FINAL_CONSTRAINT, INITIAL_TIME, FINAL_TIME);
 
-  constant Annotations EMPTY_ANNOTATIONS = ANNOTATIONS(false, false, false, NONE());
+  constant Annotations EMPTY_ANNOTATIONS = ANNOTATIONS(false, false, false, NONE(), NONE());
+
+  protected
+    function tryLookupAnnotation
+      "Like SCodeUtil.lookupAnnotation, but distinguishes missing vs bare NOMOD.
+       annotation(Foo) is stored as NAMEMOD(\"Foo\", NOMOD()) — lookupAnnotation alone
+       cannot tell that apart from Foo not being present."
+      input SCode.Annotation anno;
+      input String name;
+      output Boolean found = false;
+      output SCode.Mod mod = SCode.NOMOD();
+    protected
+      list<SCode.SubMod> submods;
+      String id;
+    algorithm
+      () := match anno
+        case SCode.ANNOTATION(modification = SCode.MOD(subModLst = submods)) algorithm
+          for sm in submods loop
+            () := match sm
+              case SCode.NAMEMOD(ident = id, mod = mod) guard id == name algorithm
+                found := true;
+                return;
+              then ();
+              else ();
+            end match;
+          end for;
+        then ();
+        else ();
+      end match;
+    end tryLookupAnnotation;
+
+    function tryLookupModelonSubAnnotation
+      "Resolve __Modelon(SubName(...)) and report whether SubName was present."
+      input SCode.Annotation anno;
+      input String subName;
+      output Boolean found = false;
+      output SCode.Mod mod = SCode.NOMOD();
+    protected
+      SCode.Mod modelon_mod;
+      Boolean modelon_found;
+    algorithm
+      (modelon_found, modelon_mod) := tryLookupAnnotation(anno, "__Modelon");
+      if modelon_found and not SCodeUtil.isEmptyMod(modelon_mod) then
+        (found, mod) := tryLookupAnnotation(SCode.ANNOTATION(modelon_mod), subName);
+      end if;
+    end tryLookupModelonSubAnnotation;
+
+    function absynExpToCref
+      input Absyn.Exp e;
+      output Option<Absyn.ComponentRef> cref;
+    algorithm
+      cref := match e
+        case Absyn.CREF(componentRef = cref) then SOME(cref);
+        else NONE();
+      end match;
+    end absynExpToCref;
+
+    function absynOptStr
+      input String prefix;
+      input Option<Absyn.Exp> opt;
+      output String str;
+    algorithm
+      str := if isSome(opt) then prefix + Dump.printExpStr(Util.getOption(opt)) else "";
+    end absynOptStr;
 
   annotation(__OpenModelica_Interface="nf_frontend");
 end NFBackendExtension;

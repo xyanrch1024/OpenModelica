@@ -60,7 +60,7 @@ protected
 
   // New Frontend imports
   import Algorithm = NFAlgorithm;
-  import NFBackendExtension.{Annotations, BackendInfo, VariableAttributes, VariableKind};
+  import NFBackendExtension.{Annotations, BackendInfo, VariableAttributes, VariableKind, HgtResidualEquation};
   import Binding = NFBinding;
   import Call = NFCall;
   import Class = NFClass;
@@ -1026,7 +1026,7 @@ protected
         Algorithm alg;
 
       case FEquation.EQUALITY(lhs = lhs, rhs = rhs, ty = ty, source = source) algorithm
-        attr := lowerEquationAttributes(ty, init);
+        attr := lowerEquationAttributes(ty, init, source);
         backend_equations := match ty
           case Type.ARRAY()   then {PointerCyclic.create(BEquation.ARRAY_EQUATION(ty, lhs, rhs, source, attr, Type.complexSize(ty)))};
           case Type.COMPLEX() then {PointerCyclic.create(BEquation.RECORD_EQUATION(ty, lhs, rhs, source, attr, Type.recordFieldCount(ty)))};
@@ -1498,6 +1498,7 @@ protected
   function lowerEquationAttributes
     input Type ty;
     input Boolean init;
+    input DAE.ElementSource source = DAE.emptyElementSource;
     output EquationAttributes attr;
   algorithm
     if Type.isClock(ty) then
@@ -1507,6 +1508,7 @@ protected
     else
       attr := EquationAttributes.default(EquationKind.CONTINUOUS, init);
     end if;
+    attr := EquationAttributes.setResidualHgt(attr, HgtResidualEquation.createFromSource(source));
   end lowerEquationAttributes;
 
   protected function lowerComponentReferences

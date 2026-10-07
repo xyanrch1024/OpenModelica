@@ -149,17 +149,99 @@ flowchart TD
 
 ## 7. 前端（NF）
 
-1. **新文件 `NFFrontEnd/NFHandGuidedTearing.mo`**：按 §2.1 解析 `__OpenModelica_HGT`，开启 `--acceptModelonHGT` 时也解析 `__Modelon`。
-   - 校验字段名和类型，未知字段报警告。
-   - `enabled`、`level`、`hold` 是 `parameter`，在前端求值。`level` 必须是常量或可结构求值的参数；`enabled` 求值为 false 时直接丢弃该注解。
-   - `hold` 第一期只记录绑定的参数名，并警告"暂不支持"。
-2. **在 `NFFlatten` 展平方程时**：用组件前缀把 `iterationVariable=x` 改写成 `a.b.x`，把 `name=res` 改写成 `a.b.res`，写回 `source.comment`。
-   - 按 R3，变量在方程的作用域里查找，查不到就报错。
-   - 属性表达式（`max=20-x1` 等）里的名字同样改写成全限定名。
-3. **在展平组件时**：如果组件的类带 `tearingPairs`，给 `Pair` 里的路径加上前缀，按名字找到对应方程（R4），把配对、`level`、属性合成为该方程的 `ResidualEquation(...)`。
-   - 一个方程只能被配对一次，重复配对报错。
-   - OCT 示例的同一个类里写了两个 `annotation(...)`（p. 172）。需要确认 OMC 解析器是否接受；如果不接受，就要求写成一个 `tearingPairs` 里放多个 `Pair`。
-4. **范围限制**：第一期只支持标量方程。`for` 循环和数组方程里的注解给警告并忽略。
+### 7.1 职责与输出
+
+前端把 `__OpenModelica_HGT(...)`（以及 `--acceptModelonHGT` 时的 `__Modelon(...)` 的 HGT 子集）解析成一份名字已解析、全部用全限定名的 HGT 清单。旧后端只用这份清单，不再接触原始注解。
+
+1. **方程身份标签**：每条与 HGT 有关的方程，在 `ElementSource.comment` 中追加一个内部标签（`ElementSource.addCommentToSource`），写上它的全限定方程名，如 `a.b.res`。没写 `name` 的残差方程由前端生成名字，如 `$hgt_eq_3`。用户原注释保持不变。
+2. **结构化清单**：作为新的 DAE 元素 `DAE.Element.HAND_GUIDED_TEARING(spec)` 交给后端，内容为：
+   - 配对：方程名、迭代变量（`DAE.ComponentRef`）、`level`、残差 `nominal`、迭代变量的 `start/min/max/nominal`（`DAE.Exp`）、`hold`。
+   - 未配对残差、未配对迭代变量，各自带 `level` 与属性。
+   - 源码位置，供报错使用。
+
+**已确认的决定：用新的 DAE 元素传递清单**。属性表达式（如 `max=20-x1`）需要以 `DAE.Exp` 进入代码生成，而只有 NF 有 `Expression.toDAE`；只改写注释里的名字做不到这一点。用专门 DAE 元素传递信息也有先例：Optimica 的 `DAE.CONSTRAINT` / `DAE.CLASS_ATTRIBUTES` 就是这样交给 `BackendDAECreate` 的（`BackEnd/BackendDAECreate.mo:989`）。
+
+### 7.2 为什么放在展平阶段
+
+名字解析需要注解所在的作用域，加全名需要组件前缀，NF 只在展平时同时拥有两者：
+
+- 每条方程带 `eq.scope`，`flattenEquation(eq, prefix, …)`（`NFFrontEnd/NFFlatten.mo:1856`）同时拿到前缀。
+- 变量查找：`Lookup.lookupComponent(Absyn cref, scope, …)`（`NFFrontEnd/NFLookup.mo:115`），即 R3 的"方程能看见变量"。
+- 加前缀：`flattenCref`，即 `Prefix.apply`（`NFFrontEnd/NFFlatten.mo:1681`）。
+- 表达式：`Inst.instExp` → `Typing.typeExp` → `flattenExp`。`enabled`、`level` 用 `Ceval.evalExp` 编译期求值。
+
+风险：展平阶段调用类型检查不是 NF 的惯常做法。此时所有组件已完成类型检查，理论上可行；不行时的退路是在 `NFTyping` 阶段先做查找和类型检查并暂存，展平时只加前缀。
+
+### 7.3 各类注解的处理
+
+| 注解 | 读取位置 | 前端动作 |
+| --- | --- | --- |
+| 方程上的 `name=res` | `flattenEquation`，读 `source.comment` | 加前缀得全名，登记到方程名表；同一作用域重名报错 |
+| 方程上的 `ResidualEquation(iterationVariable(...)=x, level, nominal, hold, enabled)` | 同上 | 在 `eq.scope` 中查 x 并加前缀；属性表达式实例化、类型检查、展平；求值 `enabled`/`level`；记为配对。不写 `iterationVariable` 时记为未配对残差 |
+| 变量上的 `IterationVariable(...)` | `flattenSimpleComponent`（`NFFlatten.mo:741` 一带） | 变量全名即展平名；属性在组件所在作用域解析；记为未配对迭代变量 |
+| 类上的 `tearingPairs(Pair(...))` | 展平每个组件时读其类定义的注释；顶层类在 `flatten()` 中读 | `residualEquation=b.res` 加前缀成方程全名；`iterationVariable(...)=c.z` 在类作用域查找并加前缀；方程名先挂起，展平结束后统一核对 |
+
+**已确认的决定：类上的 `tearingPairs` 不继承**。只读取组件实际类的定义注释，不沿 `extends` 收集基类上的 `tearingPairs`，与 Modelica 类注解一般不继承的惯例一致。基类中方程和变量上的注解照常生效，因为它们随方程和变量一起被继承。
+
+**展平收尾**（`flatten()` 末尾）：
+
+- 核对挂起的系统级配对，方程名不存在则报错。
+- 把系统级配对合并到对应方程上，同一方程被配对两次则报错。
+- 把清单放进 `FlatModel` 的新字段（`FLAT_MODEL` 只有 3 处构造）。
+- `NFConvertDAE` 把清单转成 `DAE.Element.HAND_GUIDED_TEARING`，表达式转为 `DAE.Exp`。
+
+### 7.4 多个 `annotation` 子句
+
+**已确认的决定：支持同一个类里写多个 `annotation` 子句**（OCT 示例 p. 172 就是这样写的）。
+
+- 语法层面 OMC 已经允许（`Parser/Modelica.g` 第 565、1056 行）。
+- 但 `AbsynToSCode.translateCommentList` 会用 `AbsynUtil.mergeAnnotationsList` 把它们合并成一个（`FrontEnd/AbsynToSCode.mo:1489`），同名子修饰会被覆盖，后一个 `tearingPairs` 会冲掉前一个。
+- 改动：在 `translateCommentList` 中对 `__OpenModelica_HGT` / `__Modelon` 特殊处理，把多个子句中的 `tearingPairs(...)` 参数拼接起来，其余注解仍按原规则合并。
+- 用测试确认：同一个 `tearingPairs` 里的多个 `Pair(...)` 在 SCode 中不会被去重。
+
+### 7.5 校验与限制
+
+前端报错的情况：
+
+- 字段名未知或类型不对。
+- `iterationVariable` 查不到，或引用了离散变量。
+- `level` < 1，或不能在编译期求值。
+- level 1 的属性表达式引用了连续变量（R7）。
+- 系统级配对引用的方程名不存在或重名。
+- 同一变量或方程被重复标注。
+
+其他规则：
+
+- **未配对数量是否相等（R5）**：在后端按 level 检查，前端看不到最终保留的方程。
+- **第一期不支持**（警告并忽略）：`for` 循环中的方程（展开后同名冲突）、数组方程。
+- **组件数组**（`Sub a[3]`）：按标量展开后前缀带下标，名字为 `a[2].res`，可以支持。
+- **展平后的检查**：NF 后续的化简、标量化、常量求值可能删除或拆分已标注的方程。交给 `NFConvertDAE` 前检查：每个已登记方程名恰好出现一次。
+- **开关**：`--handGuidedTearing=false` 时仍做语法检查，检测到注解时提示一次"HGT 未开启"，不生成清单。`--acceptModelonHGT` 让前端按同样规则处理 `__Modelon(...)` 的 HGT 子集。
+
+### 7.6 改动文件与测试
+
+| 文件 | 改动 |
+| --- | --- |
+| `NFFrontEnd/NFHandGuidedTearing.mo`（新增） | 数据结构、注解解析、名字解析、收尾核对、转 DAE；约 600–800 行 |
+| `NFFrontEnd/NFFlatten.mo` | `flatten`、`flattenEquation`、`flattenSimpleComponent`、组件类处理处的钩子 |
+| `NFFrontEnd/NFFlatModel.mo` | 清单字段 |
+| `NFFrontEnd/NFConvertDAE.mo` | 输出新 DAE 元素 |
+| `FrontEnd/DAE.mo`，及 `DAEDump`、`DAEUtil` 中需穷举的 `match` | 新增 `DAE.Element.HAND_GUIDED_TEARING` |
+| `FrontEnd/AbsynToSCode.mo` | 多个 `annotation` 子句中 `tearingPairs` 拼接 |
+| `Util/Flags.mo`、`Util/Error.mo` | 开关、调试标志 `-d=hgtDump`、约 10 条错误信息 |
+
+前端可单独测试：`-d=hgtDump` 在展平后打印解析好的清单，测试对比这份输出，不依赖后端。覆盖：
+
+- 组件级配对。
+- 系统级配对，含多个 `annotation` 子句。
+- 未配对残差与迭代变量。
+- `level`、属性表达式、参数形式的 `enabled`。
+- 组件数组。
+- 基类上的 `tearingPairs` 不生效。
+- 各类错误。
+- `__Modelon` 兼容。
+
+预计 1–1.5 周（含测试）。
 
 ## 8. 旧后端：数据收集与保护
 
@@ -309,7 +391,9 @@ flowchart TD
 | 文件（相对 `OMCompiler/`） | 新增/修改 | 步骤 |
 | --- | --- | --- |
 | `Compiler/NFFrontEnd/NFHandGuidedTearing.mo` | 新增 | 1 |
-| `Compiler/NFFrontEnd/NFFlatten.mo` | 修改 | 1 |
+| `Compiler/NFFrontEnd/NFFlatten.mo`、`NFFlatModel.mo`、`NFConvertDAE.mo` | 修改 | 1 |
+| `Compiler/FrontEnd/DAE.mo`（`HAND_GUIDED_TEARING` 元素）及 `DAEDump`/`DAEUtil` | 修改 | 1 |
+| `Compiler/FrontEnd/AbsynToSCode.mo`（多 `annotation` 子句拼接） | 修改 | 1 |
 | `Compiler/BackEnd/HandGuidedTearing.mo` | 新增 | 1–3 |
 | `Compiler/BackEnd/BackendDAECreate.mo`、`RemoveSimpleEquations.mo` | 修改 | 1 |
 | `Compiler/BackEnd/Tearing.mo` | 修改 | 1–3 |

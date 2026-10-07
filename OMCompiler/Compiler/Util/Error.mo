@@ -1180,6 +1180,28 @@ public constant ErrorTypes.Message TEARING_NOT_WORTH_IT = ErrorTypes.MESSAGE(626
   "Tearing is skipped for linear strong component %s: solving it torn to %s iteration variables is estimated at %s flops against %s for the untorn system of size %s.");
 public constant ErrorTypes.Message TEARING_AMPLIFIES_ERROR = ErrorTypes.MESSAGE(627, ErrorTypes.SYMBOLIC(), ErrorTypes.NOTIFICATION(),
   "Tearing is skipped for linear strong component %s: substituting through its %s inner equations amplifies an error by 1e%s, which double precision cannot carry.");
+public constant ErrorTypes.Message HGT_UNKNOWN_FIELD = ErrorTypes.MESSAGE(628, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
+  "Unknown field '%s' in hand guided tearing annotation %s, it is ignored.");
+public constant ErrorTypes.Message HGT_INVALID_VALUE = ErrorTypes.MESSAGE(629, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+  "Invalid value '%s' for '%s' in hand guided tearing annotation: %s.");
+public constant ErrorTypes.Message HGT_INVALID_ITERATION_VARIABLE = ErrorTypes.MESSAGE(630, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+  "'%s' cannot be a hand guided tearing iteration variable: %s.");
+public constant ErrorTypes.Message HGT_DUPLICATE_EQUATION_NAME = ErrorTypes.MESSAGE(631, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+  "The equation name '%s' is used by more than one equation.");
+public constant ErrorTypes.Message HGT_EQUATION_NAME_NOT_FOUND = ErrorTypes.MESSAGE(632, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+  "The hand guided tearing pair refers to the equation '%s', but no equation has that name (equations are named with __OpenModelica_HGT(name=...)).");
+public constant ErrorTypes.Message HGT_DUPLICATE_SPECIFICATION = ErrorTypes.MESSAGE(633, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+  "%s is given more than one hand guided tearing specification.");
+public constant ErrorTypes.Message HGT_CONTINUOUS_ATTRIBUTE_ON_LEVEL_ONE = ErrorTypes.MESSAGE(634, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+  "The %s attribute '%s' of the hand guided tearing %s depends on continuous variables, which is only allowed on level 2 or higher.");
+public constant ErrorTypes.Message HGT_NOT_SUPPORTED = ErrorTypes.MESSAGE(635, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
+  "The hand guided tearing annotation is ignored: %s.");
+public constant ErrorTypes.Message HGT_DISABLED = ErrorTypes.MESSAGE(636, ErrorTypes.TRANSLATION(), ErrorTypes.NOTIFICATION(),
+  "The model contains hand guided tearing annotations, which are ignored since --handGuidedTearing is not set.");
+public constant ErrorTypes.Message HGT_HOLD_NOT_SUPPORTED = ErrorTypes.MESSAGE(637, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
+  "The hold attribute of hand guided tearing is not supported yet and is ignored.");
+public constant ErrorTypes.Message HGT_EQUATION_LOST = ErrorTypes.MESSAGE(638, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+  "The hand guided tearing equation '%s' %s while simplifying the model.");
 
 public constant ErrorTypes.Message MATCH_SHADOWING = ErrorTypes.MESSAGE(5001, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "Local variable '%s' shadows another variable.");

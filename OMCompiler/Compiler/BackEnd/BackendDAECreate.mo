@@ -998,6 +998,9 @@ algorithm
         then
           ();
 
+      // The hand guided tearing specification is not used by the backend yet.
+      case DAE.HAND_GUIDED_TEARING() then ();
+
       else
         algorithm
           true := Flags.isSet(Flags.FAILTRACE);

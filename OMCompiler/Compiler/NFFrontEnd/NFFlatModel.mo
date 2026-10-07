@@ -38,6 +38,7 @@ encapsulated uniontype NFFlatModel
   import Algorithm = NFAlgorithm;
   import Variable = NFVariable;
   import BaseModelica;
+  import HandGuidedTearing = NFHandGuidedTearing;
 
 protected
   import Absyn;
@@ -90,6 +91,7 @@ public
     list<Algorithm> algorithms;
     list<Algorithm> initialAlgorithms;
     ElementSource source;
+    Option<HandGuidedTearing.Spec> handGuidedTearing "See NFHandGuidedTearing.";
   end FLAT_MODEL;
 
   function mapExp

@@ -98,6 +98,7 @@ import SCode;
 import SCodeUtil;
 import DAE;
 import Structural = NFStructural;
+import HandGuidedTearing = NFHandGuidedTearing;
 import ArrayConnections = NFArrayConnections;
 import UnorderedMap;
 import UnorderedSet;
@@ -147,6 +148,7 @@ uniontype FlattenSettings
     Boolean vectorizeBindings;
     Boolean implicitStartAttribute;
     Boolean minimalEval;
+    HandGuidedTearing.Collector hgt;
   end SETTINGS;
 end FlattenSettings;
 
@@ -343,7 +345,8 @@ algorithm
     Flags.getConfigBool(Flags.NEW_BACKEND),
     Flags.isSet(Flags.VECTORIZE_BINDINGS),
     Flags.isConfigFlagSet(Flags.ALLOW_NON_STANDARD_MODELICA, "implicitParameterStartAttribute"),
-    Flags.getConfigString(Flags.EVALUATE_STRUCTURAL_PARAMETERS) <> "all"
+    Flags.getConfigString(Flags.EVALUATE_STRUCTURAL_PARAMETERS) <> "all",
+    HandGuidedTearing.Collector.new()
   );
 
   prefix := Prefix.new(classInst, indexed = settings.vectorizeBindings);
@@ -367,10 +370,12 @@ algorithm
         alg := listReverseInPlace(sections.algorithms);
         ialg := listReverseInPlace(sections.initialAlgorithms);
       then
-        FlatModel.FLAT_MODEL(classPath, vars, eql, ieql, alg, ialg, src);
+        FlatModel.FLAT_MODEL(classPath, vars, eql, ieql, alg, ialg, src, NONE());
 
-      else FlatModel.FLAT_MODEL(classPath, vars, {}, {}, {}, {}, src);
+      else FlatModel.FLAT_MODEL(classPath, vars, {}, {}, {}, {}, src, NONE());
   end match;
+
+  flatModel.handGuidedTearing := HandGuidedTearing.finish(settings.hgt);
 
   // get inputs and outputs for algorithms now that types are computed
   flatModel.algorithms := list(Algorithm.setInputsOutputs(al) for al in flatModel.algorithms);
@@ -469,6 +474,8 @@ algorithm
 
     case Class.INSTANCED_CLASS(elements = ClassTree.FLAT_TREE(components = comps))
       algorithm
+        collectHGTClass(prefix, settings);
+
         if isSome(binding) then
           SOME(b) := binding;
 
@@ -739,6 +746,11 @@ algorithm
   // conversion to backend process. NBackendDAE.lower
   name := Prefix.prefix(pre);
   v := Variable.VARIABLE(name, ty, binding, visibility, comp_attr, ty_attrs, children, cmt, info, NFBackendExtension.DUMMY_BACKEND_INFO);
+
+  if isSome(cmt.annotation_) then
+    HandGuidedTearing.collectVariable(cmt, name, ty, var, InstNode.parent(comp_node),
+      function flattenExp(prefix = prefix, info = info), info, settings.hgt);
+  end if;
 
   if not settings.relaxedErrorChecking and var < Variability.DISCRETE and
      not unfix and not Type.isComplex(Type.arrayElementType(ty)) then
@@ -1842,6 +1854,29 @@ algorithm
   end match;
 end flattenSections;
 
+function prefixString
+  "Returns the name of the component a prefix refers to, or the empty string."
+  input Prefix prefix;
+  output String str = if Prefix.isEmpty(prefix) then "" else ComponentRef.toString(Prefix.prefix(prefix));
+end prefixString;
+
+function collectHGTClass
+  "Collects the hand guided tearing annotation of the class that is flattened
+   with the given prefix."
+  input Prefix prefix;
+  input FlattenSettings settings;
+protected
+  InstNode node;
+algorithm
+  node := if Prefix.isEmpty(prefix) then Prefix.rootNode(prefix) else
+    InstNode.classScope(ComponentRef.node(Prefix.prefix(prefix)));
+
+  if InstNode.isClass(node) then
+    HandGuidedTearing.collectClass(InstNode.definition(node), node, prefixString(prefix),
+      function flattenExp(prefix = prefix, info = InstNode.info(node)), settings.hgt);
+  end if;
+end collectHGTClass;
+
 function flattenEquations
   input list<Equation> eql;
   input Prefix prefix;
@@ -1873,16 +1908,26 @@ algorithm
         e2 := flattenExp(eq.rhs, prefix, info);
         ty := flattenType(eq.ty, prefix, info);
         checkEqualityEquation(e1, e2, eq.source);
+
+        if HandGuidedTearing.hasAnnotation(eq.source) then
+          eq.source := HandGuidedTearing.collectEquation(eq.source,
+            Type.isReal(ty) and Type.isScalar(ty), eq.scope, prefixString(prefix),
+            function flattenExp(prefix = prefix, info = info), settings.hgt);
+        end if;
       then
         Equation.EQUALITY(e1, e2, ty, eq.scope, eq.source, eq.scalarizeMode) :: equations;
 
     case Equation.FOR()
       algorithm
+        HandGuidedTearing.enterNested(eq, settings.hgt);
+
         if settings.scalarize then
           eql := unrollForLoop(eq, prefix, equations, settings);
         else
           eql := splitForLoop(eq, prefix, equations, settings);
         end if;
+
+        HandGuidedTearing.leaveNested(settings.hgt);
       then eql;
 
     case Equation.CONNECT()
@@ -1893,11 +1938,18 @@ algorithm
         Equation.CONNECT(e1, e2, eq.scope, eq.source) :: equations;
 
     case Equation.IF()
-      then flattenIfEquation(eq, prefix, equations, settings);
+      algorithm
+        HandGuidedTearing.enterNested(eq, settings.hgt);
+        eql := flattenIfEquation(eq, prefix, equations, settings);
+        HandGuidedTearing.leaveNested(settings.hgt);
+      then
+        eql;
 
     case Equation.WHEN()
       algorithm
+        HandGuidedTearing.enterNested(eq, settings.hgt);
         eq.branches := list(flattenEqBranch(b, prefix, info, settings) for b in eq.branches);
+        HandGuidedTearing.leaveNested(settings.hgt);
       then
         eq :: equations;
 

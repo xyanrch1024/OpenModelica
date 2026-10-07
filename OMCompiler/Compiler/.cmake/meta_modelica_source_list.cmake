@@ -368,6 +368,7 @@ set(OMC_MM_BACKEND_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/NFFrontEnd/NFFlatten.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NFFrontEnd/NFFunctionDerivative.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NFFrontEnd/NFFunctionInverse.mo
+    ${CMAKE_CURRENT_SOURCE_DIR}/NFFrontEnd/NFHandGuidedTearing.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NFFrontEnd/NFFunction.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NFFrontEnd/NFImport.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/NFFrontEnd/NFInline.mo

@@ -1465,6 +1465,119 @@ algorithm
   end match;
 end translateComment;
 
+protected function mergeHGTTearingPairs
+  "A class can have several annotation clauses that each contain hand guided
+   tearing pairs, e.g. annotation(__OpenModelica_HGT(tearingPairs(Pair(...))))
+   (this is how the OCT User's Guide writes them). Merging the clauses would
+   only keep the last tearingPairs, so this function replaces the tearingPairs
+   in the merged annotation with the pairs of all the clauses."
+  input list<Absyn.Annotation> annotations "All the annotation clauses.";
+  input output Absyn.Annotation merged "The merged annotation.";
+protected
+  list<list<Absyn.ElementArg>> pairs;
+  Integer count;
+algorithm
+  for name in {"__OpenModelica_HGT", "__Modelon"} loop
+    pairs := {};
+    count := 0;
+
+    // Collect the arguments of all tearingPairs in the given vendor annotation.
+    for ann in annotations loop
+      for arg in getModificationArgs(ann.elementArgs, name) loop
+        if isNamedModification(arg, "tearingPairs") then
+          count := count + 1;
+          pairs := getModificationArgs({arg}, "tearingPairs") :: pairs;
+        end if;
+      end for;
+    end for;
+
+    // Only needed if there's more than one tearingPairs.
+    if count > 1 then
+      merged := Absyn.ANNOTATION(list(replaceTearingPairs(arg, name, List.flatten(listReverse(pairs)))
+        for arg in merged.elementArgs));
+    end if;
+  end for;
+end mergeHGTTearingPairs;
+
+protected function isNamedModification
+  input Absyn.ElementArg arg;
+  input String name;
+  output Boolean res;
+algorithm
+  res := match arg
+    local
+      String id;
+
+    case Absyn.ElementArg.MODIFICATION(path = Absyn.IDENT(name = id)) then id == name;
+    else false;
+  end match;
+end isNamedModification;
+
+protected function getModificationArgs
+  "Returns the arguments of all the modifications in the list with the given name."
+  input list<Absyn.ElementArg> args;
+  input String name;
+  output list<Absyn.ElementArg> outArgs;
+protected
+  list<list<Absyn.ElementArg>> argsl = {};
+algorithm
+  for arg in args loop
+    () := match arg
+      local
+        list<Absyn.ElementArg> margs;
+
+      case Absyn.ElementArg.MODIFICATION(modification = SOME(Absyn.Modification.CLASSMOD(elementArgLst = margs)))
+        guard isNamedModification(arg, name)
+        algorithm
+          argsl := margs :: argsl;
+        then
+          ();
+
+      else ();
+    end match;
+  end for;
+
+  outArgs := List.flatten(listReverse(argsl));
+end getModificationArgs;
+
+protected function replaceTearingPairs
+  "Replaces the arguments of tearingPairs in the given vendor annotation."
+  input output Absyn.ElementArg arg;
+  input String name;
+  input list<Absyn.ElementArg> pairs;
+algorithm
+  () := match arg
+    local
+      list<Absyn.ElementArg> margs;
+      Absyn.EqMod eq_mod;
+
+    case Absyn.ElementArg.MODIFICATION(modification = SOME(Absyn.Modification.CLASSMOD(margs, eq_mod)))
+      guard isNamedModification(arg, name)
+      algorithm
+        margs := list(if isNamedModification(a, "tearingPairs") then replaceModificationArgs(a, pairs) else a for a in margs);
+        arg.modification := SOME(Absyn.Modification.CLASSMOD(margs, eq_mod));
+      then
+        ();
+
+    else ();
+  end match;
+end replaceTearingPairs;
+
+protected function replaceModificationArgs
+  input output Absyn.ElementArg arg;
+  input list<Absyn.ElementArg> args;
+algorithm
+  () := match arg
+    case Absyn.ElementArg.MODIFICATION()
+      algorithm
+        arg.modification := SOME(Absyn.Modification.CLASSMOD(args, Absyn.NOMOD()));
+      then
+        ();
+
+    else ();
+  end match;
+end replaceModificationArgs;
+
 protected function translateCommentList
   "turns an Absyn.Comment into an SCode.Comment"
   input list<Absyn.Annotation> inAnns;
@@ -1487,6 +1600,7 @@ algorithm
     case absann::anns
       algorithm
         absann := AbsynUtil.mergeAnnotationsList(absann, anns);
+        absann := mergeHGTTearingPairs(inAnns, absann);
         ann := translateAnnotation(absann);
         ostr := Util.applyOption(inString,System.unescapedString);
       then SCode.COMMENT(ann,ostr);
@@ -1699,6 +1813,19 @@ algorithm
   end match;
 end translateMod;
 
+protected function isHGTAnnotationPath
+  "Returns true for the names of the annotations that contain hand guided
+   tearing records, see NFHandGuidedTearing."
+  input Absyn.Path path;
+  output Boolean res;
+algorithm
+  res := match path
+    case Absyn.IDENT(name = "__OpenModelica_HGT") then true;
+    case Absyn.IDENT(name = "__Modelon") then true;
+    else false;
+  end match;
+end isHGTAnnotationPath;
+
 protected function translateArgs
   input list<Absyn.ElementArg> args;
   input Boolean keepEmpty;
@@ -1714,8 +1841,11 @@ algorithm
     subMods := match arg
       case Absyn.MODIFICATION()
         algorithm
+          // Empty modifiers are kept one level down in hand guided tearing
+          // annotations, where e.g. __OpenModelica_HGT(ResidualEquation) has meaning.
           smod := translateMod(arg.modification, SCodeUtil.boolFinal(arg.finalPrefix),
-            translateEach(arg.eachPrefix), arg.comment, arg.info);
+            translateEach(arg.eachPrefix), arg.comment, arg.info,
+            keepEmpty = keepEmpty and isHGTAnnotationPath(arg.path));
 
           if not SCodeUtil.isEmptyMod(smod) or keepEmpty then
             sub := translateSub(arg.path, smod, arg.info);

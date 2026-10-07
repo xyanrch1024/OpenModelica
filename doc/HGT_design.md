@@ -243,6 +243,24 @@ flowchart TD
 
 预计 1–1.5 周（含测试）。
 
+### 7.7 实现状态（前端已完成）
+
+前端已按 7.1–7.6 实现，与设计的差异和实现细节如下：
+
+- **选项**：`--handGuidedTearing`、`--acceptModelonHGT`、`-d=hgtDump` 已加入 `Util/Flags.mo`。`--hgtMergeBLTBlocks` 和 `--hgtAllowMultipleResiduals` 留到后端实现时再加。
+- **错误信息**：`Util/Error.mo` 新增 628–638 号。
+- **方程标签**：在源注释中追加 `__OpenModelica_HGTEquation = "<全名>"`；未命名的残差方程命名为 `<前缀>.$hgt<n>`。`NFHandGuidedTearing.getEquationTag` 供后端读取标签。
+- **DAE 元素**：`DAE.HAND_GUIDED_TEARING(residuals, iterationVariables)`，记录类型为 `DAE.HGTResidual` 和 `DAE.HGTIterationVariable`。只在打开 `--handGuidedTearing` 且模型使用了 HGT 时生成。`DAEUtil.traverseDAEElement`/`splitElements` 不遍历它；`BackendDAECreate.lower2` 目前忽略它，由后端阶段接手。
+- **`AbsynToSCode` 的两处改动**：
+  1. `mergeHGTTearingPairs`：多个 `annotation` 子句中的 `tearingPairs` 拼接，而不是被最后一个覆盖。
+  2. `translateArgs` 在 `__OpenModelica_HGT` / `__Modelon` 内部多保留一层空修饰。否则 `__OpenModelica_HGT(ResidualEquation, name = dx)` 中不带参数的 `ResidualEquation` 会被丢掉。其他注解不受影响。
+- **参数求值**：`enabled`、`level` 引用的参数被标记为结构参数（与 OCT 一致，编译期求值）。`hold` 引用的参数不求值，只给出"暂不支持"警告。
+- **测试**：`testsuite/flattening/modelica/scodeinst/HGT*.mo`，共 13 个，覆盖：
+  - 组件级配对、系统级配对（含多个 `annotation` 子句和组件数组）、未配对、`level` 与自适应边界、`__Modelon` 兼容。
+  - 关闭开关时的提示，以及不支持的情况（`for` 循环、数组方程、数组变量）。
+  - 基类上的 `tearingPairs` 不继承。
+  - 6 类错误。
+
 ## 8. 旧后端：数据收集与保护
 
 新文件 `BackEnd/HandGuidedTearing.mo`：

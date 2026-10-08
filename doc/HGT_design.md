@@ -261,94 +261,171 @@ flowchart TD
   - 基类上的 `tearingPairs` 不继承。
   - 6 类错误。
 
-## 8. 旧后端：数据收集与保护
+## 8. 后端实现设计（旧后端）
 
-新文件 `BackEnd/HandGuidedTearing.mo`：
+本节是后端的详细设计，取代第 2 版中第 8–11 节的提纲。所有文件路径相对 `OMCompiler/Compiler/`，行号对应 `master`（`d344fec3`）。
 
-- **`collect(EqSystem)`** 生成三张表：
-  - 配对：(变量, 方程, level, 变量属性, 残差 nominal)。
-  - 未配对迭代变量：按 level 分组，附带属性。
-  - 未配对残差：按 level 分组，附带 nominal。
+### 8.1 总体流程
 
-  按名字匹配，所以模拟系统和初始化系统各算各的。
-- **只认原方程**：指标约简微分出的副本（`EquationAttributes.differentiated = true`）会继承原方程的注释，但不作为 HGT 方程。
-- **防止被优化掉**：
-  - 被标注的变量在 `BackendDAECreate` 中设 `unreplaceable = true`。
-  - `RemoveSimpleEquations` 跳过 HGT 方程。OCT 也修过同类问题："linear equation elimination broke HGT equations"（附录 E.44）。
-- **合法性检查**（新增错误号放在 `Util/Error.mo`）：
+```mermaid
+flowchart TD
+  A["NFConvertDAE<br/>DAE.HAND_GUIDED_TEARING + 方程标签"] --> B
+  B["① BackendDAECreate.lower<br/>收下清单，放进 Shared.handGuidedTearing；迭代变量设 unreplaceable"] --> C
+  C["② 前处理、匹配、后处理中的保护<br/>removeSimpleEquations 等模块跳过带标签的方程"] --> D
+  D["③ hgtMatching（新后处理模块，紧挨 tearingSystem 之前）<br/>按名字定位 → 校验 → 绑定未配对项 → 强制配对 → 修复匹配 → 重算 SCC"] --> E
+  E["④ Tearing.traverseComponent → hgtTearing<br/>含 HGT 项的块强制撕裂；剩余部分用现有撕裂补全；残差按 nominal 缩放"] --> F
+  F["⑤ SimCode / 代码生成<br/>第一期不改；min/max、自适应边界、嵌套块放到 B2"]
+```
 
-| 情况 | 处理 |
+模拟系统和初始化系统各走一遍 ③④。两者的 `Shared` 都带同一份清单，方程靠标签按名字定位。
+
+### 8.2 数据：清单如何进入后端（`BackendDAE.mo`、`BackendDAECreate.mo`）
+
+- **`Shared` 新增字段** `Option<HGTSpec> handGuidedTearing`，类型 `HGTSpec = HGT_SPEC(list<DAE.HGTResidual> residuals, list<DAE.HGTIterationVariable> iterationVariables)`，直接沿用前端产生的 DAE 记录。
+  - `SHARED(...)` 只有两处按位置构造：`BackendDAECreate.lower`（第 167 行）和 `BackendDAEUtil.createEmptyShared`（第 9313 行），需要补参数。其他地方都是按字段名匹配，不受影响。
+  - 初始化系统由 `createEmptyShared` 新建 `Shared`（`Initialization.mo:194`）。仿照 `setSharedOptimica`，新增 `setSharedHGT`，把清单拷过去。
+- **`lower2`**（`BackendDAECreate.mo` 约第 995 行）：把现在的"跳过"改成收集 `DAE.HAND_GUIDED_TEARING`，作为新的输出交给 `lower`。
+- **`lower` 末尾的保护**：所有迭代变量（配对的和未配对的）`setVarUnreplaceable(true)`。别名消除会尊重这个标记（`RemoveSimpleEquations.mo:548`、`1848`）。
+- **新文件 `BackEnd/HandGuidedTearing.mo`** 承担后端全部 HGT 逻辑，对外提供：
+  - `equationName(eq) -> Option<String>`：从方程源注释读 `__OpenModelica_HGTEquation` 标签。后端模块不依赖 NF 包，这里按常量名自行读取。
+  - `isProtectedEquation(eq)`：有标签且清单中出现该名字时为 true，供各模块的保护使用。
+  - `hgtMatching`（后处理模块）、`tearComponent`（供 `Tearing` 调用）、`dump`。
+
+### 8.3 防止方程被优化掉
+
+带标签的方程必须原样活到 `hgtMatching`。下表列出会改写或删除方程的默认模块，以及处理方式：
+
+| 模块（默认开启） | 风险 | 处理 |
+| --- | --- | --- |
+| `removeSimpleEquations`（前处理和后处理各一次） | `x = y`、`x = c` 这类方程被当作别名或常量方程删除 | 在 `simpleEquationsFinder`（`RemoveSimpleEquations.mo:1032`）入口对受保护的方程直接按"非简单方程"处理 |
+| `removeEqualRHS` | 合并右端相同的方程 | 跳过受保护的方程 |
+| `resolveLoops` | 改写线性环里的方程，可能把残差方程换成线性组合 | 跳过包含受保护方程的环 |
+| `constantLinearSystem`（后处理） | 把常系数线性块在编译期解掉，整个块消失 | 跳过包含受保护方程的块 |
+| `solveSimpleEquations`（后处理，在 `tearingSystem` 之前） | 把单方程块改写成解出形式 | 跳过受保护的方程 |
+| `comSubExp`、`wrapFunctionCalls`、`inlineArrayEqn` | 只替换子表达式或展开标量，源注释保留 | 不处理 |
+
+**兜底检查**：`hgtMatching` 开始时，对清单里每个方程名在本系统中计数。
+
+- 计数为 0：报错"HGT 方程 %s 被后端优化移除"。
+- 计数大于 1：报错"被复制"。
+
+这样即使有遗漏的模块，也不会静默失效。迭代变量如果被消成已知量（例如 `v = 2`），同样报错。
+
+### 8.4 模块位置与开关（`BackendDAEUtil.mo`）
+
+- 在 `allPostOptimizationModules` 和 `allInitOptimizationModules` 中注册 `(HandGuidedTearing.hgtMatching, "hgtMatching")`，位置紧挨 `tearingSystem` 之前（第 8470、8512 行附近）。`selectOptModules` 按注册表的顺序排列模块，因此它总在 `tearingSystem` 之前运行。
+- 在 `getPostOptModules` 和 `getInitOptModules` 中，`--handGuidedTearing` 打开时自动把 `hgtMatching` 加入启用列表，做法与现有的 `simplifyLoops` 等相同（第 8617 行起）。
+- 每个后处理模块运行后会调用 `causalizeDAE`。它只对 `NO_MATCHING` 的系统重新匹配（第 7941 行），所以 `hgtMatching` 写入的匹配结果会原样保留给 `tearingSystem`。
+
+### 8.5 `hgtMatching`：强制配对与重算 SCC
+
+对每个 `EqSystem`（模拟系统和初始化系统分别处理），按以下步骤进行：
+
+1. **定位**：扫描 `orderedEqs` 建立"方程名 → 方程下标"，再用 `BackendVariable.getVar` 建立"迭代变量 → 变量下标"。清单里的项在本系统里找不到时：
+   - 如果对应的方程或变量已被别名消除、变成已知量：报错（见 8.3）。
+   - 如果它本来就不在这个系统里（例如只出现在初始化方程中）：跳过。
+   - 方程和配对变量分属两个不同的 `EqSystem`（独立分区）时：报错，因为两者结构上无关。
+2. **稳态判定**：模拟系统里存在 `STATE` 变量时，发出一次"HGT 仅支持稳态模型，行为未定义"警告，然后继续（§3.3）。
+3. **未配对数量检查（R5）**：按 level 统计未配对残差和未配对变量，个数不等报错。
+4. **绑定未配对项**：
+   - 先在"去掉所有 HGT 变量和方程"的系统上取现有匹配，用 `Sorting.Tarjan` 得到依赖图。
+   - 对同一 level 的未配对变量 u_v 和未配对残差 u_e，建立"u_e 经内部方程依赖 u_v"的可达二部图，用增广路径求完美匹配，结果作为补充配对。
+   - 不存在完美匹配时报错：存在不依赖任何未配对变量的残差。
+5. **强制配对**：对每个配对 (v, e)，解除两者原来的匹配，设 `ass1[v] = e`、`ass2[e] = v`。这一步不检查 e 能否对 v 求解（R1）。
+6. **修复匹配**：
+   - 在去掉所有 v 和 e 的二部图上（使用 `SOLVABLE` 邻接矩阵），为每个空出来的方程 f 找一条通往空出来的变量 w 的增广路径。
+   - 找不到时不报错（R2）：先让 f 临时"解" w，使匹配完整、能做 Tarjan；第 7 步之后再把 f、w 所在的块与引起它们的配对 (v, e) 所在的块合并（连同路径上的块，做法同第 9 步）。撕裂阶段在块内重新做最大匹配，会把 f、w 识别为未匹配项，作为自动补充的残差和迭代变量（8.6 第 2 步）。
+7. **重算 SCC**：把新的 `ass1`/`ass2` 写回 `syst.matching`，调用 `BackendDAETransform.strongComponentsScalar`（第 80 行）重新划分并生成块的类型和雅可比。e→v 形成的环会把 v 到 e 路径上的块合进同一个块，跨 SCC 的配对由此处理。
+8. **结构检查**：配对的 e 和 v 若不在同一个块里，说明 e 不依赖 v（残差对 v 的雅可比结构为 0），报错。
+9. **`--hgtMergeBLTBlocks=true`（R8）**：把所有含 level 1 HGT 项的块，连同它们之间所有路径上的块，在块的拓扑图上合并成一个块，再重新生成该块的描述。
+10. **不另存中间结果**：撕裂阶段只需要知道块里有哪些 HGT 项，按方程标签和变量名在块内重新查找即可，开销很小，所以不往 `BackendDAE` 里加额外状态。`-d=hgtDump` 打印每个块包含的 HGT 项，以及合并了哪些原始块。
+
+### 8.6 `hgtTearing`：含 HGT 项的块如何撕裂（`Tearing.mo`）
+
+**入口**：在 `traverseComponent`（第 296 行）中，先判断块是否含 HGT 项。
+
+- 含 HGT 项的块走 `HandGuidedTearing.tearComponent`，并绕过以下三处限制，因为 HGT 是用户指定，必须执行：
+  - `checkTearingSettings`：大小上限、`--noTearingForComponent`。
+  - `tearingPaysOff`：认为撕裂不划算时回退为不撕裂。
+  - 外层的 `try … else inComp`：现在会把失败静默吞掉，HGT 的失败要报错。
+- 块的类型可能是 `EQUATIONSYSTEM`，也可能是 `SINGLEEQUATION`。后者是"e 直接含 v 且不成环"的配对，生成 1×1 的撕裂系统：迭代变量 v，残差 e，没有内部方程，`linear = false`。
+
+**撕裂算法（第一期只有 level 1）**：
+
+1. 块内所有 HGT 迭代变量（用户配对、绑定的未配对项、自动补充）记为 V，残差记为 E。
+2. 从块中去掉 V 和 E，把 V 当作已知量，对剩余部分做最大匹配（以 `hgtMatching` 的结果为初值）。仍未匹配的方程和变量（8.5 第 6 步的情况）分别加入 E 和 V，记为"自动补充"。然后做 Tarjan，得到按序排列的子块。
+3. 对每个子块：
+   - **单方程**：作为内部方程 `INNEREQUATION(eqn, vars)`。
+   - **代数环（R2，自动补全）**：调用现有的撕裂方法（`callTearingMethod`，默认 Cellier）撕这个子环，把它的撕裂变量和残差并入 V 和 E，它的内部方程按位置放进外层的内部方程序列。
+4. 生成 `TORNSYSTEM(TEARINGSET(V, E, innerEquations, EMPTY_JACOBIAN), NONE(), linear, mixed)`。雅可比由后面的 `calculateStrongComponentJacobians` 计算，与现有流程相同。
+5. **残差 nominal**：对带 `nominal` 的残差方程 e，把 `orderedEqs[e]` 原地替换为 `RESIDUAL_EQUATION((lhs - rhs) / nominal)`，并保留原来的源信息。方程下标不变，所以块结构不受影响，SimCode 不需要改动。
+6. **调试输出**：`-d=tearingdump` 打印 `Tearing type: hand guided`，并标明每个迭代变量和残差的来源（用户 / 绑定 / 自动补充）。
+
+第 3 步复用现有撕裂来补全，不需要改 Cellier。同一套结构也正是第 2 期嵌套的基础：B2 中，含更高 level 项的子块改为递归调用 `tearComponent`，生成嵌套块，不再并入外层。
+
+**第一期遇到 level ≥ 2 时**：发出警告"嵌套 HGT 暂按 level 1 处理"，把这些项并入外层撕裂。模型仍可求解，只是没有嵌套。
+
+### 8.7 迭代变量的属性
+
+| 属性 | 第一期（B1） | 第二期（B2） |
+| --- | --- | --- |
+| `start` | 常量或参数表达式：写入变量自身的 start 属性（`BackendVariable.setVarStartValue`）。运行时 NLS 的初值就是变量当前值（`getIterationVars`，`nonlinearSystem.c:1120`），初始化时等于 start，所以效果相同 | level ≥ 2 的自适应 start：每次求解嵌套 NLS 前重新计算 |
+| `nominal` | 写入变量的 nominal 属性（`setVarNominalValue`），NLS 的缩放从这里取（`CodegenC.tpl:3513`） | 同上，支持自适应 |
+| `min` / `max` | **不写进变量属性**，否则会生成变量范围检查，改变模型语义。第一期给警告"暂不支持"并忽略 | 在 `SimCode.SIMCODE` 增加 HGT 属性表（构造只有 `SimCodeUtil.mo:787` 和 `SimCodeMain.mo:2482` 两处），模板 `generateStaticInitialData`（`CodegenC.tpl:3489`）对表中变量用 HGT 表达式生成 `sysData->min/max/nominal`；自适应表达式生成 `updateHGTAttributesNLS<idx>`，在运行时每次求解前调用 |
+| 残差 `nominal` | 方程缩放（8.6 第 5 步） | 同左 |
+
+### 8.8 新增的选项与报错
+
+- **选项**（`Flags.mo`）：
+  - `--hgtMergeBLTBlocks`（布尔，默认 false），在 B1 实现。
+  - `--hgtAllowMultipleResiduals=false|level1|true`（默认 `level1`），在 B2 随嵌套一起实现。
+- **报错**（`Error.mo`，接着 638 编号）：
+  - HGT 方程或变量被后端优化消掉。
+  - 方程和配对变量不在同一个系统。
+  - 某个 level 上未配对的个数不等。
+  - 未配对项无法绑定。
+  - 残差不依赖迭代变量。
+  - 仅支持稳态（警告）。
+  - 嵌套暂按 level 1 处理（警告）。
+  - min/max 暂不支持（警告）。
+
+### 8.9 测试（`testsuite/simulation/modelica/tearing/HGT*.mos`）
+
+全部用稳态模型（无状态），不依赖 Modelica 标准库。每个用例同时对比 `-d=tearingdump`/`-d=hgtDump` 输出和 `simulate` 的结果。
+
+| 用例 | 预期 |
 | --- | --- |
-| 某个 level 上未配对方程数 ≠ 未配对变量数 | 错误（R5） |
-| 迭代变量是离散变量 | 错误 |
-| 迭代变量同时标了 `__OpenModelica_tearingSelect = never` | 错误 |
-| 同一变量被配对或标注多次 | 错误 |
-| 被引用的方程或变量不存在，或已被优化掉 | 错误 |
-| 迭代变量在本系统里不是未知量（状态、参数） | 警告并忽略 |
-| level ≥ 2 的属性表达式引用的变量没有在块前算出 | 错误（R7） |
-| level 1 的属性表达式引用了连续变量 | 错误（R7） |
-| 模型含连续状态（非稳态） | 警告一次，继续应用（R11，§3.3） |
+| 同一 SCC 内的配对 | 撕裂集合与注解一致，结果正确 |
+| 跨 SCC 配对（`e: w = 2; eq1: v + w = time`，配对 v/e） | 两个块合并成一个撕裂块 |
+| 系统级 `tearingPairs` | 同上 |
+| 未配对（TestUnpaired 结构） | 绑定成功；个数不等时报错 |
+| 配对后剩余部分仍有环 | 自动补全出额外的迭代变量，结果正确 |
+| 单方程配对 | 生成 1×1 撕裂系统 |
+| 残差 nominal、迭代变量 start/nominal | 生成代码中残差被缩放，初值和 nominal 生效 |
+| `--hgtMergeBLTBlocks` | 所有 level 1 项在同一个块 |
+| 初始化系统 | 初始化与模拟系统分别生效 |
+| `removeSimpleEquations` 会命中的简单方程作为残差 | 方程被保留 |
+| 残差不依赖迭代变量 | 报错 |
+| 含状态的模型 | 警告一次 |
+| level 2（NonConvexNHGT 结构） | B1：警告并按 level 1 求解；B2：生成嵌套 NLS |
 
-## 9. 匹配阶段：`hgtMatching`
+### 8.10 第二期（B2）：嵌套与运行时
 
-新增后处理模块 `HandGuidedTearing.hgtMatching`，在 `BackEnd/BackendDAEUtil.mo` 的后处理模块列表中注册在 `tearingSystem` 之前（8470 行和 8512 行附近）。
+- **嵌套块**：`BackendDAE.InnerEquation` 新增 `INNERCOMPONENT(StrongComponent comp)`。约 35 处匹配点要补分支，分布在：
+  - `Tearing.mo`
+  - `BackendDAEUtil.mo`
+  - `BackendDAEOptimize.mo`
+  - `SimCodeUtil.mo`
+  - `Uncertainties.mo`
+  - `SymbolicJacobian.mo`
 
-1. **给未配对项配对（R5，推断实现）**：
-   - 先在去掉所有 HGT 变量和方程的系统上求匹配，得到依赖图。
-   - 对同一 level 的未配对变量 u_v 和未配对残差 u_e，建立"u_e 经由内部方程依赖 u_v"的可达性二部图，在其上求完美匹配（增广路径即可）。
-   - 匹配不存在，说明某个残差不依赖任何未配对变量，报错。
-   - 得到的配对与用户配对同等对待。
-2. **强制配对**：对所有配对 (v, e)（所有 level）：
-   - 解除 v 和 e 原来的匹配。
-   - 设 `ass1[v]=e`、`ass2[e]=v`。按 R1，不检查 e 能否对 v 求解，也不要求 e 显式包含 v。
-3. **修复匹配**：
-   - 在去掉所有 v、e 的二部图上，为每个空出来的方程 f 找一条通往空出来的变量 w 的增广路径，使用 `BackendDAE.SOLVABLE()` 邻接矩阵。
-   - 找不到时不报错（R2）：把 (w, f) 记为"自动补充"配对，放进同一个块的 level 1。
-4. **重算 SCC**：用 `strongComponentsScalar` 重新划分。
-   - e→v 形成的环会把 v 到 e 路径上的块并进同一个 SCC，跨 SCC 的配对由此处理。手册没写 `merge_blt_blocks=false` 时的行为，这是推断。
-   - 如果 e 不依赖 v（没有路径），e 会单独成块且块内没有 v，雅可比结构上为 0，报错。OCT 不做这个检查，但这样的块必然奇异，提前报错更清楚。
-5. **`--hgtMergeBLTBlocks=true`（R8）**：在块的拓扑图上，把所有含 level 1 配对或未配对项的块，连同它们之间所有路径上的块，合并成一个块。只合并路径闭包，保证 BLT 顺序仍然成立。
-6. **标记**：给含 HGT 的块打标记，交给 `tearingSystem`。
+  `SimCodeUtil.createTornSystemInnerEqns`（第 4013 行）遇到它时，递归生成嵌套的 `SES_NONLINEAR`；`CodegenC.tpl:3150` 已有生成嵌套 NLS 残差函数的路径。
+- **外层雅可比**：外层系统要对内层的隐式解求导。先让外层用数值雅可比，再考虑解析方式。
+- **R9 残差个数检查**和 `--hgtAllowMultipleResiduals`。
+- **min/max 与自适应属性**：SimCode 表 + 模板 + 运行时回调（见 8.7）。
+- **`hold` 的运行时**：可选，待定。
 
-## 10. 撕裂：`hgtTearing` 与 `level` 嵌套
-
-`Tearing.callTearingMethod` 对带标记的块调用新函数 `hgtTearing`。优先级：`--totalTearing` > `--setTearingVars/--setResidualEqns` > HGT > 自动撕裂。
-
-对一个块，从块内最小的 level L 开始递归处理：
-
-1. **定这一层的变量和残差**：level L 的配对和已配对的未配对项给出迭代变量 V_L 和残差 E_L。
-2. **排序剩余部分**：从块中去掉 V_L 和 E_L，把 V_L 当已知量，对剩余部分重新匹配并做 Tarjan，得到内部子块，按类型处理：
-   - 单个方程：作为内部方程。
-   - 含更高 level 的 HGT 项：递归调用 `hgtTearing`，生成一个嵌套撕裂块（R6）。level 不连续时（如 1 和 3），按下一个出现的 level 处理。
-   - 不含 HGT 的代数环：按 R2，用 Cellier 在这一层补选迭代变量和残差，加入 V_L / E_L，并在 dump 中标为"自动补充"。
-3. **残差数量检查（R9）**：
-   - `level1`：level ≥ 2 的块残差数大于 1 时报错。
-   - `false`：任何 HGT 块残差数大于 1 时报错。
-   - `true`：不检查。
-4. **只有一层时**：块里只有 level 1 时退化为扁平撕裂。V、E 全部来自用户时，直接复用 `userDefinedTearing`。
-
-**数据结构**：给 `BackendDAE.InnerEquation` 新增 `INNERCOMPONENT(StrongComponent comp)`，用来放嵌套的 `TORNSYSTEM`。现有代码里匹配 `INNEREQUATION` 的地方约 35 处，分布在：
-
-- `Tearing.mo`
-- `BackendDAEUtil.mo`
-- `BackendDAEOptimize.mo`
-- `SimCodeUtil.mo`
-- `Uncertainties.mo`
-- `SymbolicJacobian.mo`
-
-这些地方都要补上新分支。其中 `SymbolicJacobian` 计算外层块的雅可比时，要把内层块当作隐式函数处理：内层块的解对外层迭代变量求导，需要用内层雅可比求解。这一步第一期可以先退化为数值差分。
-
-## 11. 属性、代码生成与运行时
-
-- **嵌套非线性系统**：`createTornSystemInnerEqns` 遇到 `INNERCOMPONENT` 时递归生成 `SES_NONLINEAR`，嵌进外层系统的 `eqs`。CodegenC 已经会为嵌套系统生成残差函数（`CodegenC.tpl:3150`）。
-  - 需要验证的点：嵌套系统的 `indexNonLinearSystem` 编号、模型信息里非线性系统总数的统计、运行时 `solve_nonlinear_system` 能否重入。
-- **残差 nominal**：生成残差时用 `(lhs - rhs) / nominal`。系统级配对的 `residualEquation(nominal=…)` 和组件级的 `nominal` 同样处理。
-- **迭代变量属性**：省略时取变量声明的属性；显式给出时覆盖（R7）。
-  - 常量或参数表达式：在 `initializeStaticDataNLS<idx>` 里写入 `min/max/nominal`，start 用于初值。
-  - level ≥ 2 引用连续变量（自适应边界）：新增生成函数 `updateHGTAttributesNLS<idx>`，每次求解嵌套系统前在运行时调用，重算 `min/max/nominal/start`。需要改 `SimulationRuntime/c/simulation/solver/nonlinearSystem.c`，以及 `NONLINEAR_SYSTEM_DATA` 里的回调指针。
-- **`hold`（R10）**：OCT 中 `hold` 只用于交互式 FMU 的 FMUProblem。第一期只解析并警告。后续可在运行时实现"参数为 true 时把该迭代变量固定在当前值、不计算对应残差"，需要非线性求解器支持变量和残差的掩码。
-
-## 12. 诊断、文档、测试
+## 9. 诊断、文档、测试（汇总）
 
 **诊断与文档**：
 
@@ -379,7 +456,7 @@ flowchart TD
 
 所有正确性用例都是稳态模型（无连续状态）。
 
-## 13. 风险与待确认
+## 10. 风险与待确认
 
 **风险**：
 
@@ -396,15 +473,14 @@ flowchart TD
 - [ ] `hold` 是否需要运行时支持，还是长期只解析。
 - [ ] `--acceptModelonHGT` 默认开还是关。
 
-## 14. 分期计划与文件清单
+## 11. 分期计划与文件清单
 
-| 步骤 | 内容 | 依赖 |
+| 步骤 | 内容 | 状态 |
 | --- | --- | --- |
-| 1 | 前端解析与改写；后端 `collect` 与保护；组件级和系统级配对，只有 level 1，同一 SCC（复用 `userDefinedTearing`） | — |
-| 2 | 未配对绑定、`hgtMatching`（跨 SCC）、`--hgtMergeBLTBlocks`、R2 自动补全 | 1 |
-| 3 | `level` 嵌套：`INNERCOMPONENT`、递归 `hgtTearing`、SimCode 嵌套 NLS、残差数量检查 | 2 |
-| 4 | 属性：nominal、常量和参数形式的 start/min/max | 1 |
-| 5 | 自适应边界（运行时更新）；`hold` 运行时（可选） | 3、4 |
+| F | 前端：注解解析、名字解析、清单、DAE 元素 | 已完成（§7.7） |
+| B1 | 后端第一期：收集与保护、`hgtMatching`（强制配对、跨 SCC、未配对绑定、`--hgtMergeBLTBlocks`）、`hgtTearing`（level 1、自动补全、1×1 块）、残差 nominal、迭代变量 start/nominal | 下一步 |
+| B2 | 后端第二期：`level` 嵌套（`INNERCOMPONENT`、嵌套 NLS）、R9 残差个数检查、min/max 与自适应属性（SimCode 表、模板、运行时） | B1 之后 |
+| B3 | 可选：`hold` 运行时、用户文档 `solving.rst` | 待定 |
 
 | 文件（相对 `OMCompiler/`） | 新增/修改 | 步骤 |
 | --- | --- | --- |

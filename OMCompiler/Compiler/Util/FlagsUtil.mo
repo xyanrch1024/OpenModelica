@@ -261,7 +261,8 @@ constant list<Flags.DebugFlag> allDebugFlags = {
   Flags.DUMP_CHECK_MODEL,
   Flags.CHECK_DEF_USE,
   Flags.TEARING_COST,
-  Flags.OMEDIT
+  Flags.OMEDIT,
+  Flags.HGT_DUMP
 };
 
 protected
@@ -439,7 +440,9 @@ constant list<Flags.ConfigFlag> allConfigFlags = {
   Flags.TEARING_COST_MARGIN,
   Flags.FMU_NATIVE_PLATFORMS,
   Flags.TPL_OUTPUT_DIR,
-  Flags.FMU_DIRECTORY
+  Flags.FMU_DIRECTORY,
+  Flags.HAND_GUIDED_TEARING,
+  Flags.ACCEPT_MODELON_HGT
 };
 
 public function new

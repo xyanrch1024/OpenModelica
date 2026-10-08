@@ -411,6 +411,7 @@ if true then /* Suppress output */
     "../NFFrontEnd/NFFlatten.mo",
     "../NFFrontEnd/NFFunctionDerivative.mo",
     "../NFFrontEnd/NFFunctionInverse.mo",
+    "../NFFrontEnd/NFHandGuidedTearing.mo",
     "../NFFrontEnd/NFFunction.mo",
     "../NFFrontEnd/NFImport.mo",
     "../NFFrontEnd/NFInline.mo",

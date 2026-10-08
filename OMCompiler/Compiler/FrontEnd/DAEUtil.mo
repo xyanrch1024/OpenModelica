@@ -3939,6 +3939,9 @@ algorithm
 
     case DAE.CLASS_ATTRIBUTES() then ();
 
+    // The expressions in the hand guided tearing specification are not traversed.
+    case DAE.HAND_GUIDED_TEARING() then ();
+
     case DAE.IF_EQUATION(condition1 = expl, equations2 = eqll, equations3 = el)
       algorithm
         (new_expl, arg) := traverseDAEExpList(expl, func, arg);
@@ -4842,6 +4845,7 @@ algorithm
         algorithm constraints := e :: constraints; then ();
       case DAE.CLASS_ATTRIBUTES()
         algorithm classAttributes := e :: classAttributes; then ();
+      case DAE.HAND_GUIDED_TEARING() then ();
       case DAE.EXTOBJECTCLASS()
         algorithm externalObjects := e :: externalObjects; then ();
       case DAE.COMP()

@@ -77,6 +77,7 @@ import Error;
 import ErrorExt;
 import FlagsUtil;
 import Flatten = NFFlatten;
+import HandGuidedTearing = NFHandGuidedTearing;
 import Connections = NFConnections;
 import InstUtil = NFInstUtil;
 import List;
@@ -273,6 +274,20 @@ algorithm
   flatModel := InstUtil.replaceEmptyArrays(flatModel);
   InstUtil.dumpFlatModelDebug("scalarize", flatModel, functions);
 
+  // Check that the frontend didn't remove or duplicate any hand guided tearing equation.
+  () := match flatModel.handGuidedTearing
+    local
+      HandGuidedTearing.Spec hgt_spec;
+
+    case SOME(hgt_spec)
+      algorithm
+        HandGuidedTearing.checkEquations(hgt_spec, flatModel.equations, flatModel.initialEquations);
+      then
+        ();
+
+    else ();
+  end match;
+
   // Dump the flat model to a string if dumpFlat = true and --baseModelicaOptions=scalarize is set.
   if Flags.isConfigFlagSet(Flags.BASE_MODELICA_OPTIONS, "scalarize") then
     flatString := if dumpFlat then InstUtil.dumpFlatModel(flatModel, functions) else "";
@@ -451,7 +466,7 @@ algorithm
   end for;
 
   flatModel := FlatModel.FLAT_MODEL(Absyn.Path.IDENT(InstNode.name(funcNode)), {}, {}, {}, {}, {},
-    ElementSource.createElementSource(InstNode.info(funcNode)));
+    ElementSource.createElementSource(InstNode.info(funcNode)), NONE());
 end instantiateRootFunction;
 
 function instantiate

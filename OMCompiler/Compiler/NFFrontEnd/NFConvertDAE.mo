@@ -39,6 +39,7 @@ import Binding = NFBinding;
 import DAE;
 import Equation = NFEquation;
 import FlatModel = NFFlatModel;
+import HandGuidedTearing = NFHandGuidedTearing;
 import NFFlatten.FunctionTree;
 import NFInstNode.InstNode;
 import Statement = NFStatement;
@@ -101,6 +102,10 @@ algorithm
   elems := convertInitialEquations(flatModel.initialEquations, elems);
   elems := convertAlgorithms(flatModel.algorithms, elems);
   elems := convertInitialAlgorithms(flatModel.initialAlgorithms, elems);
+
+  if isSome(flatModel.handGuidedTearing) then
+    elems := HandGuidedTearing.Spec.toDAE(Util.getOption(flatModel.handGuidedTearing)) :: elems;
+  end if;
 
   class_elem := DAE.COMP(FlatModel.fullName(flatModel), elems, flatModel.source, ElementSource.getOptComment(flatModel.source));
   dae := DAE.DAE({class_elem});

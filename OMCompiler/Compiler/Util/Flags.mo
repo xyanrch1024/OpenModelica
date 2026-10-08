@@ -573,6 +573,8 @@ constant DebugFlag TEARING_COST = DEBUG_FLAG(200, "tearingCost", false,
   "Dumps the estimated cost of every torn system against solving it untorn.");
 constant DebugFlag OMEDIT = DEBUG_FLAG(201, "omedit", false,
   "Set by OMEdit, so the compiler can emit output only a GUI consumes.");
+constant DebugFlag HGT_DUMP = DEBUG_FLAG(202, "hgtDump", false,
+  "Dumps the hand guided tearing specification collected by the frontend.");
 
 public
 // CONFIGURATION FLAGS
@@ -1442,6 +1444,12 @@ constant ConfigFlag TPL_OUTPUT_DIR = CONFIG_FLAG(170, "tplOutputDir",
 constant ConfigFlag FMU_DIRECTORY = CONFIG_FLAG(171, "fmuDirectory",
   NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
   "Write an exported FMU as an unzipped directory named <prefix>.fmu rather than\na zip file. An importer that reads a directory (OpenModelica's own does) then\npays neither the compression nor the extraction, which for a wasm FMU carrying a\nprecompiled artifact is most of what packing it costs. wasm FMUs only.");
+constant ConfigFlag HAND_GUIDED_TEARING = CONFIG_FLAG(172, "handGuidedTearing",
+  NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
+  "Enables hand guided tearing, i.e. the __OpenModelica_HGT annotations that select\niteration variables and residual equations. Corresponds to the OCT option\nhand_guided_tearing. Like in OCT, only steady-state models are supported.");
+constant ConfigFlag ACCEPT_MODELON_HGT = CONFIG_FLAG(173, "acceptModelonHGT",
+  NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
+  "Also reads the hand guided tearing part of __Modelon annotations, so that\nmodels written for OCT can be used without changes.");
 
 function getFlags
   "Loads the flags with getGlobalRoot. Assumes flags have been loaded."

@@ -267,6 +267,7 @@ if true then /* Suppress output */
     "../BackEnd/EvaluateParameter.mo",
     "../BackEnd/ExpressionSolve.mo",
     "../BackEnd/FindZeroCrossings.mo",
+    "../BackEnd/HandGuidedTearing.mo",
     "../BackEnd/HpcOmBenchmark.mo",
     "../BackEnd/HpcOmBenchmarkExt.mo",
     "../BackEnd/HpcOmEqSystems.mo",

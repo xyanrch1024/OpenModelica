@@ -68,6 +68,7 @@ import ExpressionSolve;
 import Flags;
 import GCExt;
 import Global;
+import HandGuidedTearing;
 import List;
 import Matching;
 import MetaModelica.Dangerous;
@@ -305,6 +306,8 @@ protected function traverseComponent "author: Frenkel TUD 2012-05"
 protected
   constant Boolean debug = false;
   Boolean debugFlag = Flags.isSet(Flags.TEARING_DUMP) or Flags.isSet(Flags.TEARING_DUMPVERBOSE);
+  Boolean is_hgt;
+  list<Integer> hgt_vars, hgt_eqns;
 algorithm
   strongComponentIndexOut := match inComp
     case BackendDAE.EQUATIONSYSTEM(jac=BackendDAE.FULL_JACOBIAN()) algorithm
@@ -317,6 +320,15 @@ algorithm
     then (strongComponentIndexOut + 1);
     else strongComponentIndexOut;
   end match;
+
+  // Components with hand guided tearing items are always torn as the user
+  // specified, regardless of the tearing settings and whether tearing pays off.
+  (is_hgt, hgt_vars, hgt_eqns) := HandGuidedTearing.componentItems(inComp, isyst, ishared);
+  if is_hgt then
+    oComp := handGuidedTearing(inComp, isyst, ishared, hgt_vars, hgt_eqns);
+    outRunMatching := true;
+    return;
+  end if;
 
   (oComp, outRunMatching) := match inComp
     local
@@ -5685,6 +5697,170 @@ algorithm
   end if;
 end simpleMatching;
 
+
+protected function handGuidedTearing
+  "Tears a strong component that contains hand guided tearing items, see
+   doc/HGT_design.md section 8.6. The user's iteration variables and residual
+   equations are fixed; the other equations are causalized, and as long as that
+   gets stuck an additional iteration variable is selected (OCT: \"the
+   automatic algorithm will kick in and finalize the tearing\"). The equations
+   that remain unassigned become additional residual equations."
+  input BackendDAE.StrongComponent inComp;
+  input BackendDAE.EqSystem isyst;
+  input BackendDAE.Shared ishared;
+  input list<Integer> userTVars "local indices";
+  input list<Integer> userResiduals "local indices";
+  output BackendDAE.StrongComponent ocomp;
+protected
+  list<Integer> eindex, vindx, tvars, user_rows, order = {}, caus_eq, e_exp, evars, unassigned,
+                auto_rows, residuals, discrete_vars;
+  Boolean linear, mixed, finished = false, stuck;
+  Integer size, e, t;
+  BackendDAE.EqSystem subsyst;
+  BackendDAE.EquationArray eqns;
+  BackendDAE.Variables vars;
+  list<BackendDAE.Equation> eqn_lst;
+  list<BackendDAE.Var> var_lst;
+  BackendDAE.AdjacencyMatrix m, mt, m1, mt1;
+  BackendDAE.AdjacencyMatrixEnhanced me;
+  BackendDAE.AdjacencyMatrixTEnhanced meT;
+  array<list<Integer>> map_eqn_row;
+  array<Integer> map_row_eqn, ass1, ass2 = arrayCreate(0, -1);
+  BackendDAE.InnerEquations inner_equations;
+  Boolean debugFlag = Flags.isSet(Flags.TEARING_DUMP) or Flags.isSet(Flags.TEARING_DUMPVERBOSE);
+algorithm
+  (eindex, vindx, linear, mixed) := match inComp
+    case BackendDAE.EQUATIONSYSTEM()
+      then (inComp.eqns, inComp.vars, BackendDAEUtil.getLinearfromJacType(inComp.jacType), inComp.mixedSystem);
+    case BackendDAE.SINGLEEQUATION()
+      then ({inComp.eqn}, {inComp.var}, false, false);
+  end match;
+
+  // Subsystem of the component, like in userDefinedTearing.
+  size := listLength(vindx);
+  eqn_lst := BackendEquation.getList(eindex, BackendEquation.getEqnsFromEqSystem(isyst));
+  eqns := BackendEquation.listEquation(eqn_lst);
+  var_lst := List.map1r(vindx, BackendVariable.getVarAt, BackendVariable.daeVars(isyst));
+  vars := BackendVariable.listVar1(var_lst);
+  subsyst := BackendDAEUtil.createEqSystem(vars, eqns);
+  (subsyst, m, mt, _, _) := BackendDAEUtil.getAdjacencyMatrixScalar(subsyst, BackendDAE.NORMAL(), NONE(), BackendDAEUtil.isInitializationDAE(ishared));
+  m := Array.map(m, deleteNegativeEntries);
+  mt := Array.map(mt, deleteNegativeEntries);
+  (me, meT, map_eqn_row, map_row_eqn) := BackendDAEUtil.getAdjacencyMatrixEnhancedScalar(subsyst, ishared, false);
+
+  user_rows := List.flatten(list(map_eqn_row[i] for i in userResiduals));
+  discrete_vars := findDiscrete(var_lst);
+  tvars := userTVars;
+
+  if debugFlag then
+    print("\nTearing type: hand guided\n");
+    print("User iteration variables (local): " + stringDelimitList(List.map(userTVars, intString), ",") + "\n");
+    print("User residual equations (local): " + stringDelimitList(List.map(userResiduals, intString), ",") + "\n");
+  end if;
+
+  while not finished loop
+    ass1 := arrayCreate(size, -1);
+    ass2 := arrayCreate(size, -1);
+    markTVarsOrResiduals(tvars, ass1);
+    markTVarsOrResiduals(user_rows, ass2);
+
+    m1 := arrayCopy(m);
+    mt1 := arrayCopy(mt);
+    deleteEntriesFromAdjacencyMatrix(m1, mt1, tvars);
+    deleteRowsFromAdjacencyMatrix(mt1, tvars);
+    deleteEntriesFromAdjacencyMatrix(mt1, m1, user_rows);
+    deleteRowsFromAdjacencyMatrix(m1, user_rows);
+
+    // Causalize as far as possible.
+    order := {};
+    caus_eq := traverseCollectiveEqnsforAssignable(ass2, m1, map_eqn_row);
+    stuck := false;
+
+    while not listEmpty(caus_eq) and not stuck loop
+      try
+        (e, e_exp, evars) := getNextSolvableEqn(caus_eq, m1, me, ass1, ass2, map_eqn_row, map_row_eqn, ass1);
+        makeAssignment(e_exp, evars, ass1, ass2, m1, mt1);
+        order := e :: order;
+        caus_eq := traverseCollectiveEqnsforAssignable(ass2, m1, map_eqn_row);
+      else
+        stuck := true;
+      end try;
+    end while;
+
+    unassigned := list(v for v guard arrayGet(ass1, v) < 0 in 1:size);
+
+    if listEmpty(unassigned) then
+      finished := true;
+    else
+      t := selectAdditionalTearingVar(unassigned, discrete_vars, ass2, mt1);
+      tvars := t :: tvars;
+
+      if debugFlag then
+        print("Additional iteration variable (local): " + intString(t) + "\n");
+      end if;
+    end if;
+  end while;
+
+  // The equations that are still unassigned are additional residual equations.
+  auto_rows := list(r for r guard arrayGet(ass2, r) < 0 in 1:size);
+
+  if listLength(user_rows) + listLength(auto_rows) <> listLength(tvars) then
+    Error.addMessage(Error.HGT_TEARING_FAILED, {hgtResidualNames(userResiduals, eindex, isyst),
+      "the number of residual equations (" + intString(listLength(user_rows) + listLength(auto_rows)) +
+      ") differs from the number of iteration variables (" + intString(listLength(tvars)) + ")"});
+    fail();
+  end if;
+
+  residuals := List.unique(list(map_row_eqn[r] for r in listAppend(user_rows, auto_rows)));
+  inner_equations := assignInnerEquations(listReverse(order), eindex, vindx, ass2, map_eqn_row, NONE());
+
+  ocomp := BackendDAE.TORNSYSTEM(BackendDAE.TEARINGSET(selectFromList_rev(vindx, listReverse(tvars)),
+    selectFromList_rev(eindex, residuals), inner_equations, BackendDAE.EMPTY_JACOBIAN()), NONE(), linear, mixed);
+
+  if debugFlag then
+    print("Iteration variables (local): " + stringDelimitList(List.map(listReverse(tvars), intString), ",") + "\n");
+    print("Residual equations (local): " + stringDelimitList(List.map(residuals, intString), ",") + "\n");
+    print("Automatically added: " + intString(listLength(auto_rows)) + "\n\n");
+  end if;
+end handGuidedTearing;
+
+protected function selectAdditionalTearingVar
+  "Selects an additional iteration variable for hand guided tearing: the
+   continuous variable that occurs in most of the unassigned equations."
+  input list<Integer> unassignedVars;
+  input list<Integer> discreteVars;
+  input array<Integer> ass2;
+  input BackendDAE.AdjacencyMatrixT mt;
+  output Integer tvar = -1;
+protected
+  Integer count, best = -1;
+algorithm
+  for v in unassignedVars loop
+    if not listMember(v, discreteVars) then
+      count := listLength(list(r for r guard arrayGet(ass2, r) < 0 in mt[v]));
+
+      if count > best then
+        best := count;
+        tvar := v;
+      end if;
+    end if;
+  end for;
+
+  if tvar < 0 then
+    Error.addMessage(Error.HGT_TEARING_FAILED, {"", "only discrete variables are left to select as iteration variables"});
+    fail();
+  end if;
+end selectAdditionalTearingVar;
+
+protected function hgtResidualNames
+  input list<Integer> localEqns;
+  input list<Integer> eindex;
+  input BackendDAE.EqSystem syst;
+  output String str;
+algorithm
+  str := stringDelimitList(list(Util.getOptionOrDefault(HandGuidedTearing.equationName(
+    BackendEquation.get(syst.orderedEqs, listGet(eindex, i))), intString(i)) for i in localEqns), ", ");
+end hgtResidualNames;
 
 annotation(__OpenModelica_Interface="backend");
 end Tearing;

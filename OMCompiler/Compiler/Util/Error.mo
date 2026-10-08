@@ -1202,6 +1202,26 @@ public constant ErrorTypes.Message HGT_HOLD_NOT_SUPPORTED = ErrorTypes.MESSAGE(6
   "The hold attribute of hand guided tearing is not supported yet and is ignored.");
 public constant ErrorTypes.Message HGT_EQUATION_LOST = ErrorTypes.MESSAGE(638, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "The hand guided tearing equation '%s' %s while simplifying the model.");
+public constant ErrorTypes.Message HGT_EQUATION_REMOVED_BACKEND = ErrorTypes.MESSAGE(639, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+  "The hand guided tearing equation '%s' was %s by the backend optimization.");
+public constant ErrorTypes.Message HGT_VARIABLE_REMOVED_BACKEND = ErrorTypes.MESSAGE(640, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+  "The hand guided tearing iteration variable %s was eliminated by the backend optimization, it is no longer an unknown of the system.");
+public constant ErrorTypes.Message HGT_NOT_SAME_SYSTEM = ErrorTypes.MESSAGE(641, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+  "The residual equation '%s' and the iteration variable %s of a hand guided tearing pair are in different independent equation systems, so the residual equation does not depend on the iteration variable.");
+public constant ErrorTypes.Message HGT_UNPAIRED_COUNT = ErrorTypes.MESSAGE(642, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+  "Hand guided tearing level %s has %s unpaired residual equations but %s unpaired iteration variables.");
+public constant ErrorTypes.Message HGT_UNPAIRED_NOT_BOUND = ErrorTypes.MESSAGE(643, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+  "The unpaired hand guided tearing iteration variables %s cannot be paired with unpaired residual equations, since no unpaired residual equation of the same level depends on them.");
+public constant ErrorTypes.Message HGT_RESIDUAL_INDEPENDENT = ErrorTypes.MESSAGE(644, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+  "The hand guided tearing residual equation '%s' does not depend on its iteration variable %s.");
+public constant ErrorTypes.Message HGT_ONLY_STEADY_STATE = ErrorTypes.MESSAGE(645, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),
+  "Hand guided tearing is only supported for steady-state models, using it for a model with states is untested and has undefined behavior.");
+public constant ErrorTypes.Message HGT_LEVEL_NOT_SUPPORTED = ErrorTypes.MESSAGE(646, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),
+  "Nested hand guided tearing (level > 1) is not supported yet, all levels are torn as level 1.");
+public constant ErrorTypes.Message HGT_MIN_MAX_NOT_SUPPORTED = ErrorTypes.MESSAGE(647, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),
+  "The min and max attributes of hand guided tearing iteration variables are not supported yet and are ignored.");
+public constant ErrorTypes.Message HGT_TEARING_FAILED = ErrorTypes.MESSAGE(648, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+  "Hand guided tearing of the strong component with the residual equations {%s} failed: %s.");
 
 public constant ErrorTypes.Message MATCH_SHADOWING = ErrorTypes.MESSAGE(5001, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "Local variable '%s' shadows another variable.");

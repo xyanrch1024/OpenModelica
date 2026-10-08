@@ -1,0 +1,34 @@
+// name:      HGTError1
+// keywords:  tearing, hand guided tearing
+// status:    correct
+//
+// Errors for invalid hand guided tearing specifications.
+//
+
+loadFile("HGT.mo"); getErrorString();
+setCommandLineOptions("--handGuidedTearing -d=hgtDump"); getErrorString();
+buildModel(HGT.Independent); getErrorString();
+buildModel(HGT.Count); getErrorString();
+
+// Result:
+// true
+// ""
+// true
+// ""
+// Hand guided tearing:
+//   pair: residual equation $hgt1 (level 1), iteration variable a (level 1)
+// {"", ""}
+// "[simulation/modelica/tearing/HGT.mo:89:41-89:80:writable] Error: The residual equation '$hgt1' and the iteration variable a of a hand guided tearing pair are in different independent equation systems, so the residual equation does not depend on the iteration variable.
+// Error: post-optimization module hgtMatching (initialization) failed.
+// Error: No system for the symbolic initialization was generated
+// "
+// Hand guided tearing:
+//   unpaired residual equation $hgt1 (level 1)
+//   unpaired iteration variable b (level 1)
+//   unpaired iteration variable c (level 1)
+// {"", ""}
+// "Error: Hand guided tearing level 1 has 1 unpaired residual equations but 2 unpaired iteration variables.
+// Error: post-optimization module hgtMatching (initialization) failed.
+// Error: No system for the symbolic initialization was generated
+// "
+// endResult

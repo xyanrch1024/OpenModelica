@@ -233,6 +233,7 @@ set(OMC_MM_BACKEND_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/BackEnd/EvaluateParameter.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/BackEnd/ExpressionSolve.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/BackEnd/FindZeroCrossings.mo
+    ${CMAKE_CURRENT_SOURCE_DIR}/BackEnd/HandGuidedTearing.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/BackEnd/HpcOmBenchmark.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/BackEnd/HpcOmBenchmarkExt.mo
     ${CMAKE_CURRENT_SOURCE_DIR}/BackEnd/HpcOmEqSystems.mo

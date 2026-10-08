@@ -769,6 +769,7 @@ constant ConfigFlag POST_OPT_MODULES = CONFIG_FLAG(16, "postOptModules",
     ("solveSimpleEquations", "Solves simple equations"),
     ("symSolver", "Rewrites the ode system for implicit Euler method. This module requires +symSolver."),
     ("symbolicJacobian", "Detects the sparse pattern of the ODE system and calculates also the symbolic Jacobian if flag '--generateDynamicJacobian=symbolic'."),
+    ("hgtMatching", "Forces the hand guided tearing pairs into the matching. Enabled by --handGuidedTearing."),
     ("tearingSystem", "For method selection use flag tearingMethod."),
     ("wrapFunctionCalls", "This module introduces variables for each function call and substitutes all these calls with the newly introduced variables.")
     })),
@@ -1017,6 +1018,7 @@ constant ConfigFlag INIT_OPT_MODULES = CONFIG_FLAG(67, "initOptModules",
     ("simplifyConstraints", "Rewrites nonlinear constraints into box constraints if possible. This module requires +gDynOpt."),
     ("simplifyLoops", "Simplifies algebraic loops. This modules requires +simplifyLoops."),
     ("solveSimpleEquations", "Solves simple equations"),
+    ("hgtMatching", "Forces the hand guided tearing pairs into the matching. Enabled by --handGuidedTearing."),
     ("tearingSystem", "For method selection use flag tearingMethod."),
     ("wrapFunctionCalls", "This module introduces variables for each function call and substitutes all these calls with the newly introduced variables.")
     })),
@@ -1450,6 +1452,9 @@ constant ConfigFlag HAND_GUIDED_TEARING = CONFIG_FLAG(172, "handGuidedTearing",
 constant ConfigFlag ACCEPT_MODELON_HGT = CONFIG_FLAG(173, "acceptModelonHGT",
   NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
   "Also reads the hand guided tearing part of __Modelon annotations, so that\nmodels written for OCT can be used without changes.");
+constant ConfigFlag HGT_MERGE_BLT_BLOCKS = CONFIG_FLAG(174, "hgtMergeBLTBlocks",
+  NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
+  "Puts all hand guided tearing pairs and unpaired iteration variables and residual\nequations into the same BLT block. Corresponds to the OCT option merge_blt_blocks.");
 
 function getFlags
   "Loads the flags with getGlobalRoot. Assumes flags have been loaded."

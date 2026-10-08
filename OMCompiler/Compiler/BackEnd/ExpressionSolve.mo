@@ -59,6 +59,7 @@ protected import ExpressionBasics;
 protected import ExpressionDump;
 protected import ExpressionSimplify;
 protected import Flags;
+protected import HandGuidedTearing;
 protected import List;
 protected import Inline;
 protected import BackendDAE;
@@ -98,7 +99,8 @@ algorithm
                 BackendDAE.SINGLEEQUATION(eqn=eindex, var=vindx) := comp;
                 eqn := BackendEquation.get(syst.orderedEqs, eindex);
                 tmpComp := comp;
-                if BackendEquation.isEquation(eqn) then
+                // Hand guided tearing equations must be kept in residual form.
+                if BackendEquation.isEquation(eqn) and not HandGuidedTearing.isTaggedEquation(eqn) then
                   var := BackendVariable.getVarAt(syst.orderedVars, vindx);
                   (eqn, solved) := solveSimpleEquation(eqn, var, dae.shared);
                   syst.orderedEqs := BackendEquation.setAtIndex(syst.orderedEqs, eindex, eqn);

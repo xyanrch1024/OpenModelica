@@ -140,8 +140,17 @@ uniontype Shared "Data shared for all equation-systems"
     BackendDAEModeData daeModeData          "DAEMode Data";
     Option<DataReconciliationData> dataReconciliationData;
     Option<.DAE.Exp> timeInterval           "from experiment annotation Interval, used for derivative nominal guesswork";
+    Option<HGTSpec> handGuidedTearing       "hand guided tearing specification, see HandGuidedTearing";
   end SHARED;
 end Shared;
+
+uniontype HGTSpec "The hand guided tearing specification collected by the frontend,
+  see HandGuidedTearing and NFHandGuidedTearing."
+  record HGT_SPEC
+    list<.DAE.HGTResidual> residuals "paired and unpaired residual equations";
+    list<.DAE.HGTIterationVariable> iterationVariables "unpaired iteration variables";
+  end HGT_SPEC;
+end HGTSpec;
 
 uniontype InlineData
   record INLINE_DATA

@@ -74,6 +74,7 @@ protected import ExpressionBasics;
 import ExpressionSimplify;
 import ExpressionSolve;
 import Flags;
+import HandGuidedTearing;
 import GCExt;
 import HashSet;
 import HashTableCrToCrEqLst;
@@ -1049,6 +1050,10 @@ algorithm
       array<list<Integer>> mT;
       Boolean b;
       BackendDAE.EquationAttributes eqAttr;
+
+    // Hand guided tearing equations must be kept as they are.
+    case (_, (v, s, eqns, seqns, index, mT, b)) guard HandGuidedTearing.isTaggedEquation(eqn)
+      then ((v, s, eqn::eqns, seqns, index, mT, b));
 
     case (BackendDAE.EQUATION(exp=e1, scalar=e2, source=source, attr=eqAttr), _)
       algorithm

@@ -75,6 +75,7 @@ import ExpressionSolve;
 import Flags;
 import Global;
 import HashTableExpToExp;
+import HandGuidedTearing;
 import HashTableExpToIndex;
 import HashTable;
 import HashTableCrToExpSourceTpl;
@@ -122,6 +123,7 @@ protected
   list<BackendDAE.TimeEvent> timeEvents;
   Integer numCheckpoints;
   BackendDAE.EqSystem syst;
+  Option<BackendDAE.HGTSpec> hgt_spec;
 algorithm
   numCheckpoints:=ErrorExt.getNumCheckpoints();
   try
@@ -136,6 +138,10 @@ algorithm
     (DAE.DAE(elems), functionTree, timeEvents) := processBuiltinExpressions(lst, functionTree);
     (varlst, globalKnownVarLst, extvarlst, eqns, reqns, ieqns, constrs, clsAttrs, extObjCls, aliaseqns, _) :=
       lower2(listReverse(elems), functionTree, HashTableExpToExp.emptyHashTable());
+
+    // Hand guided tearing: protect the iteration variables, apply the attributes
+    // and scale the residual equations, see HandGuidedTearing.
+    (hgt_spec, varlst, eqns, ieqns) := HandGuidedTearing.lower(elems, varlst, eqns, ieqns);
 
     globalKnownVars := BackendVariable.listVar(globalKnownVarLst);
     localKnownVars := BackendVariable.emptyVars();
@@ -182,7 +188,8 @@ algorithm
                                                       BackendDAEUtil.emptyPartitionsInfo(),
                                                       BackendDAE.emptyDAEModeData,
                                                       NONE(),
-                                                      NONE()
+                                                      NONE(),
+                                                      hgt_spec
                                                       ));
     BackendDAEUtil.checkBackendDAEWithErrorMsg(outBackendDAE);
     BackendDAEUtil.checkAdjacencyMatrixSolvability(syst, functionTree,BackendDAEUtil.isInitializationDAE(outBackendDAE.shared));
@@ -998,7 +1005,7 @@ algorithm
         then
           ();
 
-      // The hand guided tearing specification is not used by the backend yet.
+      // The hand guided tearing specification is collected by HandGuidedTearing.lower.
       case DAE.HAND_GUIDED_TEARING() then ();
 
       else

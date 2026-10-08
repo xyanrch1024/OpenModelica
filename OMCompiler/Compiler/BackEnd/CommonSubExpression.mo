@@ -67,6 +67,7 @@ import Global;
 import HashSet;
 import HashTableExpToExp;
 import HashTableExpToIndex;
+import HandGuidedTearing;
 import HpcOmTaskGraph;
 import List;
 import ResolveLoops;
@@ -1975,6 +1976,12 @@ algorithm
     list<CommonSubExp> cseLst;
 
     Boolean isInitial;
+
+  // Hand guided tearing residual equations must keep the form the user wrote.
+  case(BackendDAE.EQSYSTEM(orderedEqs=eqs), _)
+    guard HandGuidedTearing.isActive(sharedIn) and
+          HandGuidedTearing.anyTaggedEquation(List.intRange(BackendEquation.getNumberOfEquations(eqs)), eqs)
+    then (sysIn, sharedIn);
 
   case(BackendDAE.EQSYSTEM(orderedVars=vars, orderedEqs=eqs), BackendDAE.SHARED(functionTree=functionTree))
     algorithm

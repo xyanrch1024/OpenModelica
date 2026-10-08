@@ -1,6 +1,11 @@
 TEST = ../../../rtest -v
 
 TESTFILES = \
+HGTError1.mos \
+HGTLevel1.mos \
+HGTPair1.mos \
+HGTPair2.mos \
+HGTSystem1.mos \
 Tearing1-celMC3.mos \
 Tearing2-celMC3.mos \
 Tearing3-celMC3.mos \

@@ -195,6 +195,7 @@ algorithm
     shared := BackendDAEUtil.setSharedRemovedEqns(shared, BackendEquation.emptyEqns());
     shared := BackendDAEUtil.setSharedGlobalKnownVars(shared, fixvars);
     shared := BackendDAEUtil.setSharedOptimica(shared, dae.shared.constraints, dae.shared.classAttrs);
+    shared := BackendDAEUtil.setSharedHandGuidedTearing(shared, dae.shared.handGuidedTearing);
     shared := BackendDAEUtil.setSharedFunctionTree(shared, dae.shared.functionTree);
     execStat("setup shared object (initialization)");
 

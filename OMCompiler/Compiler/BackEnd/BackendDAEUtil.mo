@@ -104,6 +104,7 @@ import FindZeroCrossings;
 import Flags;
 import FlagsUtil;
 import Global;
+import HandGuidedTearing;
 import HpcOmEqSystems;
 import HashSet;
 import HashTableExpToExp;
@@ -8467,6 +8468,7 @@ public function allPostOptimizationModules
     (ExpressionSolve.solveSimpleEquations, "solveSimpleEquations"),
     (ResolveLoops.reshuffling_post, "reshufflePost"),
     (DynamicOptimization.reduceDynamicOptimization, "reduceDynamicOptimization"), // before tearing
+    (HandGuidedTearing.hgtMatching, "hgtMatching"), // right before tearing
     (Tearing.tearingSystem, "tearingSystem"),
     (BackendDAEOptimize.simplifyLoops, "simplifyLoops"),
     (Tearing.recursiveTearing, "recursiveTearing"),
@@ -8509,6 +8511,7 @@ protected function allInitOptimizationModules
     (BackendDAEOptimize.simplifyComplexFunction, "simplifyComplexFunction"),
     (CommonSubExpression.wrapFunctionCalls, "wrapFunctionCalls"),
     (DynamicOptimization.reduceDynamicOptimization, "reduceDynamicOptimization"), // before tearing
+    (HandGuidedTearing.hgtMatching, "hgtMatching"), // right before tearing
     (Tearing.tearingSystem, "tearingSystem"),
     (BackendDAEOptimize.simplifyLoops, "simplifyLoops"),
     (Tearing.recursiveTearing, "recursiveTearing"),
@@ -8659,6 +8662,10 @@ algorithm
       enabledModules := "recursiveTearing"::enabledModules;
     end if;
 
+    if Flags.getConfigBool(Flags.HAND_GUIDED_TEARING) then
+      enabledModules := "hgtMatching"::enabledModules;
+    end if;
+
     if Flags.getConfigInt(Flags.PARTLINTORN) > 0 then
       enabledModules := "partlintornsystem"::enabledModules;
     end if;
@@ -8708,6 +8715,10 @@ algorithm
 
     if Flags.getConfigInt(Flags.RTEARING) > 0 then
       enabledModules := "recursiveTearing"::enabledModules;
+    end if;
+
+    if Flags.getConfigBool(Flags.HAND_GUIDED_TEARING) then
+      enabledModules := "hgtMatching"::enabledModules;
     end if;
 
     // handle special flags, which disable modules
@@ -9329,6 +9340,7 @@ algorithm
                               emptyPartitionsInfo(),
                               BackendDAE.emptyDAEModeData,
                               NONE(),
+                              NONE(),
                               NONE()
                               );
 end createEmptyShared;
@@ -9623,6 +9635,21 @@ algorithm
       then shared;
   end match;
 end setSharedAliasVars;
+
+public function setSharedHandGuidedTearing
+  input BackendDAE.Shared inShared;
+  input Option<BackendDAE.HGTSpec> spec;
+  output BackendDAE.Shared outShared;
+algorithm
+  outShared := match inShared
+    local
+      BackendDAE.Shared shared;
+    case shared as BackendDAE.SHARED()
+      algorithm
+        shared.handGuidedTearing := spec;
+      then shared;
+  end match;
+end setSharedHandGuidedTearing;
 
 public function setSharedOptimica
   input BackendDAE.Shared inShared;

@@ -1,0 +1,54 @@
+// name:      HGTLevel1
+// keywords:  tearing, hand guided tearing
+// status:    correct
+//
+// Nested levels are torn as level 1, and a model with states gives a warning.
+//
+
+loadFile("HGT.mo"); getErrorString();
+setCommandLineOptions("--handGuidedTearing -d=hgtDump"); getErrorString();
+// The Newton iterations of this example produce nan values on the way, only
+// check that the simulation succeeds and the solution.
+echo(false); r := simulate(HGT.NonConvex, stopTime = 0); echo(true);
+r.resultFile <> ""; getErrorString();
+val(x1, 0.0); val(x2, 0.0);
+simulate(HGT.WithStates); getErrorString();
+val(x, 1.0); val(z, 1.0);
+
+// Result:
+// true
+// ""
+// true
+// ""
+// Hand guided tearing:
+//   pair: residual equation $hgt1 (level 1), iteration variable x1 (level 1)
+//   pair: residual equation $hgt2 (level 2), iteration variable x2 (level 2)
+// Hand guided tearing matching (initialization system):
+//   block of 5 equations: residual equations {$hgt2, $hgt1}, iteration variables {x1, x2}
+// Hand guided tearing matching (simulation system):
+//   block of 9 equations: residual equations {$hgt1, $hgt2}, iteration variables {x2, x1}
+// true
+//
+// "Warning: Nested hand guided tearing (level > 1) is not supported yet, all levels are torn as level 1.
+// [simulation/modelica/tearing/HGTLevel1.mos:13:1-13:19:writable] Error: Variable r.resultFile not found in scope <global scope>.
+// "
+// 6.085385783471033
+// 14.265242985712183
+// Hand guided tearing:
+//   pair: residual equation $hgt1 (level 1), iteration variable z (level 1)
+// Hand guided tearing matching (initialization system):
+//   block of 2 equations: residual equations {$hgt1}, iteration variables {z}
+// Hand guided tearing matching (simulation system):
+//   block of 2 equations: residual equations {$hgt1}, iteration variables {z}
+// record SimulationResult
+//     resultFile = "HGT.WithStates_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 1.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.WithStates', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// "Warning: Hand guided tearing is only supported for steady-state models, using it for a model with states is untested and has undefined behavior.
+// "
+// 0.4609670042928451
+// 0.39794726789970963
+// endResult

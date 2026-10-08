@@ -442,7 +442,8 @@ constant list<Flags.ConfigFlag> allConfigFlags = {
   Flags.TPL_OUTPUT_DIR,
   Flags.FMU_DIRECTORY,
   Flags.HAND_GUIDED_TEARING,
-  Flags.ACCEPT_MODELON_HGT
+  Flags.ACCEPT_MODELON_HGT,
+  Flags.HGT_MERGE_BLT_BLOCKS
 };
 
 public function new

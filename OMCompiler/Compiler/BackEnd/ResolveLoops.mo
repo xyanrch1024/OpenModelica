@@ -58,6 +58,7 @@ import ExpressionBasics;
 import ExpressionSimplify;
 import ExpressionSolve;
 import Flags;
+import HandGuidedTearing;
 import HpcOmTaskGraph;
 import List;
 import Tearing;
@@ -329,7 +330,8 @@ protected
   list<Integer> idxMap;
 algorithm
   (eqLst, idxMap, idx, vars, markLinEqVars, m) := inTpl;
-  if BackendEquation.isEquation(inEq) and not eqIsConst(inEq)/*simple assignments should not occur here, they cannot be improved any further*/ then
+  if BackendEquation.isEquation(inEq) and not eqIsConst(inEq)/*simple assignments should not occur here, they cannot be improved any further*/
+     and not HandGuidedTearing.isTaggedEquation(inEq) /*hand guided tearing equations must be kept as they are*/ then
     (eq,(isSimple,_)) := BackendEquation.traverseExpsOfEquation(inEq,isAddOrSubExp,(true,vars));
     if isSimple then
       eqLst := eq::eqLst;

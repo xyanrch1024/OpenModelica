@@ -1,0 +1,53 @@
+// name:      HGTSystem1
+// keywords:  tearing, hand guided tearing
+// status:    correct
+//
+// System level tearing pairs and unpaired iteration variables and residual equations.
+//
+
+loadFile("HGT.mo"); getErrorString();
+setCommandLineOptions("--handGuidedTearing -d=hgtDump"); getErrorString();
+simulate(HGT.SystemPair); getErrorString();
+val(b.x, 1.0); val(b.y, 1.0);
+simulate(HGT.Unpaired); getErrorString();
+val(splitter.factor, 1.0); val(mixer.y, 1.0);
+
+// Result:
+// true
+// ""
+// true
+// ""
+// Hand guided tearing:
+//   pair: residual equation b.res (level 1), iteration variable b.y (level 1)
+// Hand guided tearing matching (initialization system):
+//   block of 2 equations: residual equations {b.res}, iteration variables {b.y}
+// Hand guided tearing matching (simulation system):
+//   block of 2 equations: residual equations {b.res}, iteration variables {b.y}
+// record SimulationResult
+//     resultFile = "HGT.SystemPair_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 1.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.SystemPair', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// 2.0
+// 1.0
+// Hand guided tearing:
+//   unpaired residual equation mixer.$hgt1 (level 1)
+//   unpaired iteration variable splitter.factor (level 1)
+// Hand guided tearing matching (initialization system):
+//   block of 3 equations: residual equations {mixer.$hgt1}, iteration variables {splitter.factor}
+// Hand guided tearing matching (simulation system):
+//   block of 3 equations: residual equations {mixer.$hgt1}, iteration variables {splitter.factor}
+// record SimulationResult
+//     resultFile = "HGT.Unpaired_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 1.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.Unpaired', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// 0.75
+// 3.0
+// endResult

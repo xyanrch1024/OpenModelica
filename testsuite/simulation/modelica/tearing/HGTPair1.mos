@@ -1,0 +1,53 @@
+// name:      HGTPair1
+// keywords:  tearing, hand guided tearing
+// status:    correct
+//
+// Hand guided tearing pairs: cross block pair and residual nominal.
+//
+
+loadFile("HGT.mo"); getErrorString();
+setCommandLineOptions("--handGuidedTearing -d=hgtDump"); getErrorString();
+simulate(HGT.CrossSCC); getErrorString();
+val(v, 1.0); val(w, 1.0);
+simulate(HGT.Loop); getErrorString();
+val(x, 1.0); val(y, 1.0); val(z, 1.0);
+
+// Result:
+// true
+// ""
+// true
+// ""
+// Hand guided tearing:
+//   pair: residual equation $hgt1 (level 1), iteration variable v (level 1)
+// Hand guided tearing matching (initialization system):
+//   block of 2 equations: residual equations {$hgt1}, iteration variables {v}
+// Hand guided tearing matching (simulation system):
+//   block of 2 equations: residual equations {$hgt1}, iteration variables {v}
+// record SimulationResult
+//     resultFile = "HGT.CrossSCC_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 1.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.CrossSCC', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// 0.0
+// 2.0
+// Hand guided tearing:
+//   pair: residual equation $hgt1 (level 1, nominal = 10.0), iteration variable y (level 1)
+// Hand guided tearing matching (initialization system):
+//   block of 3 equations: residual equations {$hgt1}, iteration variables {y}
+// Hand guided tearing matching (simulation system):
+//   block of 3 equations: residual equations {$hgt1}, iteration variables {y}
+// record SimulationResult
+//     resultFile = "HGT.Loop_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 1.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.Loop', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// 2.0
+// 1.6666666666666667
+// 2.333333333333333
+// endResult

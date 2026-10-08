@@ -73,6 +73,7 @@ import ExpressionDump;
 import ExpressionSimplify;
 import Error;
 import Flags;
+import HandGuidedTearing;
 import FlagsUtil;
 import GCExt;
 import Global;
@@ -934,6 +935,11 @@ algorithm
       list<BackendDAE.Var> bVars;
       list<BackendDAE.Equation> bEqs,sysEqs;
       BackendDAE.StrongComponents bComps,sysComps;
+
+    // Hand guided tearing components must be kept as they are.
+    case (syst, shared, BackendDAE.EQUATIONSYSTEM(eqns=eindex))
+      guard HandGuidedTearing.anyTaggedEquation(eindex, syst.orderedEqs)
+      then (syst, shared, false, sysIdxIn, compIdxIn+1);
 
     case (syst, shared, (BackendDAE.EQUATIONSYSTEM( eqns=eindex, vars=vindx, jac=BackendDAE.FULL_JACOBIAN(SOME(jac)),
                                                     jacType=BackendDAE.JAC_CONSTANT() )))

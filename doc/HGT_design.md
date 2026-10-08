@@ -298,11 +298,12 @@ flowchart TD
 | 模块（默认开启） | 风险 | 处理 |
 | --- | --- | --- |
 | `removeSimpleEquations`（前处理和后处理各一次） | `x = y`、`x = c` 这类方程被当作别名或常量方程删除 | 在 `simpleEquationsFinder`（`RemoveSimpleEquations.mo:1032`）入口对受保护的方程直接按"非简单方程"处理 |
-| `removeEqualRHS` | 合并右端相同的方程 | 跳过受保护的方程 |
+| `removeEqualRHS` | 合并右端相同的方程 | B1 未加保护，靠下面的兜底检查发现 |
 | `resolveLoops` | 改写线性环里的方程，可能把残差方程换成线性组合 | 跳过包含受保护方程的环 |
 | `constantLinearSystem`（后处理） | 把常系数线性块在编译期解掉，整个块消失 | 跳过包含受保护方程的块 |
 | `solveSimpleEquations`（后处理，在 `tearingSystem` 之前） | 把单方程块改写成解出形式 | 跳过受保护的方程 |
-| `comSubExp`、`wrapFunctionCalls`、`inlineArrayEqn` | 只替换子表达式或展开标量，源注释保留 | 不处理 |
+| `comSubExp`（前处理） | 把别名代入其他方程，残差方程会变成另一个式子（例如 `x = y + 1` 被改写成只含 `y` 的方程） | 系统中有受保护方程时整个系统跳过（`CommonSubExpression.commonSubExpression`） |
+| `wrapFunctionCalls`、`inlineArrayEqn` | 只替换子表达式或展开标量，源注释保留 | 不处理 |
 
 **兜底检查**：`hgtMatching` 开始时，对清单里每个方程名在本系统中计数。
 
@@ -425,6 +426,17 @@ flowchart TD
 - **min/max 与自适应属性**：SimCode 表 + 模板 + 运行时回调（见 8.7）。
 - **`hold` 的运行时**：可选，待定。
 
+### 8.11 实现状态（B1 已完成）
+
+B1 按 8.1–8.9 实现。与设计不同或需要说明的地方：
+
+- **方程保护**：已在 `removeSimpleEquations`、`resolveLoops`、`comSubExp`、`constantLinearSystem`、`solveSimpleEquations` 中跳过受保护方程。`comSubExp` 是测试中发现的：系统级配对的例子里，它把残差方程改写成了另一个式子。
+- **不在同一系统**：OMC 会把互不相关的方程拆成独立的方程系统。所以"残差不依赖迭代变量"多数情况下表现为二者落在不同系统，报错 641 的文字已说明这一点；`checkDependence` 处理同一系统内不连通的情况。
+- **`--hgtMergeBLTBlocks`**：只能合并同一方程系统内的块。分属不同独立系统的块不合并（B1 限制）。
+- **level ≥ 2**：警告一次，全部按 level 1 撕裂。官方 NonConvex 例子能求解，但 Newton 迭代中途会出现 nan 并重试，结果正确（x1 = 6.0854，x2 = 14.2652）。
+- **min/max**：警告并忽略（B2 处理）。
+- **测试**：`testsuite/simulation/modelica/tearing/HGT.mo` 与 `HGTPair1`、`HGTPair2`、`HGTSystem1`、`HGTLevel1`、`HGTError1` 五个脚本，覆盖跨 SCC 配对、残差 nominal、1×1 块、别名方程、系统级配对、未配对绑定、level 2、含状态警告、两种报错。tearing 目录下不依赖 MSL 的已有测试全部通过（失败的 34 个都需要 Modelica 标准库，本环境没有）。
+
 ## 9. 诊断、文档、测试（汇总）
 
 **诊断与文档**：
@@ -478,8 +490,8 @@ flowchart TD
 | 步骤 | 内容 | 状态 |
 | --- | --- | --- |
 | F | 前端：注解解析、名字解析、清单、DAE 元素 | 已完成（§7.7） |
-| B1 | 后端第一期：收集与保护、`hgtMatching`（强制配对、跨 SCC、未配对绑定、`--hgtMergeBLTBlocks`）、`hgtTearing`（level 1、自动补全、1×1 块）、残差 nominal、迭代变量 start/nominal | 下一步 |
-| B2 | 后端第二期：`level` 嵌套（`INNERCOMPONENT`、嵌套 NLS）、R9 残差个数检查、min/max 与自适应属性（SimCode 表、模板、运行时） | B1 之后 |
+| B1 | 后端第一期：收集与保护、`hgtMatching`（强制配对、跨 SCC、未配对绑定、`--hgtMergeBLTBlocks`）、`hgtTearing`（level 1、自动补全、1×1 块）、残差 nominal、迭代变量 start/nominal | 已完成（§8.11） |
+| B2 | 后端第二期：`level` 嵌套（`INNERCOMPONENT`、嵌套 NLS）、R9 残差个数检查、min/max 与自适应属性（SimCode 表、模板、运行时） | 下一步 |
 | B3 | 可选：`hold` 运行时、用户文档 `solving.rst` | 待定 |
 
 | 文件（相对 `OMCompiler/`） | 新增/修改 | 步骤 |

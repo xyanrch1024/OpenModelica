@@ -475,6 +475,7 @@ B1 按 8.1–8.9 实现。与设计不同或需要说明的地方：
 
 - **嵌套块的雅可比**：外层系统对内层隐式解求导，SymbolicJacobian 改动较大。第一期可先用数值雅可比。
 - **运行时重入和统计**：嵌套 NLS 要验证能否重入；求解统计和日志要区分层级。
+- **反解丢失约束（已知问题，暂不修）**：HGT 块内按 `casual` 规则反解方程时，`ExpressionSolve` 算出的约束被丢弃（`Tearing.handGuidedTearing` 调用 `assignInnerEquations` 时传 `NONE()`）。例如 `m = k*sqrt(pa - pb)` 反解成 `pa = pb + (m/k)^2` 后丢掉了 `m/k >= 0`；`HGT.Chain` 从 `m(start = -5)` 出发会收敛到不满足原方程的 m = -4.33。可选修法：改传 `SOME(me)` 生成 `INNEREQUATIONCONSTRAINTS` 并在 SimCode 中生成检查；或依赖 B2 的 `min`/`max`。
 - **非稳态模型**：动态模型中强制配对发生在指标约简之后，dummy derivative 的选择不知道 HGT。按 §3.3 这不在保证范围内，只给出警告。
 - **大块性能**：合并后的块可能很大，影响收敛和性能。
 

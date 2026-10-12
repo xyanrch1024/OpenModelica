@@ -121,4 +121,8 @@ package HGT "Hand guided tearing (OCT compatible) test models, steady state"
     end for;
     pipe[10].pb = p_out annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = m)));
   end Chain;
+
+  model ChainNegativeStart "the inverted sqrt has a spurious root m < 0, the check rejects it"
+    extends Chain(m(start = -5));
+  end ChainNegativeStart;
 end HGT;

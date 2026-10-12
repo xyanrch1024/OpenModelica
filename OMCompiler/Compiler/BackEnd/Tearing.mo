@@ -5816,7 +5816,7 @@ algorithm
   end if;
 
   residuals := List.unique(list(map_row_eqn[r] for r in listAppend(user_rows, auto_rows)));
-  inner_equations := assignInnerEquations(listReverse(order), eindex, vindx, ass2, map_eqn_row, NONE());
+  inner_equations := hgtInnerEquations(listReverse(order), eindex, vindx, ass2, map_eqn_row, subsyst, ishared);
 
   ocomp := BackendDAE.TORNSYSTEM(BackendDAE.TEARINGSET(selectFromList_rev(vindx, listReverse(tvars)),
     selectFromList_rev(eindex, residuals), inner_equations, BackendDAE.EMPTY_JACOBIAN()), NONE(), linear, mixed);
@@ -5827,6 +5827,77 @@ algorithm
     print("Automatically added: " + intString(listLength(auto_rows)) + "\n\n");
   end if;
 end handGuidedTearing;
+
+protected function hgtInnerEquations
+  "Creates the inner equations of a hand guided tearing block. An equation that
+   is only solvable by inverting a non-linear function (e.g. m = k*sqrt(dp)
+   solved as dp = (m/k)^2) can lose a branch of the original equation. For such
+   equations a constraint checks the original equation at runtime, the code
+   generation makes it an assert, so the non-linear solver rejects the point
+   instead of converging to a spurious root."
+  input list<Integer> order "local equation indices";
+  input list<Integer> eindex "global equation indices";
+  input list<Integer> vindex "global variable indices";
+  input array<Integer> ass2;
+  input array<list<Integer>> mapEqnIncRow;
+  input BackendDAE.EqSystem subsyst;
+  input BackendDAE.Shared shared;
+  output BackendDAE.InnerEquations innerEquations = {};
+protected
+  BackendDAE.AdjacencyMatrixEnhanced me_strict;
+  list<Integer> rows, vars;
+  Integer row, v, geqn;
+  list<Integer> gvars;
+  DAE.Exp lhs, rhs, diff, tol;
+  BackendDAE.InnerEquation ie;
+algorithm
+  // Solvability without inverting non-linear functions.
+  (me_strict, _, _, _) := BackendDAEUtil.getAdjacencyMatrixEnhancedScalar(subsyst, shared, false);
+
+  for e in order loop
+    rows := mapEqnIncRow[e];
+    vars := list(ass2[r] for r in rows);
+    geqn := listGet(eindex, e);
+    gvars := selectFromList_rev(vindex, vars);
+    ie := BackendDAE.INNEREQUATION(eqn = geqn, vars = gvars);
+
+    if listLength(rows) == 1 then
+      row := listHead(rows);
+      v := listHead(vars);
+
+      ie := match BackendEquation.get(BackendEquation.getEqnsFromEqSystem(subsyst), e)
+        case BackendDAE.EQUATION(exp = lhs, scalar = rhs)
+          guard not List.any(me_strict[row], function isSolvableEntryFor(var = v))
+          algorithm
+            // abs(lhs - rhs) <= 1e-8 * (abs(lhs) + abs(rhs) + 1)
+            diff := Expression.makePureBuiltinCall("abs", {Expression.expSub(lhs, rhs)}, DAE.T_REAL_DEFAULT);
+            tol := Expression.expMul(DAE.RCONST(1e-8), Expression.expAdd(Expression.expAdd(
+                     Expression.makePureBuiltinCall("abs", {lhs}, DAE.T_REAL_DEFAULT),
+                     Expression.makePureBuiltinCall("abs", {rhs}, DAE.T_REAL_DEFAULT)), DAE.RCONST(1.0)));
+          then
+            BackendDAE.INNEREQUATIONCONSTRAINTS(eqn = geqn, vars = gvars,
+              cons = {DAE.CONSTRAINT_DT(DAE.RELATION(diff, DAE.LESSEQ(DAE.T_REAL_DEFAULT), tol, -1, NONE()), true)});
+        else ie;
+      end match;
+    end if;
+
+    innerEquations := ie :: innerEquations;
+  end for;
+
+  innerEquations := listReverse(innerEquations);
+end hgtInnerEquations;
+
+protected function isSolvableEntryFor
+  input BackendDAE.AdjacencyMatrixElementEnhancedEntry entry;
+  input Integer var;
+  output Boolean b;
+protected
+  Integer v;
+  BackendDAE.Solvability s;
+algorithm
+  (v, s, _) := entry;
+  b := v == var and solvable(s);
+end isSolvableEntryFor;
 
 protected function selectAdditionalTearingVar
   "Selects an additional iteration variable for hand guided tearing: the

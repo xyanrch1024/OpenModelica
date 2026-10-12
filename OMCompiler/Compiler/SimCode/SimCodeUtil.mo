@@ -3820,7 +3820,7 @@ algorithm
          reqns := BackendEquation.getList(residualEqns, eqns);
          reqns := BackendEquation.replaceDerOpInEquationList(reqns);
          // generate other equations
-         (simequations, uniqueEqIndex, tempvars2, nInnerVars, _) := createTornSystemInnerEqns(innerEquations, skipDiscInAlgorithm, genDiscrete, isyst, ishared, uniqueEqIndex+1, tempvars, {});
+         (simequations, uniqueEqIndex, tempvars2, nInnerVars, _) := createTornSystemInnerEqns(innerEquations, skipDiscInAlgorithm, genDiscrete, isyst, ishared, uniqueEqIndex+1, tempvars, {}, dynamicTearingSet = true);
          (resEqs, (uniqueEqIndex, _), tempvars2) := createNonlinearResidualEquations(reqns, (uniqueEqIndex, 0), tempvars2, ishared.functionTree);
          resEqs := fixNonlinearResidualIndices(resEqs);
          eqs := listAppend(simequations, resEqs);
@@ -3874,7 +3874,7 @@ algorithm
          // generate residual replacements
          tcrs := List.map(tvars, BackendVariable.varCref);
          // generate other equations
-         (simequations, uniqueEqIndex, tempvars2, nInnerVars, homotopySupport) := createTornSystemInnerEqns(innerEquations, skipDiscInAlgorithm, genDiscrete, isyst, ishared, uniqueEqIndex+1, tempvars, {});
+         (simequations, uniqueEqIndex, tempvars2, nInnerVars, homotopySupport) := createTornSystemInnerEqns(innerEquations, skipDiscInAlgorithm, genDiscrete, isyst, ishared, uniqueEqIndex+1, tempvars, {}, dynamicTearingSet = true);
          (resEqs, (uniqueEqIndex, _), tempvars2) := createNonlinearResidualEquations(reqns, (uniqueEqIndex, 0), tempvars2, ishared.functionTree);
          resEqs := fixNonlinearResidualIndices(resEqs);
          eqs := listAppend(simequations, resEqs);
@@ -4019,12 +4019,14 @@ protected function createTornSystemInnerEqns
   input Integer iuniqueEqIndex;
   input list<SimCodeVar.SimVar> itempvars;
   input list<SimCode.SimEqSystem> isimequations;
+  input Boolean dynamicTearingSet = false "constraints are checked by the dynamic tearing, otherwise they become asserts";
   output list<SimCode.SimEqSystem> equations_;
   output Integer ouniqueEqIndex = iuniqueEqIndex;
   output list<SimCodeVar.SimVar> otempvars = itempvars;
   output Integer nVars = 0;
   output Boolean homotopySupport = false;
 protected
+  list<DAE.Statement> asserts;
   BackendDAE.EquationArray eqns;
   Integer eqnindx;
   list<Integer> vars;
@@ -4052,12 +4054,42 @@ algorithm
     end if;
     // generate comp
     comp := createTornSystemInnerEqns1(eqn, eqnindx, vars);
-    (simequations, _, ouniqueEqIndex, otempvars) := createEquationsWork(genDiscrete, false, genDiscrete, skipDiscInAlgorithm, isyst, ishared, comp, ouniqueEqIndex, otempvars, cons);
+
+    if dynamicTearingSet or listEmpty(cons) then
+      (simequations, _, ouniqueEqIndex, otempvars) := createEquationsWork(genDiscrete, false, genDiscrete, skipDiscInAlgorithm, isyst, ishared, comp, ouniqueEqIndex, otempvars, cons);
+    else
+      // Constraints of the main tearing set (hand guided tearing): check them
+      // after the equation is solved.
+      (simequations, _, ouniqueEqIndex, otempvars) := createEquationsWork(genDiscrete, false, genDiscrete, skipDiscInAlgorithm, isyst, ishared, comp, ouniqueEqIndex, otempvars, {});
+      asserts := list(constraintAssert(c, eqn, vars, isyst) for c in cons);
+      DoubleEnded.push_list_back(equations, simequations);
+      simequations := {SimCode.SES_ALGORITHM(ouniqueEqIndex, asserts, BackendDAE.EQ_ATTR_DEFAULT_UNKNOWN)};
+      ouniqueEqIndex := ouniqueEqIndex + 1;
+    end if;
+
     DoubleEnded.push_list_back(equations, simequations);
   end for;
 
   equations_ := DoubleEnded.toListAndClear(equations);
 end createTornSystemInnerEqns;
+
+protected function constraintAssert
+  "Creates the assert for a constraint of an inner equation of a torn system."
+  input DAE.Constraint constraint;
+  input BackendDAE.Equation eqn;
+  input list<Integer> vars;
+  input BackendDAE.EqSystem syst;
+  output DAE.Statement stmt;
+protected
+  DAE.Exp cond;
+  String msg;
+algorithm
+  DAE.CONSTRAINT_DT(constraint = cond) := constraint;
+  msg := "The equation " + BackendDump.equationString(eqn) + " is not satisfied after solving it for " +
+         stringDelimitList(list(ComponentReferenceBasics.printComponentRefStr(BackendVariable.varCref(BackendVariable.getVarAt(BackendVariable.daeVars(syst), v))) for v in vars), ", ") +
+         " (hand guided tearing). The iteration variables are probably outside of the range of the inverted function.";
+  stmt := DAE.STMT_ASSERT(cond, DAE.SCONST(msg), DAE.ASSERTIONLEVEL_ERROR, BackendEquation.equationSource(eqn));
+end constraintAssert;
 
 protected function createTornSystemInnerEqns1
   input BackendDAE.Equation eqn;

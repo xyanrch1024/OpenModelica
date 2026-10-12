@@ -5,6 +5,7 @@
 // The equations of a hand guided tearing block are solved for whatever is
 // analytically possible, also with the default --tearingStrictness=strict:
 // only the user's iteration variable m is needed for the pipe chain.
+// Equations solved by inverting a non-linear function are checked.
 //
 
 loadFile("HGT.mo"); getErrorString();
@@ -12,6 +13,12 @@ setCommandLineOptions("--handGuidedTearing -d=hgtDump,tearingdump"); getErrorStr
 echo(false); r := simulate(HGT.Chain, stopTime = 0); echo(true);
 r.messages; getErrorString();
 val(m, 0); val(pipe[5].pb, 0);
+
+// Solving m = k*sqrt(pa - pb) for pa loses the sign of m. The original
+// equation is checked, so a negative start value still gives m > 0.
+setCommandLineOptions("-d=-hgtDump,-tearingdump"); getErrorString();
+echo(false); r2 := simulate(HGT.ChainNegativeStart, stopTime = 0); echo(true);
+val(m, 0);
 
 // Result:
 // true
@@ -79,4 +86,8 @@ val(m, 0); val(pipe[5].pb, 0);
 // ""
 // 4.330924558472772
 // 47.37645387084891
+// true
+// ""
+// true
+// 4.330924558472772
 // endResult

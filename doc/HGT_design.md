@@ -435,7 +435,8 @@ B1 按 8.1–8.9 实现。与设计不同或需要说明的地方：
 - **`--hgtMergeBLTBlocks`**：只能合并同一方程系统内的块。分属不同独立系统的块不合并（B1 限制）。
 - **level ≥ 2**：警告一次，全部按 level 1 撕裂。官方 NonConvex 例子能求解，但 Newton 迭代中途会出现 nan 并重试，结果正确（x1 = 6.0854，x2 = 14.2652）。
 - **min/max**：警告并忽略（B2 处理）。
-- **测试**：`testsuite/simulation/modelica/tearing/HGT.mo` 与 `HGTPair1`、`HGTPair2`、`HGTSystem1`、`HGTLevel1`、`HGTError1` 五个脚本，覆盖跨 SCC 配对、残差 nominal、1×1 块、别名方程、系统级配对、未配对绑定、level 2、含状态警告、两种报错。tearing 目录下不依赖 MSL 的已有测试全部通过（失败的 34 个都需要 Modelica 标准库，本环境没有）。
+- **块内可解性**：HGT 块内的方程按 `casual` 规则判断可解性（`ExpressionSolve` 能解析解出就算可解），不跟随全局 `--tearingStrictness`。迭代变量是用户选的，奇异风险由用户承担。否则在默认的 `strict` 下，例如 `m = k*sqrt(pa - pb)` 不会对 pa 求解，用户的选择会被自动补充的迭代变量覆盖（测试 `HGTSolve1`：10 根管道串联，只需迭代流量 m）。
+- **测试**：`testsuite/simulation/modelica/tearing/HGT.mo` 与 `HGTPair1`、`HGTPair2`、`HGTSystem1`、`HGTLevel1`、`HGTError1`、`HGTSolve1` 六个脚本，覆盖跨 SCC 配对、残差 nominal、1×1 块、别名方程、系统级配对、未配对绑定、level 2、含状态警告、两种报错。tearing 目录下不依赖 MSL 的已有测试全部通过（失败的 34 个都需要 Modelica 标准库，本环境没有）。
 
 ## 9. 诊断、文档、测试（汇总）
 

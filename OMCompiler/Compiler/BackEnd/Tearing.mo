@@ -5746,7 +5746,11 @@ algorithm
   (subsyst, m, mt, _, _) := BackendDAEUtil.getAdjacencyMatrixScalar(subsyst, BackendDAE.NORMAL(), NONE(), BackendDAEUtil.isInitializationDAE(ishared));
   m := Array.map(m, deleteNegativeEntries);
   mt := Array.map(mt, deleteNegativeEntries);
-  (me, meT, map_eqn_row, map_row_eqn) := BackendDAEUtil.getAdjacencyMatrixEnhancedScalar(subsyst, ishared, false);
+  // The user chose the iteration variables, so the other equations are solved
+  // for whatever is analytically possible (like --tearingStrictness=casual),
+  // independent of the global tearing strictness. Otherwise e.g. m = k*sqrt(pa - pb)
+  // is not solved for pa and the user's choice would be overridden.
+  (me, meT, map_eqn_row, map_row_eqn) := BackendDAEUtil.getAdjacencyMatrixEnhancedScalar(subsyst, ishared, true);
 
   user_rows := List.flatten(list(map_eqn_row[i] for i in userResiduals));
   discrete_vars := findDiscrete(var_lst);

@@ -99,4 +99,26 @@ package HGT "Hand guided tearing (OCT compatible) test models, steady state"
     a * b = 0.2;
     c = b * 2;
   end Count;
+
+  model Pipe "turbulent flow, the hand guided tearing solves it for the pressures"
+    parameter Real k = 1;
+    Real pa, pb, m;
+  equation
+    m = k * sqrt(pa - pb);
+  end Pipe;
+
+  model Chain "iterate on the flow of 10 pipes in series, independent of --tearingStrictness"
+    parameter Real p_in = 100, p_out = 1;
+    Pipe pipe[10](k = {1, 2, 1.5, 3, 1, 2.5, 1, 2, 4, 1});
+    Real m(start = 1);
+  equation
+    pipe[1].pa = p_in;
+    for i in 1:9 loop
+      pipe[i].pb = pipe[i+1].pa;
+    end for;
+    for i in 1:10 loop
+      pipe[i].m = m;
+    end for;
+    pipe[10].pb = p_out annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = m)));
+  end Chain;
 end HGT;

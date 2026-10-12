@@ -1,0 +1,82 @@
+// name:      HGTSolve1
+// keywords:  tearing, hand guided tearing
+// status:    correct
+//
+// The equations of a hand guided tearing block are solved for whatever is
+// analytically possible, also with the default --tearingStrictness=strict:
+// only the user's iteration variable m is needed for the pipe chain.
+//
+
+loadFile("HGT.mo"); getErrorString();
+setCommandLineOptions("--handGuidedTearing -d=hgtDump,tearingdump"); getErrorString();
+echo(false); r := simulate(HGT.Chain, stopTime = 0); echo(true);
+r.messages; getErrorString();
+val(m, 0); val(pipe[5].pb, 0);
+
+// Result:
+// true
+// ""
+// true
+// ""
+// Hand guided tearing:
+//   pair: residual equation $hgt1 (level 1), iteration variable m (level 1)
+// Hand guided tearing matching (initialization system):
+//   block of 11 equations: residual equations {$hgt1}, iteration variables {m}
+//
+//
+//
+//
+// ================================================================================
+// Calling Tearing for initialization!
+// ================================================================================
+// Handle strong component with index: 1
+// To disable tearing of this component use '--noTearingForComponent=1'.
+//
+// Tearing type: hand guided
+// User iteration variables (local): 1
+// User residual equations (local): 11
+// Iteration variables (local): 1
+// Residual equations (local): 11
+// Automatically added: 0
+//
+//
+//
+//
+//
+// ================================================================================
+// Calling Tearing for jacobian!
+// ================================================================================
+// Hand guided tearing matching (simulation system):
+//   block of 11 equations: residual equations {$hgt1}, iteration variables {m}
+//
+//
+//
+//
+// ================================================================================
+// Calling Tearing for simulation!
+// ================================================================================
+// Handle strong component with index: 2
+// To disable tearing of this component use '--noTearingForComponent=2'.
+//
+// Tearing type: hand guided
+// User iteration variables (local): 11
+// User residual equations (local): 1
+// Iteration variables (local): 11
+// Residual equations (local): 1
+// Automatically added: 0
+//
+//
+//
+//
+//
+// ================================================================================
+// Calling Tearing for jacobian!
+// ================================================================================
+// true
+// "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// ""
+// 4.330924558472772
+// 47.37645387084891
+// endResult

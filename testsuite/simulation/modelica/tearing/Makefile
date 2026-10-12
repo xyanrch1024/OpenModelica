@@ -5,6 +5,7 @@ HGTError1.mos \
 HGTLevel1.mos \
 HGTPair1.mos \
 HGTPair2.mos \
+HGTSolve1.mos \
 HGTSystem1.mos \
 Tearing1-celMC3.mos \
 Tearing2-celMC3.mos \

@@ -20,6 +20,11 @@ setCommandLineOptions("-d=-hgtDump,-tearingdump"); getErrorString();
 echo(false); r2 := simulate(HGT.ChainNegativeStart, stopTime = 0); echo(true);
 val(m, 0);
 
+// The check does not depend on the global tearing strictness.
+setCommandLineOptions("--tearingStrictness=casual"); getErrorString();
+echo(false); r3 := simulate(HGT.ChainNegativeStart, stopTime = 0); echo(true);
+val(m, 0);
+
 // Result:
 // true
 // ""
@@ -86,6 +91,10 @@ val(m, 0);
 // ""
 // 4.330924558472772
 // 47.37645387084891
+// true
+// ""
+// true
+// 4.330924558472772
 // true
 // ""
 // true

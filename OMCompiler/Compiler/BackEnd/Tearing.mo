@@ -66,6 +66,7 @@ import ExpressionBasics;
 import ExpressionSimplify;
 import ExpressionSolve;
 import Flags;
+import FlagsUtil;
 import GCExt;
 import Global;
 import HandGuidedTearing;
@@ -5845,14 +5846,24 @@ protected function hgtInnerEquations
   output BackendDAE.InnerEquations innerEquations = {};
 protected
   BackendDAE.AdjacencyMatrixEnhanced me_strict;
+  String strictness;
   list<Integer> rows, vars;
   Integer row, v, geqn;
   list<Integer> gvars;
   DAE.Exp lhs, rhs, diff, tol;
   BackendDAE.InnerEquation ie;
 algorithm
-  // Solvability without inverting non-linear functions.
-  (me_strict, _, _, _) := BackendDAEUtil.getAdjacencyMatrixEnhancedScalar(subsyst, shared, false);
+  // Solvability without inverting non-linear functions. tryToSolveOrDerive also
+  // solves if the global strictness is casual, so use strict here explicitly.
+  strictness := Flags.getConfigString(Flags.TEARING_STRICTNESS);
+  FlagsUtil.setConfigString(Flags.TEARING_STRICTNESS, "strict");
+  try
+    (me_strict, _, _, _) := BackendDAEUtil.getAdjacencyMatrixEnhancedScalar(subsyst, shared, false);
+  else
+    FlagsUtil.setConfigString(Flags.TEARING_STRICTNESS, strictness);
+    fail();
+  end try;
+  FlagsUtil.setConfigString(Flags.TEARING_STRICTNESS, strictness);
 
   for e in order loop
     rows := mapEqnIncRow[e];

@@ -412,19 +412,16 @@ flowchart TD
 
 ### 8.10 第二期（B2）：嵌套与运行时
 
-- **嵌套块**：`BackendDAE.InnerEquation` 新增 `INNERCOMPONENT(StrongComponent comp)`。约 35 处匹配点要补分支，分布在：
-  - `Tearing.mo`
-  - `BackendDAEUtil.mo`
-  - `BackendDAEOptimize.mo`
-  - `SimCodeUtil.mo`
-  - `Uncertainties.mo`
-  - `SymbolicJacobian.mo`
+已确认的决定：外层雅可比先用数值的；min/max 只对 HGT 系统生效；内层剩下的普通环沿用 B1，在当前层自动补迭代变量；`hold` 不在 B2。
 
-  `SimCodeUtil.createTornSystemInnerEqns`（第 4013 行）遇到它时，递归生成嵌套的 `SES_NONLINEAR`；`CodegenC.tpl:3150` 已有生成嵌套 NLS 残差函数的路径。
-- **外层雅可比**：外层系统要对内层的隐式解求导。先让外层用数值雅可比，再考虑解析方式。
-- **R9 残差个数检查**和 `--hgtAllowMultipleResiduals`。
-- **min/max 与自适应属性**：SimCode 表 + 模板 + 运行时回调（见 8.7）。
-- **`hold` 的运行时**：可选，待定。
+| 步骤 | 内容 |
+| --- | --- |
+| B2.0 | 判断"strict 下是否可解"时临时把 `--tearingStrictness` 设为 `strict`（`tryToSolveOrDerive` 会读全局选项），全局 `casual` 时反解校验不再漏掉 |
+| B2.1 | R9：`--hgtAllowMultipleResiduals=false\|level1\|true`（默认 `level1`），按块统计用户残差。min/max：SimCode 增加 HGT 属性表，模板对表中变量生成 `sysData->min/max`（不写进变量属性，避免范围断言）；非线性方程组数据加 `hgtBounds` 标志，Newton 每步把迭代值夹在 [min, max] 内（同 hybrd） |
+| B2.2 | 嵌套 level（R6）：`Tearing.handGuidedTearing` 递归。处理 level L 时固定 level L 的迭代变量和残差，剩余部分按强制匹配做 Tarjan：单方程为内部方程；含 level ≥ L+1 HGT 项的块以 level L+1 递归撕裂，作为新内部方程类型 `INNERCOMPONENT(StrongComponent)`；不含 HGT 项的环在当前层自动补迭代变量。SimCode 对 `INNERCOMPONENT` 生成嵌套的 `SES_NONLINEAR`，模板已有 `functionNonLinearResiduals(nls.eqs)` 的递归路径。运行时：外层残差函数中调用内层求解，内层失败按残差计算失败处理（外层回退），内层容差比外层严。含嵌套的外层用数值雅可比 |
+| B2.3 | 自适应属性（R7）：level ≥ 2 的 start/nominal/min/max 表达式进 SimCode 属性表，模板生成 `updateHGTAttributes<idx>`，运行时每次内层求解前调用；检查表达式只引用块求解前已算出的变量 |
+
+需要先验证的风险：SimCode 能否把嵌套的系统正确收集进 `nonLinearSystemData[]` 并编号；运行时重入（`threadData` 跳转缓冲、`lastEquationSolved`、homotopy 状态）。B2.2 先做两层的最小原型验证这两点，再补齐约 35 处 `InnerEquation` 匹配点。
 
 ### 8.11 实现状态（B1 已完成）
 

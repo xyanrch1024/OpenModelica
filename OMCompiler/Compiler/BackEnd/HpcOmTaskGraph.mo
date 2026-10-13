@@ -1200,7 +1200,7 @@ algorithm
         (eqnVars, paramVars);
     case BackendDAE.TORNSYSTEM(BackendDAE.TEARINGSET(residualequations=resEqns,innerEquations = innerEquations))
       algorithm
-        (eqns,_,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+        (eqns,_,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
         (eqnVars, paramVars) := getVarsByEqns(listAppend(resEqns,eqns), iAdjacencyMatrix, iOrderedVars, iKnownVars, iOrderedEquations, iAnalyzeParameters);
       then
         (eqnVars, paramVars);
@@ -1366,7 +1366,7 @@ algorithm
           iSccIdx+1;
     case(BackendDAE.TORNSYSTEM(BackendDAE.TEARINGSET(tearingvars = compVarIdc,residualequations = residuals, innerEquations = innerEquations)), (iVarOffset,iEqOffset))
       algorithm
-      (othereqs,othervarsLst,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+      (othereqs,othervarsLst,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
       othervars := List.flatten(othervarsLst);
       compVarIdc := listAppend(othervars,compVarIdc);
       eqns := listAppend(othereqs,residuals);

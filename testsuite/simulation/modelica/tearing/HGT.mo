@@ -60,7 +60,7 @@ package HGT "Hand guided tearing (OCT compatible) test models, steady state"
     splitter.x2 = mixer.x2;
   end Unpaired;
 
-  model NonConvex "OCT User's Guide example, level 2 is torn as level 1"
+  model NonConvex "OCT User's Guide example: level 2 solves x2 for given x1, level 1 solves x1"
     parameter Real f = 10;
     Real x1(min = 0, max = 20, start = 15);
     Real x2(min = 0, max = 20, start = 15);
@@ -139,4 +139,13 @@ package HGT "Hand guided tearing (OCT compatible) test models, steady state"
     x + y = 3 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = x)));
     x * y = 2 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = y)));
   end Multi;
+  model ThreeLevels "y3 is solved for given y1 and y2, y2 for given y1, y1 outermost"
+    Real y1(start = 1), y2(start = 1), y3(start = 1), a, b;
+  equation
+    a = y1 + y2 + y3;
+    b = y2 * y3;
+    y3 ^ 3 + y3 = b + 1 + y1 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = y3, level = 3)));
+    y2 + exp(y2) = 2 + y3 - y1 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = y2, level = 2)));
+    a = 4 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = y1, level = 1)));
+  end ThreeLevels;
 end HGT;

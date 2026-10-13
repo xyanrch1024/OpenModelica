@@ -104,10 +104,6 @@ algorithm
   SOME(s) := spec;
   iter_vars := allIterationVariables(s);
 
-  if List.any(iter_vars, isNested) or List.any(s.residuals, isNestedResidual) then
-    Error.addMessage(Error.HGT_LEVEL_NOT_SUPPORTED, {});
-  end if;
-
   var_map := UnorderedMap.new<DAE.HGTIterationVariable>(stringHashDjb2, stringEq);
   for v in iter_vars loop
     UnorderedMap.add(crefString(v.name), v, var_map);
@@ -241,19 +237,22 @@ end hgtMatching;
 function componentItems
   "Returns the hand guided tearing iteration variables and residual equations of
    a strong component, as indices local to the component (positions in its
-   variable and equation lists)."
+   variable and equation lists), and their levels."
   input BackendDAE.StrongComponent comp;
   input BackendDAE.EqSystem syst;
   input BackendDAE.Shared shared;
   output Boolean isHGT = false;
   output list<Integer> localVars = {};
   output list<Integer> localEqns = {};
+  output list<Integer> varLevels = {};
+  output list<Integer> eqnLevels = {};
 protected
   BackendDAE.HGTSpec spec;
   list<Integer> eqns, vars;
   Integer i;
   Option<String> name;
-  UnorderedMap<String, Boolean> res_names, var_names;
+  String str;
+  UnorderedMap<String, Integer> res_levels, var_levels;
 algorithm
   if not isActive(shared) then
     return;
@@ -270,14 +269,24 @@ algorithm
   end if;
 
   SOME(spec) := shared.handGuidedTearing;
-  (res_names, var_names) := specNames(spec);
+  res_levels := UnorderedMap.new<Integer>(stringHashDjb2, stringEq);
+  var_levels := UnorderedMap.new<Integer>(stringHashDjb2, stringEq);
+
+  for r in spec.residuals loop
+    UnorderedMap.add(r.name, r.level, res_levels);
+  end for;
+
+  for v in allIterationVariables(spec) loop
+    UnorderedMap.add(crefString(v.name), v.level, var_levels);
+  end for;
 
   i := 1;
   for e in eqns loop
     name := equationName(BackendEquation.get(syst.orderedEqs, e));
 
-    if isSome(name) and UnorderedMap.contains(Util.getOption(name), res_names) then
+    if isSome(name) and UnorderedMap.contains(Util.getOption(name), res_levels) then
       localEqns := i :: localEqns;
+      eqnLevels := UnorderedMap.getOrFail(Util.getOption(name), res_levels) :: eqnLevels;
     end if;
 
     i := i + 1;
@@ -285,8 +294,11 @@ algorithm
 
   i := 1;
   for v in vars loop
-    if UnorderedMap.contains(crefString(BackendVariable.varCref(BackendVariable.getVarAt(syst.orderedVars, v))), var_names) then
+    str := crefString(BackendVariable.varCref(BackendVariable.getVarAt(syst.orderedVars, v)));
+
+    if UnorderedMap.contains(str, var_levels) then
       localVars := i :: localVars;
+      varLevels := UnorderedMap.getOrFail(str, var_levels) :: varLevels;
     end if;
 
     i := i + 1;
@@ -294,8 +306,69 @@ algorithm
 
   localEqns := listReverse(localEqns);
   localVars := listReverse(localVars);
+  eqnLevels := listReverse(eqnLevels);
+  varLevels := listReverse(varLevels);
   isHGT := not (listEmpty(localEqns) and listEmpty(localVars));
 end componentItems;
+
+function componentPairs
+  "Returns the hand guided tearing pairs of a strong component as indices local
+   to the component: (variable position, equation position)."
+  input BackendDAE.StrongComponent comp;
+  input BackendDAE.EqSystem syst;
+  input BackendDAE.Shared shared;
+  output list<tuple<Integer, Integer>> pairs = {};
+protected
+  BackendDAE.HGTSpec spec;
+  list<Integer> eqns, vars;
+  UnorderedMap<String, String> pair_vars "residual name -> iteration variable";
+  UnorderedMap<String, Integer> var_pos;
+  Option<String> name;
+  Option<Integer> pos;
+  DAE.HGTIterationVariable v;
+  Integer i;
+algorithm
+  if not isActive(shared) then
+    return;
+  end if;
+
+  (eqns, vars) := match comp
+    case BackendDAE.EQUATIONSYSTEM() then (comp.eqns, comp.vars);
+    case BackendDAE.SINGLEEQUATION() then ({comp.eqn}, {comp.var});
+    else ({}, {});
+  end match;
+
+  SOME(spec) := shared.handGuidedTearing;
+  pair_vars := UnorderedMap.new<String>(stringHashDjb2, stringEq);
+  for r in spec.residuals loop
+    if isSome(r.iterationVariable) then
+      SOME(v) := r.iterationVariable;
+      UnorderedMap.add(r.name, crefString(v.name), pair_vars);
+    end if;
+  end for;
+
+  var_pos := UnorderedMap.new<Integer>(stringHashDjb2, stringEq);
+  i := 1;
+  for var in vars loop
+    UnorderedMap.add(crefString(BackendVariable.varCref(BackendVariable.getVarAt(syst.orderedVars, var))), i, var_pos);
+    i := i + 1;
+  end for;
+
+  i := 1;
+  for e in eqns loop
+    name := equationName(BackendEquation.get(syst.orderedEqs, e));
+
+    if isSome(name) and UnorderedMap.contains(Util.getOption(name), pair_vars) then
+      pos := UnorderedMap.get(UnorderedMap.getOrFail(Util.getOption(name), pair_vars), var_pos);
+
+      if isSome(pos) then
+        pairs := (Util.getOption(pos), i) :: pairs;
+      end if;
+    end if;
+
+    i := i + 1;
+  end for;
+end componentPairs;
 
 protected
 

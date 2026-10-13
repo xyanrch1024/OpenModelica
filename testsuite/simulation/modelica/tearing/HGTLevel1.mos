@@ -2,16 +2,15 @@
 // keywords:  tearing, hand guided tearing
 // status:    correct
 //
-// Nested levels are torn as level 1, and a model with states gives a warning.
+// Nested hand guided tearing (level 2) of the OCT User's Guide example, and a
+// model with states gives a warning.
 //
 
 loadFile("HGT.mo"); getErrorString();
-setCommandLineOptions("--handGuidedTearing -d=hgtDump"); getErrorString();
-// The Newton iterations of this example produce nan values on the way, only
-// check that the simulation succeeds and the solution.
-echo(false); r := simulate(HGT.NonConvex, stopTime = 0); echo(true);
-r.resultFile <> ""; getErrorString();
+setCommandLineOptions("--handGuidedTearing -d=hgtDump,tearingdump"); getErrorString();
+simulate(HGT.NonConvex, stopTime = 0); getErrorString();
 val(x1, 0.0); val(x2, 0.0);
+setCommandLineOptions("-d=-tearingdump"); getErrorString();
 simulate(HGT.WithStates); getErrorString();
 val(x, 1.0); val(z, 1.0);
 
@@ -25,15 +24,74 @@ val(x, 1.0); val(z, 1.0);
 //   pair: residual equation $hgt2 (level 2), iteration variable x2 (level 2)
 // Hand guided tearing matching (initialization system):
 //   block of 5 equations: residual equations {$hgt2, $hgt1}, iteration variables {x1, x2}
-// Hand guided tearing matching (simulation system):
-//   block of 9 equations: residual equations {$hgt1, $hgt2}, iteration variables {x2, x1}
-// true
 //
-// "Warning: Nested hand guided tearing (level > 1) is not supported yet, all levels are torn as level 1.
-// [simulation/modelica/tearing/HGTLevel1.mos:13:1-13:19:writable] Error: Variable r.resultFile not found in scope <global scope>.
+//
+//
+//
+// ================================================================================
+// Calling Tearing for initialization!
+// ================================================================================
+// Handle strong component with index: 1
+// To disable tearing of this component use '--noTearingForComponent=1'.
+//
+// Tearing type: hand guided (level 1)
+// User iteration variables (local): 3
+// User residual equations (local): 3
+//
+// Tearing type: hand guided (level 2)
+// User iteration variables (local): 2
+// User residual equations (local): 1
+// Iteration variables (local): 2
+// Residual equations (local): 1
+// Nested blocks: 0
+// Automatically added: 0
+//
+// Iteration variables (local): 3
+// Residual equations (local): 3
+// Nested blocks: 1
+// Automatically added: 0
+//
+// Hand guided tearing matching (simulation system):
+//   block of 5 equations: residual equations {$hgt1, $hgt2}, iteration variables {x2, x1}
+//
+//
+//
+//
+// ================================================================================
+// Calling Tearing for simulation!
+// ================================================================================
+// Handle strong component with index: 2
+// To disable tearing of this component use '--noTearingForComponent=2'.
+//
+// Tearing type: hand guided (level 1)
+// User iteration variables (local): 4
+// User residual equations (local): 2
+//
+// Tearing type: hand guided (level 2)
+// User iteration variables (local): 2
+// User residual equations (local): 1
+// Iteration variables (local): 2
+// Residual equations (local): 1
+// Nested blocks: 0
+// Automatically added: 0
+//
+// Iteration variables (local): 4
+// Residual equations (local): 2
+// Nested blocks: 1
+// Automatically added: 0
+//
+// record SimulationResult
+//     resultFile = "HGT.NonConvex_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.NonConvex', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
 // "
-// 6.085385783471033
-// 14.265242985712183
+// end SimulationResult;
+// ""
+// 6.0853857834710325
+// 14.265242985712181
+// true
+// ""
 // Hand guided tearing:
 //   pair: residual equation $hgt1 (level 1), iteration variable z (level 1)
 // Hand guided tearing matching (initialization system):

@@ -1475,7 +1475,7 @@ algorithm
       then result;
     case(BackendDAE.TORNSYSTEM(BackendDAE.TEARINGSET(residualequations=eqns,tearingvars=vars,innerEquations=innerEquations))::rest, result)
       algorithm
-        (eqns1,inputVarsLst,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+        (eqns1,inputVarsLst,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
         vars1 := List.flatten(inputVarsLst);
         eqns1 := listAppend(eqns, eqns1);
         solvedVars := listAppend(vars, vars1);
@@ -2710,7 +2710,7 @@ try
   end if;
 
   // get other eqns
-  (otherEqnsInts,otherVarsIntsLst,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+  (otherEqnsInts,otherVarsIntsLst,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
   otherEqnsLst := BackendEquation.getList(otherEqnsInts, inEqns);
   otherEqnsLst := BackendEquation.replaceDerOpInEquationList(otherEqnsLst);
   outOtherEqns := BackendEquation.listEquation(otherEqnsLst);
@@ -2776,6 +2776,14 @@ protected
   BackendDAE.Variables diffVars, oVars, resVars;
   BackendDAE.EquationArray resEqns, oEqns;
 algorithm
+  // A torn system with nested torn systems (hand guided tearing with levels > 1)
+  // depends on their implicit solutions: use a numerical Jacobian.
+  if BackendDAEUtil.hasInnerComponent(inTearingSet.innerEquations) then
+    outJacobian := BackendDAE.EMPTY_JACOBIAN();
+    outShared := inShared;
+    return;
+  end if;
+
   try
     // check non-linear flag
     if not isLinear and not Flags.isSet(Flags.NLS_ANALYTIC_JACOBIAN) then

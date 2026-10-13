@@ -423,6 +423,12 @@ flowchart TD
 
 需要先验证的风险：SimCode 能否把嵌套的系统正确收集进 `nonLinearSystemData[]` 并编号；运行时重入（`threadData` 跳转缓冲、`lastEquationSolved`、homotopy 状态）。B2.2 先做两层的最小原型验证这两点，再补齐约 35 处 `InnerEquation` 匹配点。
 
+### 8.12 实现状态（B2.0–B2.2 已完成）
+
+- **B2.0**：反解校验用的 strict 可解性矩阵临时把严格度设为 `strict` 计算，全局 `casual` 时也会生成校验（`HGTSolve1`）。
+- **B2.1**：R9 在 `hgtMatching` 中按块、按 level 统计用户残差（`--hgtAllowMultipleResiduals`）。常量或参数的 min/max 进入 `SimCode.hgtAttributes`，模板对其生成 `sysData->min/max` 并置 `sysData->hgtBounds = 1`；运行时对这类系统把初值（`nonlinearSystem.c`）和 Newton 每一步（`nonlinearSolverHomotopy.c` 的 `projectToBounds`）夹在界内。依赖变量的界限给出警告并忽略（B2.3）。测试中还发现并修复：`wrapFunctionCalls` 会重建含函数调用的方程并丢掉标签（现在跳过含 HGT 方程的系统）；与时间无关的 HGT 块被移出仿真系统（只在初始化中求解）不再误报为"被删除"（`HGTBounds1`）。
+- **B2.2**：`Tearing.handGuidedTearing` 按最低 level L 撕裂，更高 level 的项组成嵌套块：去掉 level L 的项后，对其余方程做强制匹配（嵌套配对强制，其余用增广路径）和 Tarjan，每个含嵌套项的强连通部分是一个嵌套块（同一 level 的不相连部分分别成块，数学上等价于合并成一个块），递归撕裂后作为 `INNERCOMPONENT` 放进外层内部方程；在贪心因果化中，嵌套块的输入都已知时整体分配。`BackendDAEUtil.flattenInnerEquations` 供只需全部方程和变量的地方使用（约 20 处）；recursiveTearing、hets 跳过含嵌套块的系统；HpcOm 与 OMSI 不支持。SimCode 对 `INNERCOMPONENT` 生成嵌套的 `SES_NONLINEAR`（已有的 #15433 路径负责编号和模板），含嵌套块的系统用数值雅可比。OCT NonConvex 例子现在真正嵌套求解，不再出现 nan（`HGTLevel1`）；三层嵌套见 `HGTLevel2`。限制：嵌套 level 只支持标量方程。
+
 ### 8.11 实现状态（B1 已完成）
 
 B1 按 8.1–8.9 实现。与设计不同或需要说明的地方：
@@ -490,7 +496,7 @@ B1 按 8.1–8.9 实现。与设计不同或需要说明的地方：
 | --- | --- | --- |
 | F | 前端：注解解析、名字解析、清单、DAE 元素 | 已完成（§7.7） |
 | B1 | 后端第一期：收集与保护、`hgtMatching`（强制配对、跨 SCC、未配对绑定、`--hgtMergeBLTBlocks`）、`hgtTearing`（level 1、自动补全、1×1 块）、残差 nominal、迭代变量 start/nominal | 已完成（§8.11） |
-| B2 | 后端第二期：`level` 嵌套（`INNERCOMPONENT`、嵌套 NLS）、R9 残差个数检查、min/max 与自适应属性（SimCode 表、模板、运行时） | 下一步 |
+| B2 | 后端第二期：`level` 嵌套（`INNERCOMPONENT`、嵌套 NLS）、R9 残差个数检查、min/max 与自适应属性（SimCode 表、模板、运行时） | B2.0–B2.2 已完成（§8.12），B2.3 下一步 |
 | B3 | 可选：`hold` 运行时、用户文档 `solving.rst` | 待定 |
 
 | 文件（相对 `OMCompiler/`） | 新增/修改 | 步骤 |

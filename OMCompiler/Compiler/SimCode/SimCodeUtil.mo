@@ -4047,6 +4047,15 @@ algorithm
   equations := DoubleEnded.fromList(isimequations);
 
   for eq in innerEquations loop
+    // nested torn system (hand guided tearing with levels > 1)
+    if isInnerComponent(eq) then
+      BackendDAE.INNERCOMPONENT(comp = comp) := eq;
+      (simequations, _, ouniqueEqIndex, otempvars) := createEquationsWork(genDiscrete, false, genDiscrete, skipDiscInAlgorithm, isyst, ishared, comp, ouniqueEqIndex, otempvars, {});
+      DoubleEnded.push_list_back(equations, simequations);
+      nVars := nVars + listLength(BackendDAEUtil.getStrongComponentVarsAndEquations(comp, BackendVariable.daeVars(isyst), BackendEquation.getEqnsFromEqSystem(isyst)));
+      continue;
+    end if;
+
     // get Eqn
     (eqnindx, vars, cons) := BackendDAEUtil.getEqnAndVarsFromInnerEquation(eq);
     nVars := nVars + listLength(vars);
@@ -4118,6 +4127,16 @@ algorithm
          " (hand guided tearing). The iteration variables are probably outside of the range of the inverted function.";
   stmt := DAE.STMT_ASSERT(cond, DAE.SCONST(msg), DAE.ASSERTIONLEVEL_ERROR, BackendEquation.equationSource(eqn));
 end constraintAssert;
+
+protected function isInnerComponent
+  input BackendDAE.InnerEquation eq;
+  output Boolean b;
+algorithm
+  b := match eq
+    case BackendDAE.INNERCOMPONENT() then true;
+    else false;
+  end match;
+end isInnerComponent;
 
 protected function createTornSystemInnerEqns1
   input BackendDAE.Equation eqn;

@@ -1884,7 +1884,7 @@ algorithm
         (_,(numAdd,numMul,numDiv,numTrig,numRel,numLog,numOth,numFuncs)) := Expression.traverseExpList(explst,function countOperationsExp(shared=ishared),(0,0,0,0,0,0,0,0));
         torn := BackendDAE.COUNTER(comp,numAdd,numMul,numDiv,numTrig,numRel,numLog,numOth,numFuncs);
         // the other eqs
-        (otherEqs,vLstLst,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+        (otherEqs,vLstLst,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
         vlst := List.flatten(vLstLst);
         eqnlst := BackendEquation.getList(otherEqs,eqns);
         varlst := List.map1(vlst,BackendVariable.getVarAtIndexFirst, vars);
@@ -1904,7 +1904,7 @@ algorithm
         (_,(numAdd,numMul,numDiv,numTrig,numRel,numLog,numOth,numFuncs)) := Expression.traverseExpList(explst,function countOperationsExp(shared=ishared),(0,0,0,0,0,0,0,0));
         torn := BackendDAE.COUNTER(comp,numAdd,numMul,numDiv,numTrig,numRel,numLog,numOth,numFuncs);
         // the other eqs
-        (otherEqs,_,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+        (otherEqs,_,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
         eqnlst := BackendEquation.getList(otherEqs,eqns);
         explst := List.map(eqnlst,BackendEquation.getEquationRHS);
         (_,(numAdd,numMul,numDiv,numTrig,numRel,numLog,numOth,numFuncs)) := Expression.traverseExpList(explst,function countOperationsExp(shared=ishared),(0,0,0,0,0,0,0,0));
@@ -4540,7 +4540,7 @@ algorithm
     BackendDAE.EQSYSTEM(orderedVars=vars,orderedEqs=eqns,matching=matching as BackendDAE.MATCHING(comps=comps),stateSets=stateSets,partitionKind=partitionKind) := syst;
 
     for comp in comps loop
-      if BackendEquation.isTornSystem(comp) then
+      if BackendEquation.isTornSystem(comp) and not BackendDAEUtil.isNestedTornSystem(comp) then
 
         BackendDAE.TORNSYSTEM(strictTearingSet = BackendDAE.TEARINGSET(tearingvars=tvars, residualequations=teqns, innerEquations = innerEquations)) := comp;
         for innerEquation in innerEquations loop
@@ -4948,7 +4948,7 @@ algorithm
         print("------ Tearing ------\n");
     end if;
 
-    for innerEquation in innerEquations loop
+    for innerEquation in BackendDAEUtil.flattenInnerEquations(innerEquations) loop
       (k,vv) := BackendDAEUtil.getEqnAndVarsFromInnerEquation(innerEquation);
       eqns := k :: eqns;
       vars := listAppend(vv,vars);
@@ -6169,7 +6169,7 @@ algorithm
             (_, hasHomotopy) := BackendEquation.traverseExpsOfEquationList(eqnLst, BackendDAEUtil.containsHomotopyCall, false);
 
             if not hasHomotopy then
-              (innerEqnIndexes,_,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+              (innerEqnIndexes,_,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
               eqnLst := BackendEquation.getList(innerEqnIndexes, system.orderedEqs);
               (_, hasHomotopy) := BackendEquation.traverseExpsOfEquationList(eqnLst, BackendDAEUtil.containsHomotopyCall, false);
             end if;
@@ -6356,7 +6356,7 @@ algorithm
           (_, hasHomotopy) := BackendEquation.traverseExpsOfEquationList(eqnLst, BackendDAEUtil.containsHomotopyCall, false);
 
           if not hasHomotopy then
-            (innerEqnIndexes,_,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+            (innerEqnIndexes,_,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
             eqnLst := BackendEquation.getList(innerEqnIndexes, system.orderedEqs);
             (_, hasHomotopy) := BackendEquation.traverseExpsOfEquationList(eqnLst, BackendDAEUtil.containsHomotopyCall, false);
           end if;

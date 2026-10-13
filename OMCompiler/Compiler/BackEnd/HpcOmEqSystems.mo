@@ -443,7 +443,7 @@ algorithm
 
    // get the other equations and the other variables
    // otherEqnsInts := List.map(otherEqsVarTpl, Util.tuple21);
-   (otherEqnsInts,otherVarsIntsLst,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+   (otherEqnsInts,otherVarsIntsLst,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
    otherEqnsLst := BackendEquation.getList(otherEqnsInts, eqns);
    oeqns := BackendEquation.listEquation(otherEqnsLst);
    otherEqnsLstReplaced := BackendEquation.replaceDerOpInEquationList(otherEqnsLst);   // for computing the new equations
@@ -2264,7 +2264,7 @@ algorithm
     then (compIdxIn,taskLstIn);
      case (comp as BackendDAE.TORNSYSTEM(BackendDAE.TEARINGSET(residualequations=resEqs,innerEquations=innerEquations)))::rest
     algorithm
-      (eqIdcs,varIdcsLsts,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+      (eqIdcs,varIdcsLsts,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
       varIdcs := List.flatten(varIdcsLsts);
       numEqs := listLength(eqIdcs);
       numVars := listLength(varIdcs);

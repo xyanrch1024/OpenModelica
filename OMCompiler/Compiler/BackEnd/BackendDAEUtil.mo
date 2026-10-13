@@ -5775,6 +5775,70 @@ algorithm
   end match;
 end getEqnAndVarsFromInnerEquation;
 
+public function flattenInnerEquations
+  "Replaces nested components (INNERCOMPONENT) by their equations: the inner
+   equations of the nested torn system and its residual equations, which are
+   given its iteration variables. For functions that only need all equations
+   and variables of a torn system."
+  input BackendDAE.InnerEquations innerEquations;
+  output BackendDAE.InnerEquations outInnerEquations = {};
+algorithm
+  for ie in innerEquations loop
+    outInnerEquations := match ie
+      local
+        list<Integer> tvars, reqns;
+        BackendDAE.InnerEquations innerEqs;
+      case BackendDAE.INNERCOMPONENT(comp = BackendDAE.TORNSYSTEM(strictTearingSet =
+          BackendDAE.TEARINGSET(tearingvars = tvars, residualequations = reqns, innerEquations = innerEqs)))
+        algorithm
+          outInnerEquations := listAppend(listReverse(flattenInnerEquations(innerEqs)), outInnerEquations);
+          // pair the residual equations with the iteration variables, the last
+          // residual equation gets the remaining ones
+          for e in reqns loop
+            if listEmpty(listRest(reqns)) or listEmpty(tvars) then
+              outInnerEquations := BackendDAE.INNEREQUATION(e, tvars) :: outInnerEquations;
+              tvars := {};
+            else
+              outInnerEquations := BackendDAE.INNEREQUATION(e, {listHead(tvars)}) :: outInnerEquations;
+              tvars := listRest(tvars);
+            end if;
+            reqns := listRest(reqns);
+          end for;
+        then outInnerEquations;
+      else ie :: outInnerEquations;
+    end match;
+  end for;
+
+  outInnerEquations := listReverse(outInnerEquations);
+end flattenInnerEquations;
+
+public function hasInnerComponent
+  "Returns true if the inner equations contain a nested component."
+  input BackendDAE.InnerEquations innerEquations;
+  output Boolean b = false;
+algorithm
+  for ie in innerEquations loop
+    b := match ie
+      case BackendDAE.INNERCOMPONENT() then true;
+      else false;
+    end match;
+    if b then
+      return;
+    end if;
+  end for;
+end hasInnerComponent;
+
+public function isNestedTornSystem
+  "Returns true for a torn system with nested components (hand guided tearing)."
+  input BackendDAE.StrongComponent comp;
+  output Boolean b;
+algorithm
+  b := match comp
+    case BackendDAE.TORNSYSTEM(strictTearingSet = BackendDAE.TEARINGSET()) then hasInnerComponent(comp.strictTearingSet.innerEquations);
+    else false;
+  end match;
+end isNestedTornSystem;
+
 public function getEqnAndVarsFromInnerEquationLst
   input BackendDAE.InnerEquations innerEquations;
   output list<Integer> eqns = {};
@@ -5785,7 +5849,7 @@ protected
   list<Integer> vars;
   BackendDAE.Constraints constraints;
 algorithm
-  for innerEq in innerEquations loop
+  for innerEq in flattenInnerEquations(innerEquations) loop
     (eqn,vars,constraints) := getEqnAndVarsFromInnerEquation(innerEq);
     eqns := eqn::eqns;
     if isPresent(allVars) then allVars := vars::allVars; end if;
@@ -9928,7 +9992,7 @@ algorithm
     then (vars,vidxs,{eq},{eidx});
   case BackendDAE.TORNSYSTEM(strictTearingSet = BackendDAE.TEARINGSET(residualequations=eidxs,tearingvars=vidxs, innerEquations=innerEquations))
     algorithm
-      (otherEqns,otherVarsLst,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+      (otherEqns,otherVarsLst,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
       otherVars := List.flatten(otherVarsLst);
       eidxs := listAppend(otherEqns,eidxs);
       vidxs := listAppend(otherVars,vidxs);

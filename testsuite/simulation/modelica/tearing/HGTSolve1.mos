@@ -44,11 +44,12 @@ val(m, 0);
 // Handle strong component with index: 1
 // To disable tearing of this component use '--noTearingForComponent=1'.
 //
-// Tearing type: hand guided
+// Tearing type: hand guided (level 1)
 // User iteration variables (local): 1
 // User residual equations (local): 11
 // Iteration variables (local): 1
 // Residual equations (local): 11
+// Nested blocks: 0
 // Automatically added: 0
 //
 //
@@ -70,11 +71,12 @@ val(m, 0);
 // Handle strong component with index: 2
 // To disable tearing of this component use '--noTearingForComponent=2'.
 //
-// Tearing type: hand guided
+// Tearing type: hand guided (level 1)
 // User iteration variables (local): 11
 // User residual equations (local): 1
 // Iteration variables (local): 11
 // Residual equations (local): 1
+// Nested blocks: 0
 // Automatically added: 0
 //
 //

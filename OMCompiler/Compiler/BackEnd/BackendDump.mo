@@ -1156,7 +1156,7 @@ algorithm
       algorithm
         s := if b then "linear" else "nonlinear";
         print("torn " + s + " Equationsystem:\n");
-        (elst1,vlst1Lst,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+        (elst1,vlst1Lst,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
         vlst1 := List.flatten(vlst1Lst);
         varlst := List.map1r(vlst1, BackendVariable.getVarAt, vars);
         print("\ninternal vars (" + intString(listLength(varlst)) + ")\n");
@@ -1179,7 +1179,7 @@ algorithm
       algorithm
         s := if b then "linear" else "nonlinear";
         print("Strict torn " + s + " Equationsystem:\n");
-        (elst1,vlst1Lst,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+        (elst1,vlst1Lst,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
         vlst1 := List.flatten(vlst1Lst);
         varlst := List.map1r(vlst1, BackendVariable.getVarAt, vars);
         printVarList(varlst);
@@ -1194,7 +1194,7 @@ algorithm
         print("\n");
         dumpEqnsSolved2(rest,eqns,vars);
         print("Casual torn " + s + " Equationsystem:\n");
-        (elst1,vlst1Lst,_) := List.map_3(innerEquations2, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+        (elst1,vlst1Lst,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations2), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
         vlst1 := List.flatten(vlst1Lst);
         varlst := List.map1r(vlst1, BackendVariable.getVarAt, vars);
         printVarList(varlst);
@@ -4106,7 +4106,7 @@ algorithm
   case BackendDAE.TORNSYSTEM(BackendDAE.TEARINGSET(residualequations=rEqIdcs,tearingvars=tVarIdcs,innerEquations=innerEquations))
     algorithm
       //gather equations ans variables
-      (eqIdcs,varIdcsLst,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+      (eqIdcs,varIdcsLst,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
       varIdcs := List.flatten(varIdcsLst);
       eqIdcs := listAppend(eqIdcs, rEqIdcs) annotation(__OpenModelica_DisableListAppendWarning=true);
       varIdcs := listAppend(varIdcs, tVarIdcs) annotation(__OpenModelica_DisableListAppendWarning=true);

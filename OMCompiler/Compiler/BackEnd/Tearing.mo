@@ -308,7 +308,7 @@ protected
   constant Boolean debug = false;
   Boolean debugFlag = Flags.isSet(Flags.TEARING_DUMP) or Flags.isSet(Flags.TEARING_DUMPVERBOSE);
   Boolean is_hgt;
-  list<Integer> hgt_vars, hgt_eqns;
+  list<Integer> hgt_vars, hgt_eqns, hgt_var_levels, hgt_eqn_levels;
 algorithm
   strongComponentIndexOut := match inComp
     case BackendDAE.EQUATIONSYSTEM(jac=BackendDAE.FULL_JACOBIAN()) algorithm
@@ -324,9 +324,10 @@ algorithm
 
   // Components with hand guided tearing items are always torn as the user
   // specified, regardless of the tearing settings and whether tearing pays off.
-  (is_hgt, hgt_vars, hgt_eqns) := HandGuidedTearing.componentItems(inComp, isyst, ishared);
+  (is_hgt, hgt_vars, hgt_eqns, hgt_var_levels, hgt_eqn_levels) := HandGuidedTearing.componentItems(inComp, isyst, ishared);
   if is_hgt then
-    oComp := handGuidedTearing(inComp, isyst, ishared, hgt_vars, hgt_eqns);
+    oComp := handGuidedTearing(inComp, isyst, ishared, hgt_vars, hgt_eqns, hgt_var_levels, hgt_eqn_levels,
+      HandGuidedTearing.componentPairs(inComp, isyst, ishared));
     outRunMatching := true;
     return;
   end if;
@@ -4817,6 +4818,9 @@ algorithm
         if maxSizeOne and m > 1 then
           continue;
         end if;
+        if BackendDAEUtil.isNestedTornSystem(comp) then
+          continue;
+        end if;
         indx_res := arrayCreate(m,0);
         indx_var := arrayCreate(n,0);
         indx_eq := arrayCreate(n,0);
@@ -5701,22 +5705,29 @@ end simpleMatching;
 
 protected function handGuidedTearing
   "Tears a strong component that contains hand guided tearing items, see
-   doc/HGT_design.md section 8.6. The user's iteration variables and residual
-   equations are fixed; the other equations are causalized, and as long as that
-   gets stuck an additional iteration variable is selected (OCT: \"the
-   automatic algorithm will kick in and finalize the tearing\"). The equations
-   that remain unassigned become additional residual equations."
+   doc/HGT_design.md sections 8.6 and 8.10. The user's iteration variables and
+   residual equations of the lowest level L are fixed; the other equations are
+   causalized, and as long as that gets stuck an additional iteration variable
+   is selected (OCT: \"the automatic algorithm will kick in and finalize the
+   tearing\"). The equations that remain unassigned become additional residual
+   equations. Items of levels > L form nested blocks: each strongly connected
+   part that contains them is torn recursively and solved within this system
+   (INNERCOMPONENT), as soon as its inputs are known."
   input BackendDAE.StrongComponent inComp;
   input BackendDAE.EqSystem isyst;
   input BackendDAE.Shared ishared;
   input list<Integer> userTVars "local indices";
   input list<Integer> userResiduals "local indices";
+  input list<Integer> userTVarLevels = {} "levels of userTVars, empty if all are of the same level";
+  input list<Integer> userResidualLevels = {} "levels of userResiduals";
+  input list<tuple<Integer, Integer>> userPairs = {} "(variable, equation), local indices";
   output BackendDAE.StrongComponent ocomp;
 protected
   list<Integer> eindex, vindx, tvars, user_rows, order = {}, caus_eq, e_exp, evars, unassigned,
-                auto_rows, residuals, discrete_vars;
-  Boolean linear, mixed, finished = false, stuck;
-  Integer size, e, t;
+                auto_rows, residuals, discrete_vars, outer_tvars, outer_res, nested_tvars, nested_res,
+                candidates, rows_k, vars_k;
+  Boolean linear, mixed, finished = false, stuck, progress;
+  Integer size, e, t, level, ngroups;
   BackendDAE.EqSystem subsyst;
   BackendDAE.EquationArray eqns;
   BackendDAE.Variables vars;
@@ -5728,6 +5739,10 @@ protected
   array<list<Integer>> map_eqn_row;
   array<Integer> map_row_eqn, ass1, ass2 = arrayCreate(0, -1);
   BackendDAE.InnerEquations inner_equations;
+  list<tuple<list<Integer>, list<Integer>>> groups;
+  array<list<Integer>> group_rows, group_vars;
+  array<Boolean> group_done, is_group_var;
+  array<BackendDAE.InnerEquation> group_comps;
   Boolean debugFlag = Flags.isSet(Flags.TEARING_DUMP) or Flags.isSet(Flags.TEARING_DUMPVERBOSE);
 algorithm
   (eindex, vindx, linear, mixed) := match inComp
@@ -5753,22 +5768,66 @@ algorithm
   // is not solved for pa and the user's choice would be overridden.
   (me, meT, map_eqn_row, map_row_eqn) := BackendDAEUtil.getAdjacencyMatrixEnhancedScalar(subsyst, ishared, true);
 
-  user_rows := List.flatten(list(map_eqn_row[i] for i in userResiduals));
+  // Items of the lowest level are torn here, the others in nested blocks.
+  if listEmpty(userTVarLevels) and listEmpty(userResidualLevels) then
+    level := 1;
+    outer_tvars := userTVars;
+    outer_res := userResiduals;
+    nested_tvars := {};
+    nested_res := {};
+  else
+    level := List.fold(listAppend(userTVarLevels, userResidualLevels), intMin, listHead(listAppend(userTVarLevels, userResidualLevels)));
+    (outer_tvars, nested_tvars) := hgtSplitLevel(userTVars, userTVarLevels, level);
+    (outer_res, nested_res) := hgtSplitLevel(userResiduals, userResidualLevels, level);
+  end if;
+
+  user_rows := List.flatten(list(map_eqn_row[i] for i in outer_res));
 
   discrete_vars := findDiscrete(var_lst);
-  tvars := userTVars;
+  tvars := outer_tvars;
 
   if debugFlag then
-    print("\nTearing type: hand guided\n");
-    print("User iteration variables (local): " + stringDelimitList(List.map(userTVars, intString), ",") + "\n");
-    print("User residual equations (local): " + stringDelimitList(List.map(userResiduals, intString), ",") + "\n");
+    print("\nTearing type: hand guided (level " + intString(level) + ")\n");
+    print("User iteration variables (local): " + stringDelimitList(List.map(outer_tvars, intString), ",") + "\n");
+    print("User residual equations (local): " + stringDelimitList(List.map(outer_res, intString), ",") + "\n");
   end if;
+
+  // Nested blocks.
+  if listEmpty(nested_tvars) and listEmpty(nested_res) then
+    groups := {};
+  else
+    if arrayLength(m) <> size or listLength(eindex) <> size then
+      Error.addMessage(Error.HGT_TEARING_FAILED, {hgtResidualNames(userResiduals, eindex, isyst),
+        "nested levels are only supported for scalar equations"});
+      fail();
+    end if;
+
+    groups := hgtNestedGroups(m, size, outer_tvars, user_rows, nested_tvars, nested_res,
+      list(p for p guard listMember(Util.tuple21(p), nested_tvars) and listMember(Util.tuple22(p), nested_res) in userPairs));
+  end if;
+
+  ngroups := listLength(groups);
+  group_rows := listArray(list(Util.tuple21(g) for g in groups));
+  group_vars := listArray(list(Util.tuple22(g) for g in groups));
+  group_comps := listArray(list(hgtNestedComponent(Util.tuple21(g), Util.tuple22(g), eindex, vindx, isyst, ishared,
+    userTVars, userTVarLevels, userResiduals, userResidualLevels, userPairs) for g in groups));
+  is_group_var := arrayCreate(size, false);
+  for vs in group_vars loop
+    for v in vs loop
+      arrayUpdate(is_group_var, v, true);
+    end for;
+  end for;
 
   while not finished loop
     ass1 := arrayCreate(size, -1);
     ass2 := arrayCreate(size, -1);
     markTVarsOrResiduals(tvars, ass1);
     markTVarsOrResiduals(user_rows, ass2);
+    // the equations of nested blocks are not causalized one by one
+    for rs in group_rows loop
+      markTVarsOrResiduals(rs, ass2);
+    end for;
+    group_done := arrayCreate(ngroups, false);
 
     m1 := arrayCopy(m);
     mt1 := arrayCopy(mt);
@@ -5779,18 +5838,36 @@ algorithm
 
     // Causalize as far as possible.
     order := {};
-    caus_eq := traverseCollectiveEqnsforAssignable(ass2, m1, map_eqn_row);
-    stuck := false;
+    progress := true;
 
-    while not listEmpty(caus_eq) and not stuck loop
-      try
-        (e, e_exp, evars) := getNextSolvableEqn(caus_eq, m1, me, ass1, ass2, map_eqn_row, map_row_eqn, ass1);
-        makeAssignment(e_exp, evars, ass1, ass2, m1, mt1);
-        order := e :: order;
-        caus_eq := traverseCollectiveEqnsforAssignable(ass2, m1, map_eqn_row);
-      else
-        stuck := true;
-      end try;
+    while progress loop
+      caus_eq := traverseCollectiveEqnsforAssignable(ass2, m1, map_eqn_row);
+      stuck := false;
+
+      while not listEmpty(caus_eq) and not stuck loop
+        try
+          (e, e_exp, evars) := getNextSolvableEqn(caus_eq, m1, me, ass1, ass2, map_eqn_row, map_row_eqn, ass1);
+          makeAssignment(e_exp, evars, ass1, ass2, m1, mt1);
+          order := e :: order;
+          caus_eq := traverseCollectiveEqnsforAssignable(ass2, m1, map_eqn_row);
+        else
+          stuck := true;
+        end try;
+      end while;
+
+      // A nested block is solved as soon as all its inputs are known.
+      progress := false;
+      for k in 1:ngroups loop
+        if not group_done[k] and List.all(group_rows[k], function hgtOnlyGroupVars(m = m1, groupVars = group_vars[k])) then
+          arrayUpdate(group_done, k, true);
+          markTVarsOrResiduals(group_vars[k], ass1);
+          deleteEntriesFromAdjacencyMatrix(m1, mt1, group_vars[k]);
+          deleteRowsFromAdjacencyMatrix(mt1, group_vars[k]);
+          order := (-k) :: order;
+          progress := true;
+          break;
+        end if;
+      end for;
     end while;
 
     unassigned := list(v for v guard arrayGet(ass1, v) < 0 in 1:size);
@@ -5798,7 +5875,15 @@ algorithm
     if listEmpty(unassigned) then
       finished := true;
     else
-      t := selectAdditionalTearingVar(unassigned, discrete_vars, ass2, mt1);
+      candidates := list(v for v guard not is_group_var[v] in unassigned);
+
+      if listEmpty(candidates) then
+        Error.addMessage(Error.HGT_TEARING_FAILED, {hgtResidualNames(userResiduals, eindex, isyst),
+          "the inputs of a nested block can not be computed"});
+        fail();
+      end if;
+
+      t := selectAdditionalTearingVar(candidates, discrete_vars, ass2, mt1);
       tvars := t :: tvars;
 
       if debugFlag then
@@ -5818,17 +5903,263 @@ algorithm
   end if;
 
   residuals := List.unique(list(map_row_eqn[r] for r in listAppend(user_rows, auto_rows)));
-  inner_equations := hgtInnerEquations(listReverse(order), eindex, vindx, ass2, map_eqn_row, subsyst, ishared);
+  inner_equations := hgtInnerEquations(listReverse(order), eindex, vindx, ass2, map_eqn_row, subsyst, ishared, group_comps);
 
   ocomp := BackendDAE.TORNSYSTEM(BackendDAE.TEARINGSET(selectFromList_rev(vindx, listReverse(tvars)),
-    selectFromList_rev(eindex, residuals), inner_equations, BackendDAE.EMPTY_JACOBIAN()), NONE(), linear, mixed);
+    selectFromList_rev(eindex, residuals), inner_equations, BackendDAE.EMPTY_JACOBIAN()), NONE(), linear and ngroups == 0, mixed);
 
   if debugFlag then
     print("Iteration variables (local): " + stringDelimitList(List.map(listReverse(tvars), intString), ",") + "\n");
     print("Residual equations (local): " + stringDelimitList(List.map(residuals, intString), ",") + "\n");
+    print("Nested blocks: " + intString(ngroups) + "\n");
     print("Automatically added: " + intString(listLength(auto_rows)) + "\n\n");
   end if;
 end handGuidedTearing;
+
+protected function hgtSplitLevel
+  "Splits items into the ones of the given level and the ones of higher levels."
+  input list<Integer> items;
+  input list<Integer> levels;
+  input Integer level;
+  output list<Integer> same = {};
+  output list<Integer> higher = {};
+protected
+  list<Integer> ls = levels;
+algorithm
+  for i in items loop
+    if listHead(ls) == level then
+      same := i :: same;
+    else
+      higher := i :: higher;
+    end if;
+    ls := listRest(ls);
+  end for;
+  same := listReverse(same);
+  higher := listReverse(higher);
+end hgtSplitLevel;
+
+protected function hgtOnlyGroupVars
+  "True if the remaining unknowns of an equation are variables of the nested block."
+  input Integer row;
+  input BackendDAE.AdjacencyMatrix m;
+  input list<Integer> groupVars;
+  output Boolean b = List.all(m[row], function listMember(lst = groupVars));
+end hgtOnlyGroupVars;
+
+protected function hgtNestedGroups
+  "Finds the nested blocks of a hand guided tearing block: without the items of
+   the outer level, the remaining equations are matched (the nested pairs are
+   forced) and sorted (Tarjan); each strongly connected part with nested items
+   is a nested block. Returns (rows, variables) of each block."
+  input BackendDAE.AdjacencyMatrix m;
+  input Integer size;
+  input list<Integer> outerVars;
+  input list<Integer> outerRows;
+  input list<Integer> nestedVars;
+  input list<Integer> nestedRows;
+  input list<tuple<Integer, Integer>> nestedPairs "(variable, row)";
+  output list<tuple<list<Integer>, list<Integer>>> groups = {};
+protected
+  array<Boolean> in_row, in_var, locked, allowed, nested_row, nested_var;
+  array<Integer> ass1, ass2, index, lowlink;
+  array<Boolean> on_stack;
+  array<Integer> counter;
+  array<list<Integer>> stack;
+  array<list<list<Integer>>> sccs;
+  Integer v, r;
+  Boolean is_nested;
+algorithm
+  in_row := arrayCreate(size, true);
+  in_var := arrayCreate(size, true);
+  for i in outerRows loop arrayUpdate(in_row, i, false); end for;
+  for i in outerVars loop arrayUpdate(in_var, i, false); end for;
+
+  nested_row := arrayCreate(size, false);
+  nested_var := arrayCreate(size, false);
+  for i in nestedRows loop arrayUpdate(nested_row, i, true); end for;
+  for i in nestedVars loop arrayUpdate(nested_var, i, true); end for;
+
+  ass1 := arrayCreate(size, -1);
+  ass2 := arrayCreate(size, -1);
+  locked := arrayCreate(size, false);
+
+  // forced nested pairs
+  for p in nestedPairs loop
+    (v, r) := p;
+    arrayUpdate(ass1, v, r);
+    arrayUpdate(ass2, r, v);
+    arrayUpdate(locked, v, true);
+  end for;
+
+  // unpaired nested equations with unpaired nested variables
+  allowed := arrayCreate(size, false);
+  for i in nestedVars loop
+    if ass1[i] < 0 then
+      arrayUpdate(allowed, i, true);
+    end if;
+  end for;
+  for i in nestedRows loop
+    if ass2[i] < 0 then
+      hgtAugment(i, m, ass1, ass2, allowed, locked, arrayCreate(size, false));
+    end if;
+  end for;
+  for i in nestedVars loop
+    if ass1[i] > 0 then
+      arrayUpdate(locked, i, true);
+    end if;
+  end for;
+
+  // all other equations of the inner part
+  for i in 1:size loop
+    arrayUpdate(allowed, i, in_var[i] and not locked[i]);
+  end for;
+  for i in 1:size loop
+    if in_row[i] and ass2[i] < 0 then
+      if not hgtAugment(i, m, ass1, ass2, allowed, locked, arrayCreate(size, false)) then
+        Error.addMessage(Error.HGT_TEARING_FAILED, {"", "the equations of the nested levels are structurally singular"});
+        fail();
+      end if;
+    end if;
+  end for;
+
+  // Tarjan on the equations of the inner part
+  index := arrayCreate(size, -1);
+  lowlink := arrayCreate(size, -1);
+  on_stack := arrayCreate(size, false);
+  counter := arrayCreate(1, 0);
+  stack := arrayCreate(1, {});
+  sccs := arrayCreate(1, {});
+  for i in 1:size loop
+    if in_row[i] and index[i] < 0 then
+      hgtTarjan(i, m, ass1, ass2, in_var, index, lowlink, on_stack, counter, stack, sccs);
+    end if;
+  end for;
+
+  for scc in sccs[1] loop
+    is_nested := List.any(scc, function arrayGet(arr = nested_row)) or
+                 List.any(list(ass2[i] for i in scc), function arrayGet(arr = nested_var));
+    if is_nested then
+      groups := (List.sort(scc, intGt), List.sort(list(ass2[i] for i in scc), intGt)) :: groups;
+    end if;
+  end for;
+end hgtNestedGroups;
+
+protected function hgtAugment
+  "Augmenting path search (Kuhn) for one equation."
+  input Integer row;
+  input BackendDAE.AdjacencyMatrix m;
+  input array<Integer> ass1;
+  input array<Integer> ass2;
+  input array<Boolean> allowed;
+  input array<Boolean> locked;
+  input array<Boolean> visited;
+  output Boolean found = false;
+algorithm
+  for v in m[row] loop
+    if allowed[v] and not visited[v] then
+      arrayUpdate(visited, v, true);
+      if ass1[v] < 0 or (not locked[v] and hgtAugment(ass1[v], m, ass1, ass2, allowed, locked, visited)) then
+        arrayUpdate(ass1, v, row);
+        arrayUpdate(ass2, row, v);
+        found := true;
+        return;
+      end if;
+    end if;
+  end for;
+end hgtAugment;
+
+protected function hgtTarjan
+  input Integer row;
+  input BackendDAE.AdjacencyMatrix m;
+  input array<Integer> ass1;
+  input array<Integer> ass2;
+  input array<Boolean> inVar;
+  input array<Integer> index;
+  input array<Integer> lowlink;
+  input array<Boolean> onStack;
+  input array<Integer> counter;
+  input array<list<Integer>> stack;
+  input array<list<list<Integer>>> sccs;
+protected
+  Integer w, x;
+  list<Integer> scc = {};
+algorithm
+  arrayUpdate(index, row, counter[1]);
+  arrayUpdate(lowlink, row, counter[1]);
+  arrayUpdate(counter, 1, counter[1] + 1);
+  arrayUpdate(stack, 1, row :: stack[1]);
+  arrayUpdate(onStack, row, true);
+
+  for v in m[row] loop
+    if inVar[v] and v <> ass2[row] and ass1[v] > 0 then
+      w := ass1[v];
+      if index[w] < 0 then
+        hgtTarjan(w, m, ass1, ass2, inVar, index, lowlink, onStack, counter, stack, sccs);
+        arrayUpdate(lowlink, row, intMin(lowlink[row], lowlink[w]));
+      elseif onStack[w] then
+        arrayUpdate(lowlink, row, intMin(lowlink[row], index[w]));
+      end if;
+    end if;
+  end for;
+
+  if lowlink[row] == index[row] then
+    x := -1;
+    while x <> row loop
+      x := listHead(stack[1]);
+      arrayUpdate(stack, 1, listRest(stack[1]));
+      arrayUpdate(onStack, x, false);
+      scc := x :: scc;
+    end while;
+    arrayUpdate(sccs, 1, scc :: sccs[1]);
+  end if;
+end hgtTarjan;
+
+protected function hgtNestedComponent
+  "Tears a nested block recursively and returns it as an inner equation."
+  input list<Integer> rows "local equation indices of the block";
+  input list<Integer> vars "local variable indices of the block";
+  input list<Integer> eindex;
+  input list<Integer> vindx;
+  input BackendDAE.EqSystem isyst;
+  input BackendDAE.Shared ishared;
+  input list<Integer> userTVars;
+  input list<Integer> userTVarLevels;
+  input list<Integer> userResiduals;
+  input list<Integer> userResidualLevels;
+  input list<tuple<Integer, Integer>> userPairs;
+  output BackendDAE.InnerEquation innerEquation;
+protected
+  BackendDAE.StrongComponent comp;
+  list<Integer> tv = {}, tvl = {}, re = {}, rel = {};
+  list<tuple<Integer, Integer>> pairs = {};
+  Integer v, e;
+algorithm
+  comp := BackendDAE.EQUATIONSYSTEM(selectFromList_rev(eindex, rows), selectFromList_rev(vindx, vars),
+    BackendDAE.EMPTY_JACOBIAN(), BackendDAE.JAC_NONLINEAR(), false);
+
+  // the hand guided tearing items of the block, local to the block
+  for i in 1:listLength(userTVars) loop
+    if listMember(listGet(userTVars, i), vars) then
+      tv := List.position(listGet(userTVars, i), vars) :: tv;
+      tvl := listGet(userTVarLevels, i) :: tvl;
+    end if;
+  end for;
+  for i in 1:listLength(userResiduals) loop
+    if listMember(listGet(userResiduals, i), rows) then
+      re := List.position(listGet(userResiduals, i), rows) :: re;
+      rel := listGet(userResidualLevels, i) :: rel;
+    end if;
+  end for;
+  for p in userPairs loop
+    (v, e) := p;
+    if listMember(v, vars) and listMember(e, rows) then
+      pairs := (List.position(v, vars), List.position(e, rows)) :: pairs;
+    end if;
+  end for;
+
+  comp := handGuidedTearing(comp, isyst, ishared, listReverse(tv), listReverse(re), listReverse(tvl), listReverse(rel), pairs);
+  innerEquation := BackendDAE.INNERCOMPONENT(comp);
+end hgtNestedComponent;
 
 protected function hgtInnerEquations
   "Creates the inner equations of a hand guided tearing block. An equation that
@@ -5844,6 +6175,7 @@ protected function hgtInnerEquations
   input array<list<Integer>> mapEqnIncRow;
   input BackendDAE.EqSystem subsyst;
   input BackendDAE.Shared shared;
+  input array<BackendDAE.InnerEquation> nestedComps "inner equation -k is nestedComps[k]";
   output BackendDAE.InnerEquations innerEquations = {};
 protected
   BackendDAE.AdjacencyMatrixEnhanced me_strict;
@@ -5867,6 +6199,11 @@ algorithm
   FlagsUtil.setConfigString(Flags.TEARING_STRICTNESS, strictness);
 
   for e in order loop
+    if e < 0 then
+      innerEquations := nestedComps[-e] :: innerEquations;
+      continue;
+    end if;
+
     rows := mapEqnIncRow[e];
     vars := list(ass2[r] for r in rows);
     geqn := listGet(eindex, e);

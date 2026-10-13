@@ -541,11 +541,8 @@ algorithm
     has_states := has_states or List.any(BackendVariable.varList(syst.orderedVars), BackendVariable.isStateVar);
   end for;
 
-  // Residual equations can also be initial equations. Time-independent
-  // equations are moved to removedEqs, they are only solved during the
-  // initialization (where hand guided tearing is applied too).
+  // Residual equations can also be initial equations.
   countTags(dae.shared.initialEqs, counts);
-  countTags(dae.shared.removedEqs, counts);
 
   for r in spec.residuals loop
     count := UnorderedMap.getOrDefault(r.name, counts, 0);
@@ -566,9 +563,6 @@ algorithm
         break;
       end if;
     end for;
-
-    // Time-independent iteration variables are moved to the known variables.
-    found := found or BackendVariable.containsCref(v.name, dae.shared.globalKnownVars);
 
     if not found then
       Error.addSourceMessage(Error.HGT_VARIABLE_REMOVED_BACKEND, {crefString(v.name)}, v.info);

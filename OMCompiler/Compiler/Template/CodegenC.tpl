@@ -3508,6 +3508,39 @@ template generateStaticInitialData(list<ComponentRef> crefs, String indexName, S
           sysData->max[i++]   = DBL_MAX;
           >>
         else
+          /* hand guided tearing: min/max only for the non-linear solver */
+          let &preExp = buffer ""
+          let &varDecls = buffer ""
+          let &auxFunction = buffer ""
+          let hgtMin = match SimCodeUtil.getHGTBound(getSimCode(), crefRemovePrePrefix(cr), true)
+            case SOME(e) then daeExp(e, contextOther, &preExp, &varDecls, &auxFunction)
+          let hgtMax = match SimCodeUtil.getHGTBound(getSimCode(), crefRemovePrePrefix(cr), false)
+            case SOME(e) then daeExp(e, contextOther, &preExp, &varDecls, &auxFunction)
+          if hgtMin then
+            <<
+            <%cComment%>
+            {
+              <%varDecls%>
+              <%preExp%>
+              sysData->hgtBounds = 1;
+              sysData->nominal[i] = getNominalFromScalarIdx(data->simulationInfo, data->modelData, <%kind%>, <%crefIndexWithComment(cr)%>);
+              sysData->min[i]     = <%hgtMin%>;
+              sysData->max[i++]   = <%if hgtMax then hgtMax else 'getMaxFromScalarIdx(data->simulationInfo, data->modelData, VAR_TYPE_REAL, <%kind%>, <%crefIndexWithComment(cr)%>)'%>;
+            }
+            >>
+          else if hgtMax then
+            <<
+            <%cComment%>
+            {
+              <%varDecls%>
+              <%preExp%>
+              sysData->hgtBounds = 1;
+              sysData->nominal[i] = getNominalFromScalarIdx(data->simulationInfo, data->modelData, <%kind%>, <%crefIndexWithComment(cr)%>);
+              sysData->min[i]     = getMinFromScalarIdx(data->simulationInfo, data->modelData, VAR_TYPE_REAL, <%kind%>, <%crefIndexWithComment(cr)%>);
+              sysData->max[i++]   = <%hgtMax%>;
+            }
+            >>
+          else
           <<
           <%cComment%>
           sysData->nominal[i] = getNominalFromScalarIdx(data->simulationInfo, data->modelData, <%kind%>, <%crefIndexWithComment(cr)%>);

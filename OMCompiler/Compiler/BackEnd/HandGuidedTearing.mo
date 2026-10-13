@@ -62,6 +62,7 @@ import ComponentReference;
 import ElementSource;
 import Error;
 import Expression;
+import ExpressionBasics;
 import ExpressionDump;
 import Flags;
 import List;
@@ -107,10 +108,6 @@ algorithm
     Error.addMessage(Error.HGT_LEVEL_NOT_SUPPORTED, {});
   end if;
 
-  if List.any(iter_vars, hasMinMax) then
-    Error.addMessage(Error.HGT_MIN_MAX_NOT_SUPPORTED, {});
-  end if;
-
   var_map := UnorderedMap.new<DAE.HGTIterationVariable>(stringHashDjb2, stringEq);
   for v in iter_vars loop
     UnorderedMap.add(crefString(v.name), v, var_map);
@@ -130,6 +127,29 @@ algorithm
     initialEqns := list(scaleResidual(e, nominal_map) for e in initialEqns);
   end if;
 end lower;
+
+function iterationVariableBounds
+  "Returns the min and max attributes of the hand guided tearing iteration
+   variables. They are only used by the non-linear solver (not as attributes of
+   the variables, which would add range checks). Bounds that depend on
+   variables (adaptive bounds) are not supported yet and are ignored."
+  input BackendDAE.Shared shared;
+  output list<tuple<DAE.ComponentRef, Option<DAE.Exp>, Option<DAE.Exp>>> bounds = {};
+protected
+  BackendDAE.HGTSpec spec;
+algorithm
+  if isNone(shared.handGuidedTearing) then
+    return;
+  end if;
+
+  SOME(spec) := shared.handGuidedTearing;
+
+  for v in allIterationVariables(spec) loop
+    if hasMinMax(v) then
+      bounds := (v.name, checkBound(v.min, "min", v, shared), checkBound(v.max, "max", v, shared)) :: bounds;
+    end if;
+  end for;
+end iterationVariableBounds;
 
 function isActive
   "Returns true if the DAE has a hand guided tearing specification."
@@ -350,6 +370,26 @@ function hasMinMax
   output Boolean res = isSome(var.min) or isSome(var.max);
 end hasMinMax;
 
+function checkBound
+  "Returns a min or max attribute if it only depends on parameters and constants."
+  input Option<DAE.Exp> bound;
+  input String attr;
+  input DAE.HGTIterationVariable var;
+  input BackendDAE.Shared shared;
+  output Option<DAE.Exp> outBound = bound;
+protected
+  DAE.Exp e;
+algorithm
+  if isSome(bound) then
+    SOME(e) := bound;
+
+    if not List.all(Expression.extractCrefsFromExp(e), function BackendVariable.containsCref(inVariables = shared.globalKnownVars)) then
+      Error.addSourceMessage(Error.HGT_MIN_MAX_NOT_SUPPORTED, {attr, crefString(var.name), ExpressionBasics.printExpStr(e)}, var.info);
+      outBound := NONE();
+    end if;
+  end if;
+end checkBound;
+
 function lowerVariable
   "Marks an iteration variable as unreplaceable and applies its start and
    nominal attributes."
@@ -428,8 +468,11 @@ algorithm
     has_states := has_states or List.any(BackendVariable.varList(syst.orderedVars), BackendVariable.isStateVar);
   end for;
 
-  // Residual equations can also be initial equations.
+  // Residual equations can also be initial equations. Time-independent
+  // equations are moved to removedEqs, they are only solved during the
+  // initialization (where hand guided tearing is applied too).
   countTags(dae.shared.initialEqs, counts);
+  countTags(dae.shared.removedEqs, counts);
 
   for r in spec.residuals loop
     count := UnorderedMap.getOrDefault(r.name, counts, 0);
@@ -450,6 +493,9 @@ algorithm
         break;
       end if;
     end for;
+
+    // Time-independent iteration variables are moved to the known variables.
+    found := found or BackendVariable.containsCref(v.name, dae.shared.globalKnownVars);
 
     if not found then
       Error.addSourceMessage(Error.HGT_VARIABLE_REMOVED_BACKEND, {crefString(v.name)}, v.info);
@@ -644,11 +690,67 @@ algorithm
   // Each residual equation must depend on its iteration variable.
   all_pairs := listAppend(list((Util.tuple21(p), eqnRow(Util.tuple22(p), map_eqn_row)) for p in pairs), bound);
   checkDependence(all_pairs, comps, m_n, map_eqn_row, map_row_eqn, syst);
+  checkResidualCounts(comps, syst, spec);
 
   if Flags.isSet(Flags.HGT_DUMP) then
     dumpComponents(comps, syst, shared, hgt_vars, hgt_rows, auto_rows, map_eqn_row);
   end if;
 end matchSystem;
+
+function checkResidualCounts
+  "R9, OCT option allow_multiple_residuals_in_hgt_blocks: checks the number of
+   residual equations of each level in the hand guided tearing blocks."
+  input BackendDAE.StrongComponents comps;
+  input BackendDAE.EqSystem syst;
+  input BackendDAE.HGTSpec spec;
+protected
+  String allow;
+  UnorderedMap<String, Integer> levels;
+  UnorderedMap<Integer, Integer> counts;
+  UnorderedMap<Integer, String> names;
+  Option<String> name;
+  list<Integer> eqns;
+  Integer level;
+algorithm
+  allow := Flags.getConfigString(Flags.HGT_ALLOW_MULTIPLE_RESIDUALS);
+
+  if allow == "true" then
+    return;
+  end if;
+
+  levels := UnorderedMap.new<Integer>(stringHashDjb2, stringEq);
+  for r in spec.residuals loop
+    UnorderedMap.add(r.name, r.level, levels);
+  end for;
+
+  for comp in comps loop
+    eqns := match comp
+      case BackendDAE.EQUATIONSYSTEM() then comp.eqns;
+      else {};
+    end match;
+
+    counts := UnorderedMap.new<Integer>(Util.id, intEq);
+    names := UnorderedMap.new<String>(Util.id, intEq);
+
+    for e in eqns loop
+      name := equationName(BackendEquation.get(syst.orderedEqs, e));
+
+      if isSome(name) and UnorderedMap.contains(Util.getOption(name), levels) then
+        level := UnorderedMap.getOrFail(Util.getOption(name), levels);
+        UnorderedMap.add(level, UnorderedMap.getOrDefault(level, counts, 0) + 1, counts);
+        UnorderedMap.add(level, if UnorderedMap.contains(level, names) then UnorderedMap.getOrFail(level, names) + ", " + Util.getOption(name) else Util.getOption(name), names);
+      end if;
+    end for;
+
+    for l in UnorderedMap.keyList(counts) loop
+      if UnorderedMap.getOrFail(l, counts) > 1 and (allow == "false" or l > 1) then
+        Error.addMessage(Error.HGT_MULTIPLE_RESIDUALS, {intString(l), intString(UnorderedMap.getOrFail(l, counts)),
+          UnorderedMap.getOrFail(l, names), allow});
+        fail();
+      end if;
+    end for;
+  end for;
+end checkResidualCounts;
 
 function indexTags
   "Adds the names of all tagged equations to the map, name -> equation index."

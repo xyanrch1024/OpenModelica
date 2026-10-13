@@ -1219,9 +1219,11 @@ public constant ErrorTypes.Message HGT_ONLY_STEADY_STATE = ErrorTypes.MESSAGE(64
 public constant ErrorTypes.Message HGT_LEVEL_NOT_SUPPORTED = ErrorTypes.MESSAGE(646, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),
   "Nested hand guided tearing (level > 1) is not supported yet, all levels are torn as level 1.");
 public constant ErrorTypes.Message HGT_MIN_MAX_NOT_SUPPORTED = ErrorTypes.MESSAGE(647, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),
-  "The min and max attributes of hand guided tearing iteration variables are not supported yet and are ignored.");
+  "The %s attribute of the hand guided tearing iteration variable %s depends on variables (%s). Such adaptive bounds are not supported yet and are ignored.");
 public constant ErrorTypes.Message HGT_TEARING_FAILED = ErrorTypes.MESSAGE(648, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
   "Hand guided tearing of the strong component with the residual equations {%s} failed: %s.");
+public constant ErrorTypes.Message HGT_MULTIPLE_RESIDUALS = ErrorTypes.MESSAGE(649, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+  "The hand guided tearing block of level %s has %s residual equations {%s}, but --hgtAllowMultipleResiduals=%s allows only one.");
 
 public constant ErrorTypes.Message MATCH_SHADOWING = ErrorTypes.MESSAGE(5001, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "Local variable '%s' shadows another variable.");

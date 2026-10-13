@@ -443,7 +443,8 @@ constant list<Flags.ConfigFlag> allConfigFlags = {
   Flags.FMU_DIRECTORY,
   Flags.HAND_GUIDED_TEARING,
   Flags.ACCEPT_MODELON_HGT,
-  Flags.HGT_MERGE_BLT_BLOCKS
+  Flags.HGT_MERGE_BLT_BLOCKS,
+  Flags.HGT_ALLOW_MULTIPLE_RESIDUALS
 };
 
 public function new

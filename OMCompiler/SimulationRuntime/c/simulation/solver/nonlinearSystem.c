@@ -458,6 +458,7 @@ void initializeNonlinearSystemData(DATA *data, threadData_t *threadData, NONLINE
   nonlinsys->min = (double*) malloc(size*sizeof(double));
   nonlinsys->max = (double*) malloc(size*sizeof(double));
   /* Init sparsitiy pattern */
+  nonlinsys->hgtBounds = 0 /* false, set by initializeStaticNLSData for hand guided tearing */;
   nonlinsys->initializeStaticNLSData(data, threadData, nonlinsys, 1 /* true */, 1 /* true */);
 
   if(nonlinsys->sparsePattern) {
@@ -1237,6 +1238,15 @@ int solve_nonlinear_system(DATA *data, threadData_t *threadData, int sysNumber)
   {
     nonlinsys->getIterationVars(data, nonlinsys->nlsx);
     memcpy(nonlinsys->nlsx, nonlinsys->nlsxOld, nonlinsys->size*(sizeof(double)));
+  }
+  /* hand guided tearing: start within the bounds of the iteration variables */
+  if (nonlinsys->hgtBounds)
+  {
+    int i;
+    for (i = 0; i < nonlinsys->size; i++)
+    {
+      nonlinsys->nlsx[i] = fmax(nonlinsys->min[i], fmin(nonlinsys->nlsx[i], nonlinsys->max[i]));
+    }
   }
   /* update non continuous */
   if (data->simulationInfo->discreteCall)

@@ -2531,7 +2531,8 @@ algorithm
       daeModeData                 = daeModeData,
       inlineEquations             = {},
       omsiData                    = NONE(),
-      scalarized                  = true
+      scalarized                  = true,
+      hgtAttributes               = {}
     );
 
     (simCode, (_, _, lits)) := SimCodeUtil.traverseExpsSimCode(simCode, SimCodeFunctionUtil.findLiteralsHelper, literals);

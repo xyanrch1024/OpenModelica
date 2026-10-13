@@ -125,4 +125,18 @@ package HGT "Hand guided tearing (OCT compatible) test models, steady state"
   model ChainNegativeStart "the inverted sqrt has a spurious root m < 0, the check rejects it"
     extends Chain(m(start = -5));
   end ChainNegativeStart;
+  model Bound "bad residual choice, the solver keeps y <= ymax so that log(x) is defined"
+    parameter Real ymax = 3;
+    Real x, y(start = 4);
+  equation
+    y = log(x) annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable(max = ymax) = y)));
+    x + y ^ 3 = 30;
+  end Bound;
+
+  model Multi "two residual equations in one block of level 1"
+    Real x(start = 1), y(start = 1);
+  equation
+    x + y = 3 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = x)));
+    x * y = 2 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = y)));
+  end Multi;
 end HGT;

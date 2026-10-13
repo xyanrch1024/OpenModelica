@@ -1361,6 +1361,13 @@ end SimCodeFunction;
 
 package SimCodeUtil
 
+  function getHGTBound
+    input SimCode.SimCode simCode;
+    input DAE.ComponentRef cref;
+    input Boolean isMin;
+    output Option<DAE.Exp> bound;
+  end getHGTBound;
+
   function linearSystemMatrixFormat
     input SimCode.LinearSystem ls;
     output String format;

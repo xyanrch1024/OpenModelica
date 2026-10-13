@@ -5754,6 +5754,7 @@ algorithm
   (me, meT, map_eqn_row, map_row_eqn) := BackendDAEUtil.getAdjacencyMatrixEnhancedScalar(subsyst, ishared, true);
 
   user_rows := List.flatten(list(map_eqn_row[i] for i in userResiduals));
+
   discrete_vars := findDiscrete(var_lst);
   tvars := userTVars;
 

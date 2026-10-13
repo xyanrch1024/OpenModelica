@@ -185,7 +185,9 @@ algorithm
       print(ExpandableArray.toString(exarray, "\nExpandable Array after analysis", printCSEEquation));
     end if;
 
-    if index > 0 then
+    // Hand guided tearing residual equations must keep their source (the tag).
+    if index > 0 and not (HandGuidedTearing.isActive(shared) and
+        HandGuidedTearing.anyTaggedEquation(List.intRange(BackendEquation.getNumberOfEquations(orderedEqs)), orderedEqs)) then
       // Phase 2: Dependencies
       exarray := determineDependencies(exarray, HT);
 

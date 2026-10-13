@@ -1455,6 +1455,14 @@ constant ConfigFlag ACCEPT_MODELON_HGT = CONFIG_FLAG(173, "acceptModelonHGT",
 constant ConfigFlag HGT_MERGE_BLT_BLOCKS = CONFIG_FLAG(174, "hgtMergeBLTBlocks",
   NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
   "Puts all hand guided tearing pairs and unpaired iteration variables and residual\nequations into the same BLT block. Corresponds to the OCT option merge_blt_blocks.");
+constant ConfigFlag HGT_ALLOW_MULTIPLE_RESIDUALS = CONFIG_FLAG(175, "hgtAllowMultipleResiduals",
+  NONE(), EXTERNAL(), STRING_FLAG("level1"), SOME(
+    STRING_DESC_OPTION({
+    ("false", "Every hand guided tearing block may only have one residual equation."),
+    ("level1", "Only hand guided tearing blocks of level 1 may have more than one residual equation."),
+    ("true", "Hand guided tearing blocks may have any number of residual equations.")
+    })),
+  "Checks the number of residual equations of hand guided tearing blocks. Corresponds to\nthe OCT option allow_multiple_residuals_in_hgt_blocks.");
 
 function getFlags
   "Loads the flags with getGlobalRoot. Assumes flags have been loaded."

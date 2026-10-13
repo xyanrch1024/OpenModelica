@@ -56,6 +56,7 @@ import DAE;
 import DoubleEnded;
 import File;
 import HashTable;
+import HandGuidedTearing;
 import HashTableCrIListArray;
 import HashTableCrILst;
 import HashTableExpToIndex;
@@ -836,7 +837,8 @@ algorithm
       daeModeData                 = NONE(),
       inlineEquations             = inlineEquations,
       omsiData                    = omsiOptData,
-      scalarized                  = true
+      scalarized                  = true,
+      hgtAttributes               = createHGTAttributes(dlow.shared)
     );
 
     (simCode, (_, _, lits)) := traverseExpsSimCode(simCode, SimCodeFunctionUtil.findLiteralsHelper, literalsAcc);
@@ -4072,6 +4074,32 @@ algorithm
 
   equations_ := DoubleEnded.toListAndClear(equations);
 end createTornSystemInnerEqns;
+
+protected function createHGTAttributes
+  "Collects the min and max attributes of the hand guided tearing iteration
+   variables for the non-linear solver."
+  input BackendDAE.Shared shared;
+  output list<SimCode.HGTAttribute> attributes;
+algorithm
+  attributes := list(SimCode.HGT_ATTRIBUTE(Util.tuple31(b), Util.tuple32(b), Util.tuple33(b))
+    for b in HandGuidedTearing.iterationVariableBounds(shared));
+end createHGTAttributes;
+
+public function getHGTBound
+  "Returns the hand guided tearing min (isMin) or max attribute of an iteration
+   variable, if it has one. Used by the templates."
+  input SimCode.SimCode simCode;
+  input DAE.ComponentRef cref;
+  input Boolean isMin;
+  output Option<DAE.Exp> bound = NONE();
+algorithm
+  for a in simCode.hgtAttributes loop
+    if ComponentReferenceBasics.crefEqual(a.cref, cref) then
+      bound := if isMin then a.min else a.max;
+      return;
+    end if;
+  end for;
+end getHGTBound;
 
 protected function constraintAssert
   "Creates the assert for a constraint of an inner equation of a torn system."

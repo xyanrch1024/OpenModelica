@@ -202,6 +202,7 @@ uniontype SimCode
     list<SimEqSystem> inlineEquations;
     Option<OMSIData> omsiData "used for OMSI to generate equations code";
     Boolean scalarized;
+    list<HGTAttribute> hgtAttributes "attributes of hand guided tearing iteration variables for the non-linear solver";
   end SIMCODE;
 end SimCode;
 
@@ -692,6 +693,16 @@ uniontype LinearSystem
 end LinearSystem;
 
 public
+uniontype HGTAttribute
+  "Attributes of a hand guided tearing iteration variable that are only used by
+   the non-linear solver, not by the variable itself."
+  record HGT_ATTRIBUTE
+    DAE.ComponentRef cref;
+    Option<DAE.Exp> min;
+    Option<DAE.Exp> max;
+  end HGT_ATTRIBUTE;
+end HGTAttribute;
+
 uniontype NonlinearSystem
   record NONLINEARSYSTEM
     Integer index;

@@ -86,6 +86,7 @@ typedef struct DATA_HOMOTOPY
   double* hvecScaled; /* function values scaled */
   double* dxScaled;   /* scaled solution vector */
 
+  int boundIterationVariables; /* keep the Newton iterates within [minValue, maxValue] (hand guided tearing) */
   double* minValue; /* min-attribute of variable, only pointer */
   double* maxValue; /* max-attribute of variable, only pointer */
   double* xScaling; /* nominal-attrbute [x.nominal,lambda.nominal] with lambda.nominal=1.0 */
@@ -1355,6 +1356,22 @@ int linearSolverWrapper(DATA *data, int n, double* x, double* A, int* indRow, in
  *  \author bbachmann
  *
  */
+/*! \fn projectToBounds
+ *
+ *  Keeps a Newton iterate within the min/max attributes of the iteration
+ *  variables, if this is requested for the system (hand guided tearing).
+ */
+static void projectToBounds(DATA_HOMOTOPY* solverData, double* x)
+{
+  int i;
+  if (!solverData->boundIterationVariables) {
+    return;
+  }
+  for (i = 0; i < solverData->n; i++) {
+    x[i] = fmax(solverData->minValue[i], fmin(x[i], solverData->maxValue[i]));
+  }
+}
+
 static int newtonAlgorithm(DATA_HOMOTOPY* solverData, double* x)
 {
   int numberOfIterations = 0 ,i, j, n=solverData->n, m=solverData->m;
@@ -1420,6 +1437,7 @@ static int newtonAlgorithm(DATA_HOMOTOPY* solverData, double* x)
       vecMultScaling(solverData->m, solverData->dy0, solverData->xScaling, solverData->dy0);
       /* try full Newton step */
       vecAdd(solverData->n, x, solverData->dy0, solverData->x1);
+      projectToBounds(solverData, solverData->x1);
       printNewtonStep(OMC_LOG_NLS_V, solverData);
 
       /* Damping strategy, performance is very sensitive on the value of lambda */
@@ -1431,6 +1449,7 @@ static int newtonAlgorithm(DATA_HOMOTOPY* solverData, double* x)
         if (!firstrun){
           lambda1 *= 0.655;
           vecAddScal(solverData->n, x, solverData->dy0, lambda1, solverData->x1);
+          projectToBounds(solverData, solverData->x1);
           assert = 1;
         }
 #ifndef OMC_EMCC
@@ -1482,6 +1501,7 @@ static int newtonAlgorithm(DATA_HOMOTOPY* solverData, double* x)
         lambda2 = fmax(-lambda1*lambda1*grad_f/(2*(error_f1_sqrd-error_f_sqrd-lambda1*grad_f)),lambdaMin);
         debugDouble(OMC_LOG_NLS_V, "Need to damp this!! lambda2 = ", lambda2);
         vecAddScal(solverData->n, x, solverData->dy0, lambda2, solverData->x1);
+        projectToBounds(solverData, solverData->x1);
         assert= 1;
 #ifndef OMC_EMCC
         MMC_TRY_INTERNAL(simulationJumpBuffer)
@@ -1530,6 +1550,7 @@ static int newtonAlgorithm(DATA_HOMOTOPY* solverData, double* x)
           lambda = fmax(lambda, lambdaMin);
           debugDouble(OMC_LOG_NLS_V, "Need to damp this!! lambda = ", lambda);
           vecAddScal(solverData->n, x, solverData->dy0, lambda, solverData->x1);
+          projectToBounds(solverData, solverData->x1);
           assert= 1;
 #ifndef OMC_EMCC
           MMC_TRY_INTERNAL(simulationJumpBuffer)
@@ -2214,6 +2235,7 @@ NLS_SOLVER_STATUS solveHomotopy(DATA *data, threadData_t *threadData, NONLINEAR_
   homotopyData->timeValue = data->localData[0]->timeValue;
   homotopyData->minValue = nlsData->min;
   homotopyData->maxValue = nlsData->max;
+  homotopyData->boundIterationVariables = nlsData->hgtBounds;
   homotopyData->info = 0;
 
   vecConst(homotopyData->m,1.0,homotopyData->ones);
@@ -2240,6 +2262,8 @@ NLS_SOLVER_STATUS solveHomotopy(DATA *data, threadData_t *threadData, NONLINEAR_
     vecCopy(homotopyData->n, nlsData->nlsxExtrapolation, homotopyData->xStart);
     debugVectorDouble(OMC_LOG_NLS_V,"System extrapolation", homotopyData->xStart, homotopyData->n);
   }
+  /* hand guided tearing: start within the bounds of the iteration variables */
+  projectToBounds(homotopyData, homotopyData->xStart);
   vecCopy(homotopyData->n, homotopyData->xStart, homotopyData->x0);
   // Initialize lambda variable
   if (homotopyData->userData->nlsData->homotopySupport && !homotopyData->initHomotopy && homotopyData->userData->nlsData->size > homotopyData->n) {

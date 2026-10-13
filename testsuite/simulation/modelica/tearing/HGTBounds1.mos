@@ -1,0 +1,53 @@
+// name:      HGTBounds1
+// keywords:  tearing, hand guided tearing
+// status:    correct
+//
+// min/max of hand guided tearing iteration variables keep the Newton iterates
+// within bounds (without them the start value y = 4 gives log(-34)), and the
+// R9 check of --hgtAllowMultipleResiduals. Both models are time-independent,
+// so their hand guided tearing blocks are only solved during initialization.
+//
+
+loadFile("HGT.mo"); getErrorString();
+setCommandLineOptions("--handGuidedTearing"); getErrorString();
+r := simulate(HGT.Bound, stopTime = 0); getErrorString();
+val(y, 0); val(x, 0);
+
+r := simulate(HGT.Multi, stopTime = 0); getErrorString();
+val(x, 0); val(y, 0);
+setCommandLineOptions("--hgtAllowMultipleResiduals=false"); getErrorString();
+buildModel(HGT.Multi); getErrorString();
+
+// Result:
+// true
+// ""
+// true
+// ""
+// record SimulationResult
+//     resultFile = "HGT.Bound_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.Bound', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// 2.568770123668004
+// 13.049764970302348
+// record SimulationResult
+//     resultFile = "HGT.Multi_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.Multi', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// 1.0
+// 2.0
+// true
+// ""
+// {"", ""}
+// "Error: The hand guided tearing block of level 1 has 2 residual equations {$hgt2, $hgt1}, but --hgtAllowMultipleResiduals=false allows only one.
+// Error: post-optimization module hgtMatching (initialization) failed.
+// Error: No system for the symbolic initialization was generated
+// "
+// endResult

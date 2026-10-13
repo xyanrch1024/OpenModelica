@@ -411,6 +411,7 @@ typedef struct NONLINEAR_SYSTEM_DATA
   modelica_real *min;
   modelica_real *max;
   modelica_real *nominal;
+  modelica_boolean hgtBounds;          /* true if the Newton iterates are kept within [min, max] (hand guided tearing) */
 
   /* if analyticalJacobianColumn != NULL analyticalJacobian is available and
    * can be produced with the help of analyticalJacobianColumnn function pointer

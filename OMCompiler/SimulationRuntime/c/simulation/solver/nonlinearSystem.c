@@ -1010,6 +1010,39 @@ int updateInnerEquation(RESIDUAL_USERDATA* resUserData, int sysNumber, int discr
  *                            NLS_SOLVED_LESS_ACCURACY if a less accurate solution was found and
  *                            NLS_FAILED otherwise.
  */
+/**
+ * @brief Checks that the solution of a non-linear system with hand guided
+ * tearing bounds is within the min/max attributes of its iteration variables.
+ *
+ * @param data          Runtime data struct.
+ * @param nonlinsys     Pointer to non-linear system data.
+ * @param status        Status of the solver.
+ * @return              NLS_FAILED if a bound is violated, otherwise status.
+ */
+static NLS_SOLVER_STATUS checkHGTBounds(DATA *data, NONLINEAR_SYSTEM_DATA* nonlinsys, NLS_SOLVER_STATUS status)
+{
+  long i;
+  double x, tol;
+
+  nonlinsys->getIterationVars(data, nonlinsys->nlsx);
+
+  for (i = 0; i < nonlinsys->size; i++)
+  {
+    x = nonlinsys->nlsx[i];
+    tol = 1e-8 * fmax(1.0, fabs(nonlinsys->nominal[i]));
+    if (x < nonlinsys->min[i] - tol || x > nonlinsys->max[i] + tol)
+    {
+      warningStreamPrint(OMC_LOG_STDOUT, 0, "Non-linear system %ld: the solution %s = %g is outside of the hand guided tearing bounds [%g, %g], the system is not solved.",
+                         (long) nonlinsys->equationIndex,
+                         modelInfoGetEquation(&data->modelData->modelDataXml, nonlinsys->equationIndex).vars[i],
+                         x, nonlinsys->min[i], nonlinsys->max[i]);
+      return NLS_FAILED;
+    }
+  }
+
+  return status;
+}
+
 NLS_SOLVER_STATUS solveNLS(DATA *data, threadData_t *threadData, NONLINEAR_SYSTEM_DATA* nonlinsys)
 {
   NLS_SOLVER_STATUS solver_status = NLS_FAILED;
@@ -1130,6 +1163,14 @@ NLS_SOLVER_STATUS solveNLS(DATA *data, threadData_t *threadData, NONLINEAR_SYSTE
 #endif
   default:
     throwStreamPrint(threadData, "unrecognized nonlinear solver");
+  }
+
+  /* hand guided tearing: a solution outside of the bounds of the iteration
+   * variables is not accepted, whichever solver found it (e.g. the hybrid
+   * solver after the bounded Newton solver failed) */
+  if (solver_status != NLS_FAILED && nonlinsys->hgtBounds)
+  {
+    solver_status = checkHGTBounds(data, nonlinsys, solver_status);
   }
 
   return solver_status;

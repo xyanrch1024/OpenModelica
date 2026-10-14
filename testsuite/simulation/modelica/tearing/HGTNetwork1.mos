@@ -1,0 +1,59 @@
+// name:      HGTNetwork1
+// keywords:  tearing, hand guided tearing
+// status:    correct
+//
+// Level 1 hand guided tearing of a pump network: component and system level
+// pairs, an unpaired residual equation (design spec) and iteration variable
+// (valve opening) bound together, min/max bounds and a residual nominal. With
+// m_set = 8 the design spec needs an opening u > 1: the bounded Newton solver
+// fails and the solution of the fallback solver is rejected.
+//
+
+loadFile("HGTNetwork.mo"); getErrorString();
+setCommandLineOptions("--handGuidedTearing -d=hgtDump"); getErrorString();
+r := simulate(HGTNetwork.System, stopTime = 0); getErrorString();
+val(p_m, 0); val(p_c, 0); val(u, 0); val(b1.m, 0); val(pump.m, 0);
+setCommandLineOptions("-d=-hgtDump"); getErrorString();
+r := simulate(HGTNetwork.System, stopTime = 0, simflags = "-override=m_set=8"); getErrorString();
+
+// Result:
+// true
+// ""
+// true
+// ""
+// Hand guided tearing:
+//   unpaired residual equation $hgt1 (level 1, nominal = 10.0)
+//   pair: residual equation collector.balance (level 1), iteration variable p_c (level 1)
+//   pair: residual equation manifold.balance (level 1), iteration variable p_m (level 1, max = p_tank + 4.99)
+//   unpaired iteration variable u (level 1, min = 0.05, max = 1.0)
+// Hand guided tearing matching (initialization system):
+//   block of 8 equations: residual equations {manifold.balance, collector.balance, $hgt1}, iteration variables {u, p_c, p_m}
+// Hand guided tearing matching (simulation system):
+//   block of 8 equations: residual equations {$hgt1, manifold.balance, collector.balance}, iteration variables {p_c, p_m, u}
+// record SimulationResult
+//     resultFile = "HGTNetwork.System_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGTNetwork.System', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// 3.7941600167855083
+// 2.103019982542049
+// 0.7689941828936591
+// 4.000000000000001
+// 10.501999769602197
+// true
+// ""
+// record SimulationResult
+//     resultFile = "",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGTNetwork.System', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = '-override=m_set=8'",
+//     messages = "Simulation execution failed for model: HGTNetwork.System
+// LOG_STDOUT        | warning | Non-linear system 14: the solution u = 2.47637 is outside of the hand guided tearing bounds [0.05, 1], the system is not solved.
+// LOG_ASSERT        | debug   | Solving non-linear system 14 failed at time=0.
+// |                 | |       | For more information please use -lv LOG_NLS.
+// LOG_ASSERT        | info    | simulation terminated by an assertion at initialization
+// "
+// end SimulationResult;
+// ""
+// endResult

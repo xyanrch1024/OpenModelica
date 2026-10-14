@@ -5,6 +5,7 @@ HGTBounds1.mos \
 HGTError1.mos \
 HGTLevel1.mos \
 HGTLevel2.mos \
+HGTNetwork1.mos \
 HGTPair1.mos \
 HGTPair2.mos \
 HGTSolve1.mos \

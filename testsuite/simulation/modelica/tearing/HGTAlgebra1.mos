@@ -1,0 +1,46 @@
+// name:      HGTAlgebra1
+// keywords:  tearing, hand guided tearing
+// status:    correct
+//
+// Level 1 hand guided tearing of pure algebraic loops: a circle/hyperbola system
+// with 4 roots where the pairs and start values select the root, and an inverse
+// problem (unpaired residual equation and bounded unpaired iteration variable)
+// with an inner loop that needs an automatically added iteration variable.
+//
+
+loadFile("HGTAlgebra.mo"); getErrorString();
+setCommandLineOptions("--handGuidedTearing -d=hgtDump"); getErrorString();
+r := simulate(HGTAlgebra.System, stopTime = 0); getErrorString();
+val(x, 0); val(y, 0); val(v, 0); val(z, 0); val(k, 0);
+
+// Result:
+// true
+// ""
+// true
+// ""
+// Hand guided tearing:
+//   pair: residual equation $hgt1 (level 1), iteration variable x (level 1)
+//   pair: residual equation $hgt2 (level 1), iteration variable y (level 1)
+//   unpaired residual equation $hgt3 (level 1)
+//   unpaired iteration variable k (level 1, min = 0.0, max = 5.0)
+// Hand guided tearing matching (initialization system):
+//   block of 2 equations: residual equations {$hgt2, $hgt1}, iteration variables {x, y}
+//   block of 3 equations: residual equations {$hgt3}, iteration variables {k}
+// Hand guided tearing matching (simulation system):
+//   block of 2 equations: residual equations {$hgt1, $hgt2}, iteration variables {y, x}
+//   block of 3 equations: residual equations {$hgt3}, iteration variables {k}
+// record SimulationResult
+//     resultFile = "HGTAlgebra.System_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGTAlgebra.System', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// "Warning: There are nonlinear iteration variables with default zero start attribute found in NLSJac1. For more information set -d=initialization. In OMEdit Tools->Options->Simulation->Show additional information from the initialization process, in OMNotebook call setCommandLineOptions(\"-d=initialization\").
+// "
+// 1.0
+// -2.0
+// 1.3108324944320862
+// 2.0
+// 0.8561837810192453
+// endResult

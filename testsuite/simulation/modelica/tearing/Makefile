@@ -8,6 +8,7 @@ HGTLevel2.mos \
 HGTNetwork1.mos \
 HGTPair1.mos \
 HGTPair2.mos \
+HGTPlant1.mos \
 HGTSolve1.mos \
 HGTSystem1.mos \
 Tearing1-celMC3.mos \

@@ -2,6 +2,8 @@
 
 2026-10-06 · 第 2 版：按 OCT 官方用户手册修订
 
+> 本文是实施前的设计方案和分期记录。按当前代码组织的实现说明见 [HGT_developer_guide.md](HGT_developer_guide.md)。
+
 依据：*OPTIMICA Compiler Toolkit User's Guide, Version 1.44*，第 14 章 "Steady-state Modelica Modeling with Hand Guided Tearing"（印刷页 169–183）、附录 B 编译选项（221–223）、第 20 章限制（203）。下文 "p. N" 均指该手册的印刷页码。
 
 ## 1. 背景与目标

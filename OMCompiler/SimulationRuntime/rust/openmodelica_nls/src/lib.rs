@@ -233,6 +233,9 @@ pub struct NlsSpec<'a> {
     pub nominal: &'a [f64],
     /// The `min`/`max` pairs a restart point is held inside.
     pub bounds: &'a [f64],
+    /// C's `hgtBounds` (hand guided tearing): the start point and the Newton
+    /// iterates are kept within `bounds` too.
+    pub hgt_bounds: bool,
     /// `colptr[size+1] ++ rowidx[nnz] ++ colorCols[size]`; empty without a pattern.
     /// The colours are 0-based, unlike C's.
     pub pattern: &'a [u32],
@@ -2695,8 +2698,17 @@ fn newton_c(
     has_jac: bool,
     trace: Option<&HomotopyTrace>,
     casual: bool,
+    hgt_bounds: bool,
 ) -> (bool, bool) {
     const ALPHA: f64 = 1.0e-1;
+    // C's `projectToBounds`: a hand guided tearing iterate stays within its bounds.
+    let project = |x1: &mut [f64]| {
+        if hgt_bounds {
+            for i in 0..n {
+                x1[i] = x1[i].max(bounds[2 * i]).min(bounds[2 * i + 1]);
+            }
+        }
+    };
     const LAMBDA_MIN_C: f64 = 1.0e-4;
     let ftol_sq = newton_ftol() * newton_ftol();
     let xtol_sq = newton_xtol() * newton_xtol();
@@ -2863,6 +2875,7 @@ fn newton_c(
             for i in 0..n {
                 x1[i] = x[i] + step[i];
             }
+            project(&mut x1);
             log_newton_step(t, &x1, &step, x);
         }
         let grad_f = -2.0 * error_f_sqrd;
@@ -2875,6 +2888,7 @@ fn newton_c(
             for i in 0..n {
                 x1[i] = x[i] + lambda1 * step[i];
             }
+            project(&mut x1);
             eval(&x1, &mut fvec);
             // C's `f_con` failing here ends the whole Newton, not just this step.
             if dt_violated() {
@@ -2925,6 +2939,7 @@ fn newton_c(
             for i in 0..n {
                 x1[i] = x[i] + lambda2 * step[i];
             }
+            project(&mut x1);
             eval(&x1, &mut fvec);
             if dt_violated() {
                 return (false, false);
@@ -2968,6 +2983,7 @@ fn newton_c(
                 for i in 0..n {
                     x1[i] = x[i] + lam * step[i];
                 }
+                project(&mut x1);
                 eval(&x1, &mut fvec);
                 if dt_violated() {
                     return (false, false);
@@ -3681,6 +3697,14 @@ pub fn solve_nls(
     // `functionInitialEquations` sets `discreteCall` too, so an initial system starts
     // from `nlsx`: its extrapolation is still zeroes, and the equidistant homotopy
     // hands each lambda step the previous one's solution through the unknowns.
+    // C's `solveNLS`: a hand guided tearing system starts within its bounds.
+    if spec.hgt_bounds {
+        for v in [&mut guess, &mut nlsx_old] {
+            for i in 0..n {
+                v[i] = v[i].max(bounds[2 * i]).min(bounds[2 * i + 1]);
+            }
+        }
+    }
     let mut x = if saved_rel_fresh != 0 { nlsx_old.clone() } else { guess.clone() };
     // C's `relationsPreBackup`; `updateInnerEquation` primes at `nlsx`. C gates it on
     // `discreteCall`, which `functionInitialEquations` also sets, so an initial system
@@ -3918,7 +3942,7 @@ pub fn solve_nls(
                         if !skip_newton {
                             (converged, settled) = newton_c(
                                 n, &mut x, &nominal, &bounds, &mut res_scaling, &mut nlsx, &mut eval, &mut jaceval,
-                                has_jac, newton_trace, casual,
+                                has_jac, newton_trace, casual, spec.hgt_bounds,
                             );
                             newton_trace = trace.map(|_| &t_again);
                             if !converged {
@@ -3996,7 +4020,7 @@ pub fn solve_nls(
                         x.copy_from_slice(&guess);
                         converged = newton_c(
                             n, &mut x, &nominal, &bounds, &mut res_scaling, &mut nlsx, &mut eval, &mut jaceval,
-                            has_jac, None, casual,
+                            has_jac, None, casual, spec.hgt_bounds,
                         )
                         .0;
                     }

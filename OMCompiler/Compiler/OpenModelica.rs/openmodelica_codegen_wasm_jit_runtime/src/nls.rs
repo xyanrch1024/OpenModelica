@@ -1092,6 +1092,7 @@ pub extern "C" fn rt_solve_nls(
         sys_num: nls_sys_number(hist_addr),
         nominal: &nominal,
         bounds: &bounds,
+        hgt_bounds: false,
         pattern: &pattern,
         has_jacobian,
     };

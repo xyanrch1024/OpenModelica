@@ -429,6 +429,8 @@ pub fn initialize_nonlinear_systems(data: *mut DATA, thread_data: *mut threadDat
         sys.nominal = crate::model_data::calloc(size.max(1));
         sys.min = crate::model_data::calloc(size.max(1));
         sys.max = crate::model_data::calloc(size.max(1));
+        // Set by `initializeStaticNLSData` for hand guided tearing.
+        sys.hgtBounds = 0;
         if let Some(f) = sys.initializeStaticNLSData {
             unsafe { f(data, thread_data, sys, 1, 1) };
         }
@@ -654,6 +656,7 @@ pub extern "C" fn solve_nonlinear_system(
         sys_num: sys_number as u32,
         nominal: &nominal,
         bounds: &bounds,
+        hgt_bounds: sys.hgtBounds != 0,
         pattern: if csc || full_pattern { &sd.pattern } else { &[] },
         has_jacobian,
     };
@@ -681,6 +684,7 @@ pub extern "C" fn solve_nonlinear_system(
     if let Some(f) = sys.getIterationVars {
         unsafe { f(data, sys.nlsx) };
     }
+    let ret = if ret != 1 && sys.hgtBounds != 0 && !hgt_bounds_hold(sys, &nominal, &bounds) { 1 } else { ret };
     sys.solved = if ret == 1 { NLS_FAILED } else { NLS_SOLVED };
     sys.numberOfCall += 1;
     if ret == 1 {
@@ -689,6 +693,31 @@ pub extern "C" fn solve_nonlinear_system(
     si.noThrowDivZero = 0;
     si.solveContinuous = 0;
     check_nonlinear_solution(data, 1, sys_number)
+}
+
+/// C's `checkHGTBounds`: whether the solution of a hand guided tearing system,
+/// which any solver may have found, is within the min/max attributes of its
+/// iteration variables.
+fn hgt_bounds_hold(sys: &NONLINEAR_SYSTEM_DATA, nominal: &[f64], bounds: &[f64]) -> bool {
+    for i in 0..nominal.len() {
+        let x = unsafe { *sys.nlsx.add(i) };
+        let tol = 1e-8 * nominal[i].abs().max(1.0);
+        if x < bounds[2 * i] - tol || x > bounds[2 * i + 1] + tol {
+            let names = nls::var_names(sys.equationIndex as u32);
+            omclog::warning!(
+                omclog::STDOUT,
+                false,
+                "Non-linear system {}: the solution {} = {} is outside of the hand guided tearing bounds [{}, {}], the system is not solved.",
+                sys.equationIndex,
+                names.get(i).map_or("?", |n| n.as_str()),
+                openmodelica_sim_meta::driver::format_g(x, 6),
+                openmodelica_sim_meta::driver::format_g(bounds[2 * i], 6),
+                openmodelica_sim_meta::driver::format_g(bounds[2 * i + 1], 6),
+            );
+            return false;
+        }
+    }
+    true
 }
 
 /// C's `check_nonlinear_solution` for one system.

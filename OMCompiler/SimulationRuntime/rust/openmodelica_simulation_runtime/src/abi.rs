@@ -312,6 +312,7 @@ pub struct NONLINEAR_SYSTEM_DATA {
     pub min: *mut modelica_real,
     pub max: *mut modelica_real,
     pub nominal: *mut modelica_real,
+    pub hgtBounds: modelica_boolean,
     pub analyticalJacobianColumn: jacobianColumn_func_ptr,
     pub initialAnalyticalJacobian: initialAnalyticalJacobian_func_ptr,
     pub jacobianIndex: modelica_integer,

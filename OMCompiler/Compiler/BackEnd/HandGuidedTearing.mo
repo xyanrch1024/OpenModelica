@@ -405,38 +405,10 @@ algorithm
   end for;
 end allIterationVariables;
 
-function specNames
-  "Returns the names of the residual equations and of the iteration variables."
-  input BackendDAE.HGTSpec spec;
-  output UnorderedMap<String, Boolean> residuals;
-  output UnorderedMap<String, Boolean> variables;
-algorithm
-  residuals := UnorderedMap.new<Boolean>(stringHashDjb2, stringEq);
-  variables := UnorderedMap.new<Boolean>(stringHashDjb2, stringEq);
-
-  for r in spec.residuals loop
-    UnorderedMap.add(r.name, true, residuals);
-  end for;
-
-  for v in allIterationVariables(spec) loop
-    UnorderedMap.add(crefString(v.name), true, variables);
-  end for;
-end specNames;
-
 function crefString
   input DAE.ComponentRef cref;
   output String str = ComponentReference.crefStr(cref);
 end crefString;
-
-function isNested
-  input DAE.HGTIterationVariable var;
-  output Boolean nested = var.level > 1;
-end isNested;
-
-function isNestedResidual
-  input DAE.HGTResidual residual;
-  output Boolean nested = residual.level > 1;
-end isNestedResidual;
 
 function hasMinMax
   input DAE.HGTIterationVariable var;

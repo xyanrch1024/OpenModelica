@@ -349,8 +349,6 @@ level 更高的项会在外层块的内部构成一个**嵌套的撕裂系统**�
 - 检查相关：`checkPresence`、`checkUnpairedCounts`、`checkDependence`、`checkResidualCounts`、`checkBound`
 - 输出：`dumpComponents`
 
-`specNames`、`isNested`、`isNestedResidual` 目前没有被调用。
-
 ### 4.7 迭代变量的 min/max
 
 - `iterationVariableBounds(shared)` 返回每个带 min 或 max 的迭代变量 `(cref, min, max)`。
@@ -476,7 +474,6 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | 643 | 错误 | 未配对变量绑不到同一 level 的未配对残差 |
 | 644 | 错误 | 残差方程不依赖它的迭代变量 |
 | 645 | 警告 | 模型有状态变量（只保证稳态） |
-| 646 | 警告 | 已不再使用（B1 遗留，嵌套层已实现） |
 | 647 | 警告 | min/max 依赖变量（自适应界未实现），已忽略 |
 | 648 | 错误 | HGT 撕裂失败，附原因 |
 | 649 | 错误 | 块中残差数超过 `--hgtAllowMultipleResiduals` 的限制（R9） |

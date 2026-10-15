@@ -1216,8 +1216,6 @@ public constant ErrorTypes.Message HGT_RESIDUAL_INDEPENDENT = ErrorTypes.MESSAGE
   "The hand guided tearing residual equation '%s' does not depend on its iteration variable %s.");
 public constant ErrorTypes.Message HGT_ONLY_STEADY_STATE = ErrorTypes.MESSAGE(645, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),
   "Hand guided tearing is only supported for steady-state models, using it for a model with states is untested and has undefined behavior.");
-public constant ErrorTypes.Message HGT_LEVEL_NOT_SUPPORTED = ErrorTypes.MESSAGE(646, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),
-  "Nested hand guided tearing (level > 1) is not supported yet, all levels are torn as level 1.");
 public constant ErrorTypes.Message HGT_MIN_MAX_NOT_SUPPORTED = ErrorTypes.MESSAGE(647, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),
   "The %s attribute of the hand guided tearing iteration variable %s depends on variables (%s). Such adaptive bounds are not supported yet and are ignored.");
 public constant ErrorTypes.Message HGT_TEARING_FAILED = ErrorTypes.MESSAGE(648, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),

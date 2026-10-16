@@ -703,6 +703,9 @@ pub extern "C" fn solve_nonlinear_system(
     let _quiet = crate::support::QuietSystem::new(sys.logActive);
     let size = sys.size.max(0) as usize;
     let time = unsafe { (**(*data).localData).timeValue };
+    // A failure that a nested system reports during a trial of this one is
+    // recovered when this solve succeeds, as C's `longjmp` is caught here.
+    let fail_slot_on_entry = unsafe { nls_fail_slot };
 
     // C's `noThrowDivZero`, raised over the solve and lowered at its end — which is
     // the only place a run lowers it again.
@@ -808,6 +811,9 @@ pub extern "C" fn solve_nonlinear_system(
     }
     let ret = if ret != 1 && sys.hgtBounds != 0 && !hgt_bounds_hold(sys, &nominal, &bounds) { 1 } else { ret };
     sys.solved = if ret == 1 { NLS_FAILED } else { NLS_SOLVED };
+    if ret != 1 {
+        unsafe { nls_fail_slot = fail_slot_on_entry };
+    }
     sys.numberOfCall += 1;
     if let Some(csv) = sd.csv.as_mut() {
         let stat = openmodelica_solvers::sysstat::systems()

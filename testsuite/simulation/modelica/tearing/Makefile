@@ -8,6 +8,7 @@ HGTLevel1.mos \
 HGTLevel2.mos \
 HGTNetwork1.mos \
 HGTPair1.mos \
+HGTParallel1.mos \
 HGTPair2.mos \
 HGTPlant1.mos \
 HGTSolve1.mos \

@@ -59,6 +59,7 @@ import BackendDAETransform;
 import BackendEquation;
 import BackendVariable;
 import ComponentReference;
+import ComponentReferenceBasics;
 import ElementSource;
 import Error;
 import Expression;
@@ -406,8 +407,10 @@ algorithm
 end allIterationVariables;
 
 function crefString
+  "With subscripts: the items of the elements of a component array differ only
+   in them."
   input DAE.ComponentRef cref;
-  output String str = ComponentReference.crefStr(cref);
+  output String str = ComponentReferenceBasics.printComponentRefStr(cref);
 end crefString;
 
 function hasMinMax
@@ -738,7 +741,9 @@ end matchSystem;
 
 function checkResidualCounts
   "R9, OCT option allow_multiple_residuals_in_hgt_blocks: checks the number of
-   residual equations of each level in the hand guided tearing blocks."
+   residual equations of the hand guided tearing blocks. Only the lowest level of
+   a block is checked here; the residual equations of higher levels are spread
+   over the nested blocks, which Tearing.handGuidedTearing checks."
   input BackendDAE.StrongComponents comps;
   input BackendDAE.EqSystem syst;
   input BackendDAE.HGTSpec spec;
@@ -781,13 +786,15 @@ algorithm
       end if;
     end for;
 
-    for l in UnorderedMap.keyList(counts) loop
-      if UnorderedMap.getOrFail(l, counts) > 1 and (allow == "false" or l > 1) then
-        Error.addMessage(Error.HGT_MULTIPLE_RESIDUALS, {intString(l), intString(UnorderedMap.getOrFail(l, counts)),
-          UnorderedMap.getOrFail(l, names), allow});
+    if not UnorderedMap.isEmpty(counts) then
+      level := List.fold(UnorderedMap.keyList(counts), intMin, listHead(UnorderedMap.keyList(counts)));
+
+      if UnorderedMap.getOrFail(level, counts) > 1 and (allow == "false" or level > 1) then
+        Error.addMessage(Error.HGT_MULTIPLE_RESIDUALS, {intString(level), intString(UnorderedMap.getOrFail(level, counts)),
+          UnorderedMap.getOrFail(level, names), allow});
         fail();
       end if;
-    end for;
+    end if;
   end for;
 end checkResidualCounts;
 

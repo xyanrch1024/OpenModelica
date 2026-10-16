@@ -5782,6 +5782,7 @@ algorithm
   end if;
 
   user_rows := List.flatten(list(map_eqn_row[i] for i in outer_res));
+  hgtCheckResidualCount(level, outer_res, eindex, isyst);
 
   discrete_vars := findDiscrete(var_lst);
   tvars := outer_tvars;
@@ -5915,6 +5916,23 @@ algorithm
     print("Automatically added: " + intString(listLength(auto_rows)) + "\n\n");
   end if;
 end handGuidedTearing;
+
+protected function hgtCheckResidualCount
+  "R9 for a nested block (HandGuidedTearing.checkResidualCounts checks the
+   outermost one): the number of residual equations of its own level."
+  input Integer level;
+  input list<Integer> residuals "local indices";
+  input list<Integer> eindex;
+  input BackendDAE.EqSystem syst;
+protected
+  String allow = Flags.getConfigString(Flags.HGT_ALLOW_MULTIPLE_RESIDUALS);
+algorithm
+  if listLength(residuals) > 1 and (allow == "false" or (allow == "level1" and level > 1)) then
+    Error.addMessage(Error.HGT_MULTIPLE_RESIDUALS, {intString(level), intString(listLength(residuals)),
+      hgtResidualNames(residuals, eindex, syst), allow});
+    fail();
+  end if;
+end hgtCheckResidualCount;
 
 protected function hgtSplitLevel
   "Splits items into the ones of the given level and the ones of higher levels."

@@ -566,7 +566,7 @@ public constant ErrorTypes.Message FUNCTION_RETURNS_META_ARRAY = ErrorTypes.MESS
 public constant ErrorTypes.Message ASSIGN_UNKNOWN_ERROR = ErrorTypes.MESSAGE(244, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "Failed to elaborate assignment for some unknown reason: %1 := %2. File a bug report and we will make sure this error gets a better message in the future.");
 public constant ErrorTypes.Message WARNING_DEF_USE = ErrorTypes.MESSAGE(245, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
-  "%s was used before it was defined (given a value). Additional such uses may exist for the variable, but some messages were suppressed.");
+  "'%s' is used uninitialized and may cause unexpected behaviour. This is deprecated and will become an error in future releases.");
 public constant ErrorTypes.Message EXP_TYPE_MISMATCH = ErrorTypes.MESSAGE(246, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "Expression '%1' has type %3, expected type %2.");
 public constant ErrorTypes.Message PACKAGE_ORDER_DUPLICATES = ErrorTypes.MESSAGE(247, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
@@ -744,7 +744,7 @@ public constant ErrorTypes.Message TERMINATE_TRIGGERED = ErrorTypes.MESSAGE(333,
 public constant ErrorTypes.Message EVAL_RECURSION_LIMIT_REACHED = ErrorTypes.MESSAGE(334, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "The recursion limit (--evalRecursionLimit=%s) was exceeded during evaluation of %s.");
 public constant ErrorTypes.Message UNASSIGNED_FUNCTION_OUTPUT = ErrorTypes.MESSAGE(335, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
-  "Output parameter %s was not assigned a value");
+  "Output parameter %s was not assigned a value. This is deprecated and will become an error in future releases.");
 public constant ErrorTypes.Message INVALID_WHEN_STATEMENT_CONTEXT = ErrorTypes.MESSAGE(336, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "A when-statement may not be used inside a function or a while, if, or for-clause.");
 public constant ErrorTypes.Message MISSING_FUNCTION_DERIVATIVE_NAME = ErrorTypes.MESSAGE(337, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
@@ -928,6 +928,8 @@ public constant ErrorTypes.Message SPATIAL_DISTRIBUTION_IGNORED_OUT0 = ErrorType
   "The first output of spatialDistribution may only be ignored if positiveVelocity is true.");
 public constant ErrorTypes.Message SPATIAL_DISTRIBUTION_IGNORED_OUT1 = ErrorTypes.MESSAGE(426, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "The second output of spatialDistribution may not be ignored.");
+public constant ErrorTypes.Message ELEMENT_IS_NOT_ALLOWED_IN_CONTEXT = ErrorTypes.MESSAGE(427, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+  "%s is not allowed in %s.");
 
 public constant ErrorTypes.Message INITIALIZATION_NOT_FULLY_SPECIFIED = ErrorTypes.MESSAGE(496, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
   "The initial conditions are not fully specified. %s.");
@@ -1096,6 +1098,18 @@ public constant ErrorTypes.Message MIXED_DETERMINED = ErrorTypes.MESSAGE(584, Er
   "The initialization problem of given system is mixed-determined. It is under- as well as overdetermined and the mixed-determination-index is too high. [index > %s]\nPlease checkout the option \"--maxMixedDeterminedIndex\" to simulate with a higher threshold or consider changing some initial equations, fixed variables and start values. Use -d=initialization for more information.");
 public constant ErrorTypes.Message STACK_OVERFLOW_DETAILED = ErrorTypes.MESSAGE(585, ErrorTypes.SCRIPTING(), ErrorTypes.ERROR(),
   "Stack overflow occurred while evaluating %s:\n%s");
+public constant ErrorTypes.Message OUT_OF_MEMORY_DETAILED = ErrorTypes.MESSAGE(628, ErrorTypes.SCRIPTING(), ErrorTypes.ERROR(),
+  "Out of memory while evaluating %s: %s.\n%s");
+public constant ErrorTypes.Message RECORD_ELEMENT_NOT_FOUND = ErrorTypes.MESSAGE(629, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+  "Expression %s of type %s has no record element named %s.");
+public constant ErrorTypes.Message UNITFUL_LITERAL_UNIT_CONFLICT = ErrorTypes.MESSAGE(630, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
+  "The unitful literal %s can not be converted to the unit \"%s\" of %s.");
+public constant ErrorTypes.Message UNITFUL_LITERAL_ABSOLUTE_VALUE = ErrorTypes.MESSAGE(631, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
+  "The unitful literal %s can only be converted to the unit \"%s\" of %s if it has an absoluteValue annotation.");
+public constant ErrorTypes.Message EVALUATED_ZERO_COEFFICIENT = ErrorTypes.MESSAGE(632, ErrorTypes.SYMBOLIC(), ErrorTypes.NOTIFICATION(),
+  "Evaluated the parameters %s, since an equation would be solved by dividing by zero otherwise. Changing them requires recompiling the model.");
+public constant ErrorTypes.Message NON_CAUSAL_BLOCK_CONNECTOR = ErrorTypes.MESSAGE(633, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
+  "Public connector %s in a block may only have variables that are input or output, but the following are neither: %s.");
 public constant ErrorTypes.Message NF_VECTOR_INVALID_DIMENSIONS = ErrorTypes.MESSAGE(586, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "Invalid dimensions %s in %s, no more than one dimension may have size > 1.");
 public constant ErrorTypes.Message NF_ARRAY_TYPE_MISMATCH = ErrorTypes.MESSAGE(587, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
@@ -1180,47 +1194,47 @@ public constant ErrorTypes.Message TEARING_NOT_WORTH_IT = ErrorTypes.MESSAGE(626
   "Tearing is skipped for linear strong component %s: solving it torn to %s iteration variables is estimated at %s flops against %s for the untorn system of size %s.");
 public constant ErrorTypes.Message TEARING_AMPLIFIES_ERROR = ErrorTypes.MESSAGE(627, ErrorTypes.SYMBOLIC(), ErrorTypes.NOTIFICATION(),
   "Tearing is skipped for linear strong component %s: substituting through its %s inner equations amplifies an error by 1e%s, which double precision cannot carry.");
-public constant ErrorTypes.Message HGT_UNKNOWN_FIELD = ErrorTypes.MESSAGE(628, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
+public constant ErrorTypes.Message HGT_UNKNOWN_FIELD = ErrorTypes.MESSAGE(8000, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
   "Unknown field '%s' in hand guided tearing annotation %s, it is ignored.");
-public constant ErrorTypes.Message HGT_INVALID_VALUE = ErrorTypes.MESSAGE(629, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+public constant ErrorTypes.Message HGT_INVALID_VALUE = ErrorTypes.MESSAGE(8001, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "Invalid value '%s' for '%s' in hand guided tearing annotation: %s.");
-public constant ErrorTypes.Message HGT_INVALID_ITERATION_VARIABLE = ErrorTypes.MESSAGE(630, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+public constant ErrorTypes.Message HGT_INVALID_ITERATION_VARIABLE = ErrorTypes.MESSAGE(8002, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "'%s' cannot be a hand guided tearing iteration variable: %s.");
-public constant ErrorTypes.Message HGT_DUPLICATE_EQUATION_NAME = ErrorTypes.MESSAGE(631, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+public constant ErrorTypes.Message HGT_DUPLICATE_EQUATION_NAME = ErrorTypes.MESSAGE(8003, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "The equation name '%s' is used by more than one equation.");
-public constant ErrorTypes.Message HGT_EQUATION_NAME_NOT_FOUND = ErrorTypes.MESSAGE(632, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+public constant ErrorTypes.Message HGT_EQUATION_NAME_NOT_FOUND = ErrorTypes.MESSAGE(8004, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "The hand guided tearing pair refers to the equation '%s', but no equation has that name (equations are named with __OpenModelica_HGT(name=...)).");
-public constant ErrorTypes.Message HGT_DUPLICATE_SPECIFICATION = ErrorTypes.MESSAGE(633, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+public constant ErrorTypes.Message HGT_DUPLICATE_SPECIFICATION = ErrorTypes.MESSAGE(8005, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "%s is given more than one hand guided tearing specification.");
-public constant ErrorTypes.Message HGT_CONTINUOUS_ATTRIBUTE_ON_LEVEL_ONE = ErrorTypes.MESSAGE(634, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+public constant ErrorTypes.Message HGT_CONTINUOUS_ATTRIBUTE_ON_LEVEL_ONE = ErrorTypes.MESSAGE(8006, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "The %s attribute '%s' of the hand guided tearing %s depends on continuous variables, which is only allowed on level 2 or higher.");
-public constant ErrorTypes.Message HGT_NOT_SUPPORTED = ErrorTypes.MESSAGE(635, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
+public constant ErrorTypes.Message HGT_NOT_SUPPORTED = ErrorTypes.MESSAGE(8007, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
   "The hand guided tearing annotation is ignored: %s.");
-public constant ErrorTypes.Message HGT_DISABLED = ErrorTypes.MESSAGE(636, ErrorTypes.TRANSLATION(), ErrorTypes.NOTIFICATION(),
+public constant ErrorTypes.Message HGT_DISABLED = ErrorTypes.MESSAGE(8008, ErrorTypes.TRANSLATION(), ErrorTypes.NOTIFICATION(),
   "The model contains hand guided tearing annotations, which are ignored since --handGuidedTearing is not set.");
-public constant ErrorTypes.Message HGT_HOLD_NOT_SUPPORTED = ErrorTypes.MESSAGE(637, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
+public constant ErrorTypes.Message HGT_HOLD_NOT_SUPPORTED = ErrorTypes.MESSAGE(8009, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
   "The hold attribute of hand guided tearing is not supported yet and is ignored.");
-public constant ErrorTypes.Message HGT_EQUATION_LOST = ErrorTypes.MESSAGE(638, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+public constant ErrorTypes.Message HGT_EQUATION_LOST = ErrorTypes.MESSAGE(8010, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "The hand guided tearing equation '%s' %s while simplifying the model.");
-public constant ErrorTypes.Message HGT_EQUATION_REMOVED_BACKEND = ErrorTypes.MESSAGE(639, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+public constant ErrorTypes.Message HGT_EQUATION_REMOVED_BACKEND = ErrorTypes.MESSAGE(8011, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
   "The hand guided tearing equation '%s' was %s by the backend optimization.");
-public constant ErrorTypes.Message HGT_VARIABLE_REMOVED_BACKEND = ErrorTypes.MESSAGE(640, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+public constant ErrorTypes.Message HGT_VARIABLE_REMOVED_BACKEND = ErrorTypes.MESSAGE(8012, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
   "The hand guided tearing iteration variable %s was eliminated by the backend optimization, it is no longer an unknown of the system.");
-public constant ErrorTypes.Message HGT_NOT_SAME_SYSTEM = ErrorTypes.MESSAGE(641, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+public constant ErrorTypes.Message HGT_NOT_SAME_SYSTEM = ErrorTypes.MESSAGE(8013, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
   "The residual equation '%s' and the iteration variable %s of a hand guided tearing pair are in different independent equation systems, so the residual equation does not depend on the iteration variable.");
-public constant ErrorTypes.Message HGT_UNPAIRED_COUNT = ErrorTypes.MESSAGE(642, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+public constant ErrorTypes.Message HGT_UNPAIRED_COUNT = ErrorTypes.MESSAGE(8014, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
   "Hand guided tearing level %s has %s unpaired residual equations but %s unpaired iteration variables.");
-public constant ErrorTypes.Message HGT_UNPAIRED_NOT_BOUND = ErrorTypes.MESSAGE(643, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+public constant ErrorTypes.Message HGT_UNPAIRED_NOT_BOUND = ErrorTypes.MESSAGE(8015, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
   "The unpaired hand guided tearing iteration variables %s cannot be paired with unpaired residual equations, since no unpaired residual equation of the same level depends on them.");
-public constant ErrorTypes.Message HGT_RESIDUAL_INDEPENDENT = ErrorTypes.MESSAGE(644, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+public constant ErrorTypes.Message HGT_RESIDUAL_INDEPENDENT = ErrorTypes.MESSAGE(8016, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
   "The hand guided tearing residual equation '%s' does not depend on its iteration variable %s.");
-public constant ErrorTypes.Message HGT_ONLY_STEADY_STATE = ErrorTypes.MESSAGE(645, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),
+public constant ErrorTypes.Message HGT_ONLY_STEADY_STATE = ErrorTypes.MESSAGE(8017, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),
   "Hand guided tearing is only supported for steady-state models, using it for a model with states is untested and has undefined behavior.");
-public constant ErrorTypes.Message HGT_MIN_MAX_NOT_SUPPORTED = ErrorTypes.MESSAGE(647, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),
+public constant ErrorTypes.Message HGT_MIN_MAX_NOT_SUPPORTED = ErrorTypes.MESSAGE(8019, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),
   "The %s attribute of the hand guided tearing iteration variable %s depends on variables (%s). Such adaptive bounds are not supported yet and are ignored.");
-public constant ErrorTypes.Message HGT_TEARING_FAILED = ErrorTypes.MESSAGE(648, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+public constant ErrorTypes.Message HGT_TEARING_FAILED = ErrorTypes.MESSAGE(8020, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
   "Hand guided tearing of the strong component with the residual equations {%s} failed: %s.");
-public constant ErrorTypes.Message HGT_MULTIPLE_RESIDUALS = ErrorTypes.MESSAGE(649, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+public constant ErrorTypes.Message HGT_MULTIPLE_RESIDUALS = ErrorTypes.MESSAGE(8021, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
   "The hand guided tearing block of level %s has %s residual equations {%s}, but --hgtAllowMultipleResiduals=%s allows only one.");
 
 public constant ErrorTypes.Message MATCH_SHADOWING = ErrorTypes.MESSAGE(5001, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),

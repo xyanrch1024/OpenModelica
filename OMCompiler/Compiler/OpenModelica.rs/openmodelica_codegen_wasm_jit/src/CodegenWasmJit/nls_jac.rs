@@ -9,15 +9,60 @@ pub(crate) fn jac_result_row(sv: &SimCodeVar::SimVar) -> Option<usize> {
     usize::try_from(sv.index).ok()
 }
 
+/// What the lowering asks about one Jacobian, several times per system. Keyed by
+/// address; the entry holds the `Arc`, so the address cannot be reused meanwhile.
+#[derive(Default)]
+struct JacFacts {
+    lowerable: Option<bool>,
+    column_vars: Option<Arc<Vec<metamodelica::Ref<SimCodeVar::SimVar>>>>,
+}
+
+thread_local! {
+    static JAC_FACTS: std::cell::RefCell<HashMap<*const SimCode::JacobianMatrix, (Arc<SimCode::JacobianMatrix>, JacFacts)>> =
+        std::cell::RefCell::new(HashMap::default());
+}
+
+/// Drops the [`JacFacts`] of a translation when it goes out of scope.
+pub(crate) struct JacFactsScope;
+
+impl Drop for JacFactsScope {
+    fn drop(&mut self) {
+        JAC_FACTS.with(|f| f.borrow_mut().clear());
+    }
+}
+
+fn jac_fact<T: Clone>(
+    jm: &Arc<SimCode::JacobianMatrix>,
+    get: impl Fn(&JacFacts) -> Option<T>,
+    set: impl FnOnce(&mut JacFacts, T),
+    compute: impl FnOnce() -> T,
+) -> T {
+    let key = Arc::as_ptr(jm);
+    if let Some(v) = JAC_FACTS.with(|f| f.borrow().get(&key).and_then(|(_, facts)| get(facts))) {
+        return v;
+    }
+    let v = compute();
+    JAC_FACTS.with(|f| {
+        let mut f = f.borrow_mut();
+        let entry = f.entry(key).or_insert_with(|| (jm.clone(), JacFacts::default()));
+        set(&mut entry.1, v.clone());
+    });
+    v
+}
+
 /// Every variable a Jacobian's column equations can reference, other than the
 /// seeds: the `$pDER` results and the temporaries. The old backend lists them in
 /// `columnVars`; the new backend leaves that empty and registers them (together
 /// with the seeds, which are filtered out here) in `crefsHT` only.
-pub(crate) fn jac_column_vars(jm: &SimCode::JacobianMatrix) -> Vec<SimCodeVar::SimVar> {
+pub(crate) fn jac_column_vars(jm: &Arc<SimCode::JacobianMatrix>) -> Arc<Vec<metamodelica::Ref<SimCodeVar::SimVar>>> {
+    jac_fact(jm, |f| f.column_vars.clone(), |f, v| f.column_vars = Some(v), || Arc::new(compute_jac_column_vars(jm)))
+}
+
+fn compute_jac_column_vars(jm: &SimCode::JacobianMatrix) -> Vec<metamodelica::Ref<SimCodeVar::SimVar>> {
     use openmodelica_backend_types::BackendDAE::VarKind;
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut out: Vec<SimCodeVar::SimVar> = Vec::new();
-    let mut push = |sv: &SimCodeVar::SimVar| {
+    let mut seen: HashSet<String> = HashSet::default();
+    let mut out: Vec<metamodelica::Ref<SimCodeVar::SimVar>> = Vec::new();
+    let mut push = |sv: &metamodelica::Ref<SimCodeVar::SimVar>| {
         if matches!(sv.varKind, VarKind::SEED_VAR) {
             return;
         }
@@ -36,7 +81,7 @@ pub(crate) fn jac_column_vars(jm: &SimCode::JacobianMatrix) -> Vec<SimCodeVar::S
 /// Every variable a Jacobian matrix lists, nothing dropped — what
 /// [`jac_column_vars`] filters. One it cannot name (an array slice) gets no slot,
 /// so [`jac_lowerable`] has to see it.
-pub(super) fn jac_listed_vars(jm: &SimCode::JacobianMatrix) -> Vec<SimCodeVar::SimVar> {
+pub(super) fn jac_listed_vars(jm: &SimCode::JacobianMatrix) -> Vec<metamodelica::Ref<SimCodeVar::SimVar>> {
     let columns = lst(&jm.columns).next().into_iter().flat_map(|c| lst(&c.columnVars).cloned());
     let ht = jm
         .crefsHT
@@ -50,10 +95,10 @@ pub(super) fn jac_listed_vars(jm: &SimCode::JacobianMatrix) -> Vec<SimCodeVar::S
 
 /// A cref's name with its final subscripts dropped, spelled as [`array_element_of`]
 /// spells an element's base.
-fn cref_base_name(cr: &Arc<DAE::ComponentRef>) -> Option<String> {
+fn cref_base_name(cr: &metamodelica::Ref<DAE::ComponentRef>) -> Option<String> {
     use DAE::ComponentRef as C;
     let mut base = String::new();
-    let mut node: &Arc<DAE::ComponentRef> = cr;
+    let mut node: &metamodelica::Ref<DAE::ComponentRef> = cr;
     loop {
         match &**node {
             C::CREF_IDENT { ident, .. } => {
@@ -77,7 +122,11 @@ fn cref_base_name(cr: &Arc<DAE::ComponentRef>) -> Option<String> {
 /// resolves to a scratch slot, and every column equation is one [`lower_equation`]
 /// handles and names nothing but those slots. An array-valued Jacobian needs the
 /// run-time loops the C template emits, so it keeps the numerical Jacobian instead.
-pub(crate) fn jac_lowerable(jm: &SimCode::JacobianMatrix) -> bool {
+pub(crate) fn jac_lowerable(jm: &Arc<SimCode::JacobianMatrix>) -> bool {
+    jac_fact(jm, |f| f.lowerable, |f, v| f.lowerable = Some(v), || compute_jac_lowerable(jm))
+}
+
+fn compute_jac_lowerable(jm: &SimCode::JacobianMatrix) -> bool {
     let Some(col) = lst(&jm.columns).next() else { return false };
     let listed = jac_listed_vars(jm);
     if lst(&jm.seedVars).chain(listed.iter()).any(|sv| sim_cref_key(&sv.name).is_err()) {
@@ -89,7 +138,7 @@ pub(crate) fn jac_lowerable(jm: &SimCode::JacobianMatrix) -> bool {
 /// One column equation of a symbolic Jacobian, against what [`lower_equation`]
 /// accepts: a differentiated algebraic loop is a `SES_LINEAR`, a differentiated
 /// external or table call a `SES_ALGORITHM`.
-fn jac_eq_lowerable(eq: &Arc<SimCode::SimEqSystem>) -> bool {
+fn jac_eq_lowerable(eq: &metamodelica::Ref<SimCode::SimEqSystem>) -> bool {
     use SimCode::SimEqSystem as E;
     match &**eq {
         // `lower_linear_system` needs either a usable `simJac` or the residuals of a
@@ -113,11 +162,11 @@ fn jac_eq_lowerable(eq: &Arc<SimCode::SimEqSystem>) -> bool {
 
 /// Every cref a Jacobian column equation names, `None` for a kind
 /// [`lower_equation`] does not handle at all.
-fn jac_eq_crefs(eq: &SimCode::SimEqSystem) -> Option<Vec<Arc<DAE::ComponentRef>>> {
+fn jac_eq_crefs(eq: &SimCode::SimEqSystem) -> Option<Vec<metamodelica::Ref<DAE::ComponentRef>>> {
     use SimCode::SimEqSystem as E;
     use openmodelica_backend_types::BackendDAE::WhenOperator as W;
     let mut out = Vec::new();
-    let exp = |e: &Arc<DAE::Exp>, out: &mut Vec<_>| -> bool {
+    let exp = |e: &metamodelica::Ref<DAE::Exp>, out: &mut Vec<_>| -> bool {
         match openmodelica_frontend_base::Expression::extractCrefsFromExp(e.clone()) {
             Ok(crs) => {
                 out.extend(lst(&crs).cloned());
@@ -138,8 +187,8 @@ fn jac_eq_crefs(eq: &SimCode::SimEqSystem) -> Option<Vec<Arc<DAE::ComponentRef>>
         E::SES_RESIZABLE_ASSIGN { .. } | E::SES_GENERIC_ASSIGN { .. } => Some(out),
         // `traverseDAEEquationsStmts` visits a statement's left-hand side too.
         E::SES_ALGORITHM { statements, .. } => {
-            let alg = Arc::new(DAE::Algorithm { statementLst: statements.clone() });
-            let exps = openmodelica_frontend_base::Algorithm::getAllExps(alg).ok()?;
+            let alg = metamodelica::Ref::new(DAE::Algorithm { statementLst: statements.clone() });
+            let exps = openmodelica_frontend_base::Algorithm::getAllExps(&alg).ok()?;
             lst(&exps).all(|e| exp(e, &mut out)).then_some(out)
         }
         E::SES_WHEN { conditions, whenStmtLst, elseWhen, .. } => {
@@ -176,12 +225,12 @@ fn jac_eq_crefs(eq: &SimCode::SimEqSystem) -> Option<Vec<Arc<DAE::ComponentRef>>
 /// The residual rows of the Jacobian's `JAC_VAR` result variables, in
 /// [`jac_column_vars`] order, iff they form a valid permutation of `0..n` (so the
 /// Jacobian rows can be placed unambiguously); otherwise `None`.
-fn nls_jac_result_rows(jm: &SimCode::JacobianMatrix, n: usize) -> Option<Vec<usize>> {
+fn nls_jac_result_rows(jm: &Arc<SimCode::JacobianMatrix>, n: usize) -> Option<Vec<usize>> {
     use openmodelica_backend_types::BackendDAE::VarKind;
     let rows: Vec<usize> = jac_column_vars(jm)
         .iter()
         .filter(|v| matches!(v.varKind, VarKind::JAC_VAR))
-        .map(jac_result_row)
+        .map(|v| jac_result_row(v))
         .collect::<Option<Vec<_>>>()?;
     let mut sorted = rows.clone();
     sorted.sort_unstable();
@@ -246,13 +295,13 @@ pub(super) fn nls_jac_usable(nlsystem: &SimCode::NonlinearSystem) -> bool {
 /// keeps its own type: C truncates the solver's `x` on write and widens on
 /// read. `Ok(None)` leaves naming the system to the caller.
 pub(crate) fn iteration_var_slot(
-    vars: &HashMap<String, SimSlot>,
-    start_slots: &HashMap<String, u32>,
-    cr: &Arc<DAE::ComponentRef>,
+    vars: &SlotMap,
+    start_slots: &KeyTable<StartSlot>,
+    cr: &metamodelica::Ref<DAE::ComponentRef>,
 ) -> Result<Option<IterSlot>> {
-    let key = sim_cref_key(cr)?;
+    let key = resolve_sim_key(cr, |k| vars.contains_key(k))?;
     if let Some(off) = key.strip_prefix("$START.").and_then(|k| start_slots.get(k)) {
-        return Ok(Some(IterSlot { off: *off, wty: WTy::F64 }));
+        return Ok(Some(IterSlot { off, wty: WTy::F64 }));
     }
     match vars.get(&key) {
         None => Ok(None),
@@ -291,7 +340,7 @@ fn sim_var_scalar_count(sv: &SimCodeVar::SimVar) -> Option<usize> {
 
 /// C's `numScalarElems(seedVars)`.
 pub(super) fn jac_seed_scalar_count(jm: &SimCode::JacobianMatrix) -> Option<usize> {
-    lst(&jm.seedVars).map(sim_var_scalar_count).sum()
+    svs(&jm.seedVars).map(sim_var_scalar_count).sum()
 }
 
 pub(super) fn nls_lambda_extra(nlsystem: &SimCode::NonlinearSystem) -> u32 {
@@ -302,7 +351,7 @@ pub(super) fn nls_lambda_extra(nlsystem: &SimCode::NonlinearSystem) -> u32 {
 /// carry their `res_index`, and the inner (torn) equations, into `inner`.
 pub(super) fn lin_residuals(
     lsystem: &SimCode::LinearSystem,
-    inner: &mut Vec<Arc<SimCode::SimEqSystem>>,
+    inner: &mut Vec<metamodelica::Ref<SimCode::SimEqSystem>>,
 ) -> Vec<NlsResidual> {
     use SimCode::SimEqSystem as E;
     let mut residuals = Vec::new();
@@ -350,9 +399,9 @@ pub(super) fn lin_jac_usable(lsystem: &SimCode::LinearSystem, n_res: Option<usiz
 /// [`collect_nls_jobs`] registers, so the region is always large enough.
 pub(super) fn nls_jac_scratch_f64(sim_code: &SimCode::SimCode) -> u32 {
     use SimCode::SimEqSystem as E;
-    let mut seen: HashSet<i32> = HashSet::new();
+    let mut seen: HashSet<i32> = HashSet::default();
     let mut total = 0u32;
-    let mut scan = |eqs: Vec<Arc<SimCode::SimEqSystem>>| {
+    let mut scan = |eqs: Vec<metamodelica::Ref<SimCode::SimEqSystem>>| {
         for e in &eqs_with_nested(&eqs) {
             if let E::SES_NONLINEAR { nlSystem, alternativeTearing, .. } = &**e {
                 // A dynamically torn component has two sets, each with its own Jacobian.
@@ -384,7 +433,7 @@ pub(super) fn nls_jac_scratch_f64(sim_code: &SimCode::SimCode) -> u32 {
 }
 
 /// Every clocked sub-partition equation, flattened.
-pub(super) fn clocked_eqs(sim_code: &SimCode::SimCode) -> Vec<Arc<SimCode::SimEqSystem>> {
+pub(super) fn clocked_eqs(sim_code: &SimCode::SimCode) -> Vec<metamodelica::Ref<SimCode::SimEqSystem>> {
     let mut out = Vec::new();
     for part in lst(&sim_code.clockedPartitions) {
         for sp in lst(&part.subPartitions) {
@@ -399,11 +448,11 @@ pub(super) fn clocked_eqs(sim_code: &SimCode::SimCode) -> Vec<Arc<SimCode::SimEq
 /// `nls_systems` is in [`collect_nls_jobs`] order, so offsets are assigned in the
 /// same order the jobs were.
 pub(super) fn build_nls_jac_infos(
-    nls_systems: &[Arc<SimCode::NonlinearSystem>],
+    nls_systems: &[metamodelica::Ref<SimCode::NonlinearSystem>],
     layout: &SimLayout,
     var_map: &mut SimVarMap,
 ) -> Result<HashMap<i32, NlsJacInfo>> {
-    let mut infos = HashMap::new();
+    let mut infos = HashMap::default();
     let mut cursor = layout.nls_jac_off;
     for sys in nls_systems {
         if !nls_jac_usable(sys) {
@@ -421,7 +470,7 @@ pub(super) fn build_nls_jac_infos(
             .map(|o| o.ok_or("CodegenWasmJit: nonlinear-system Jacobian is missing a residual row"))
             .collect::<Result<_>>()?;
         let seed_offs = info.seed_offs;
-        infos.insert(sys.index, NlsJacInfo { seed_offs, result_offs, slots });
+        infos.insert(sys.index, NlsJacInfo { seed_offs, result_offs, slots: Arc::new(slots.into_iter().collect()) });
     }
     finalize_array_groups(var_map)?;
     Ok(infos)
@@ -434,9 +483,9 @@ pub(crate) struct LinzPlan {
     /// `[A, B, C, D]` dimensions.
     pub(super) rows: [u32; 4],
     pub(super) cols: [u32; 4],
-    pub(super) jacs: [Option<Arc<SimCode::JacobianMatrix>>; 4],
+    pub(super) jacs: [Option<metamodelica::Ref<SimCode::JacobianMatrix>>; 4],
     /// A's adjoint (row) evaluator, when compiled bidirectionally.
-    pub(super) adj: Option<Arc<SimCode::JacobianMatrix>>,
+    pub(super) adj: Option<metamodelica::Ref<SimCode::JacobianMatrix>>,
     /// The shape each matrix really has (`symbolic_jacobians`), which differs from
     /// `rows`/`cols` when `DynamicOptimization` reshaped it for an `optimization`
     /// model. The slots and the results follow these.

@@ -13,7 +13,7 @@ pub(super) fn build_state_set_infos(
     use openmodelica_backend_types::BackendDAE::VarKind;
     let mut infos = Vec::new();
     let mut cursor = layout.stateset_off;
-    let real_slot = |var_map: &SimVarMap, cr: &Arc<DAE::ComponentRef>| -> Result<u32> {
+    let real_slot = |var_map: &SimVarMap, cr: &metamodelica::Ref<DAE::ComponentRef>| -> Result<u32> {
         let key = sim_cref_key(cr)?;
         let slot = var_map
             .vars
@@ -32,7 +32,7 @@ pub(super) fn build_state_set_infos(
         let register = |var_map: &mut SimVarMap, sv: &SimCodeVar::SimVar, cursor: &mut u32| -> Result<u32> {
             let off = *cursor;
             *cursor += 8;
-            Arc::make_mut(&mut var_map.vars).insert(sim_cref_key(&sv.name)?, SimSlot { off, wty: WTy::F64, negate: Neg::None, heap: false });
+            Arc::make_mut(&mut var_map.vars).insert(sim_cref_key(&sv.name)?, SimSlot { off, wty: WTy::F64, negate: Neg::None, heap: false, pre: 0 });
             Ok(off)
         };
 
@@ -44,7 +44,7 @@ pub(super) fn build_state_set_infos(
             .ok_or("CodegenWasmJit: state-set Jacobian seed columns are not a permutation")?;
 
         let mut result_offs = vec![u32::MAX; n_dummy as usize];
-        for sv in &jac_column_vars(jm) {
+        for sv in jac_column_vars(jm).iter() {
             let off = register(var_map, sv, &mut cursor)?;
             if matches!(sv.varKind, VarKind::JAC_VAR) {
                 let row = jac_result_row(sv)
@@ -68,7 +68,7 @@ pub(super) fn build_state_set_infos(
 
         // `$STATESET.A` is an `nStates × nCandidates` integer selection matrix.
         // a_offs is row-major (the driver reads `a_offs[row*nc+col]`).
-        let a_base_cref = openmodelica_frontend_dump::ComponentReferenceBasics::crefStripLastSubs(set.crA.clone())?;
+        let a_base_cref = openmodelica_frontend_dump::ComponentReferenceBasics::crefStripLastSubs(&set.crA)?;
         let a_base = sim_cref_key(&a_base_cref)?;
         let mut a_offs = Vec::new();
         for row in 1..=n_states {
@@ -101,11 +101,11 @@ pub(super) fn build_state_set_infos(
 pub(super) fn build_stateset_jac_fn(
     state_sets: &List<SimCode::StateSet>,
     var_map: &SimVarMap,
-    eq_index: &HashMap<i32, Arc<SimCode::SimEqSystem>>,
+    eq_index: &HashMap<i32, metamodelica::Ref<SimCode::SimEqSystem>>,
     by_name: &HashMap<String, FnInfo>,
     literals: &mut Literals,
 ) -> Result<we::Function> {
-    let mut eqs: Vec<Arc<SimCode::SimEqSystem>> = Vec::new();
+    let mut eqs: Vec<metamodelica::Ref<SimCode::SimEqSystem>> = Vec::new();
     for set in lst(state_sets) {
         for col in lst(&set.jacobianMatrix.columns) {
             eqs.extend(lst(&col.constantEqns).cloned());
@@ -118,13 +118,13 @@ pub(super) fn build_stateset_jac_fn(
 /// Slot of the state-set selection-matrix entry `A[row,col]` (1-based). The backend
 /// scalarizes `$STATESET{n}.A` either 2D (key `A[row][col]`) or flat row-major (key
 /// `A[k]`, `k = (row-1)*nCandidates + col`); try the 2D key first, then the flat one.
-fn stateset_a_slot<'a>(
-    var_map: &'a SimVarMap,
+fn stateset_a_slot(
+    var_map: &SimVarMap,
     a_base: &str,
     row: u32,
     col: u32,
     n_candidates: u32,
-) -> Option<&'a SimSlot> {
+) -> Option<SimSlot> {
     var_map.vars.get(&format!("{a_base}[{row}][{col}]")).or_else(|| {
         let k = (row - 1) * n_candidates + col;
         var_map.vars.get(&format!("{a_base}[{k}]"))
@@ -147,7 +147,7 @@ pub(super) fn stateset_diag_offsets(
     let mut offs = Vec::new();
     for set in lst(state_sets) {
         // `crA` names the first `A` element; strip its subscripts to the base `A`.
-        let base_cref = openmodelica_frontend_dump::ComponentReferenceBasics::crefStripLastSubs(set.crA.clone())?;
+        let base_cref = openmodelica_frontend_dump::ComponentReferenceBasics::crefStripLastSubs(&set.crA)?;
         let base = sim_cref_key(&base_cref)?;
         let n_candidates = set.nCandidates.max(0) as u32;
         for n in 1..=set.nStates.max(0) as u32 {
@@ -170,7 +170,7 @@ pub(super) fn stateset_diag_offsets(
 pub(super) fn lower_nonlinear_system(
     ctx: &mut FnCtx,
     nlsystem: &SimCode::NonlinearSystem,
-    _eq_index: &HashMap<i32, Arc<SimCode::SimEqSystem>>,
+    _eq_index: &HashMap<i32, metamodelica::Ref<SimCode::SimEqSystem>>,
 ) -> Result<()> {
     let job = *ctx
         .sim()?

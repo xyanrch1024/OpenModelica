@@ -199,6 +199,9 @@ void printOMEditUsage()
   fprintf(stderr, "  --NAPIProfiling=[true|false]  Enable profiling for the new JSON-based API.\n");
   fprintf(stderr, "                                Default: false.\n\n");
 
+  fprintf(stderr, "  --DarkMode=[true|false]       Start OMEdit with a dark palette. Overrides the\n");
+  fprintf(stderr, "                                Color Scheme setting of the Options dialog.\n\n");
+
   fprintf(stderr, "  --StyleSheet=<file>           Load an additional Qt stylesheet after\n");
   fprintf(stderr, "                                OMEdit's default stylesheet.\n\n");
 
@@ -238,10 +241,6 @@ int main(int argc, char *argv[])
   MMC_INIT();
   MMC_TRY_TOP()
   Q_INIT_RESOURCE(resource_omedit);
-#if QT_VERSION >= QT_VERSION_CHECK(5, 6, 0) && QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-  QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
-  QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
-#endif
 #ifdef Q_OS_LINUX
   qputenv("EGL_LOG_LEVEL", "fatal");
 #endif // #ifdef Q_OS_LINUX

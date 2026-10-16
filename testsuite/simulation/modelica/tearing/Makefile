@@ -131,8 +131,7 @@ DEPENDENCIES = \
 *.mo \
 *.mos \
 *.sh \
-Makefile \
-msl32-models.txt
+Makefile
 
 
 CLEAN = `ls | grep -w -v -f deps.tmp`

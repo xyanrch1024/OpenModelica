@@ -162,6 +162,11 @@ public constant Integer FMI_INTERNAL = 2;
 public constant Integer FMI_PROTECTED = 3;
 public constant Integer FMI_BLACKBOX = 4;
 
+// How much source code an FMU carries, see FMI_SOURCES
+public constant Integer FMI_SOURCES_NONE = 1;
+public constant Integer FMI_SOURCES_SLIM = 2;
+public constant Integer FMI_SOURCES_FULL = 3;
+
 // FMI version enum flags
 public constant Integer FMI_VERSION_10 = 10;
 public constant Integer FMI_VERSION_20 = 20;
@@ -603,7 +608,7 @@ constant ConfigFlag ANNOTATION_VERSION = CONFIG_FLAG(7, "annotationVersion",
 constant ConfigFlag LANGUAGE_STANDARD = CONFIG_FLAG(8, "std", NONE(), EXTERNAL(),
   ENUM_FLAG(1000,
     {("1.x", 10), ("2.x", 20), ("3.0", 30), ("3.1", 31), ("3.2", 32), ("3.3", 33),
-     ("3.4", 34), ("3.5", 35), ("3.6", 36), ("latest",1000), ("experimental", 9999)}),
+     ("3.4", 34), ("3.5", 35), ("3.6", 36), ("3.7", 37), ("latest",1000), ("experimental", 9999)}),
   NONE(),
   "Sets the language standard that should be used.");
 constant ConfigFlag SHOW_ERROR_MESSAGES = CONFIG_FLAG(9, "showErrorMessages",
@@ -776,7 +781,7 @@ constant ConfigFlag POST_OPT_MODULES = CONFIG_FLAG(16, "postOptModules",
   "Sets the post optimization modules to use in the back end. See --help=optmodules for more info.");
 constant ConfigFlag SIMCODE_TARGET = CONFIG_FLAG(17, "simCodeTarget",
   NONE(), EXTERNAL(), STRING_FLAG("C"),
-  SOME(STRING_OPTION({"None", "C", "C+Rust", "Cpp","omsicpp", "ExperimentalEmbeddedC", "ESP32", "JavaScript", "omsic", "XML", "MidC", "wasm-jit", "wasm"})),
+  SOME(STRING_OPTION({"None", "C", "C.old", "Cpp", "ExperimentalEmbeddedC", "ESP32", "JavaScript", "XML", "MidC", "wasm-jit", "wasm"})),
   "Sets the target language for the code generation.");
 constant ConfigFlag ORDER_CONNECTIONS = CONFIG_FLAG(18, "orderConnections",
   NONE(), EXTERNAL(), BOOL_FLAG(true), NONE(),
@@ -1272,14 +1277,21 @@ constant ConfigFlag FMI_FILTER = CONFIG_FLAG(134, "fmiFilter", NONE(), EXTERNAL(
     })),
   "Specifies which model variables are exposed by the modelDescription.xml");
 constant ConfigFlag FMI_SOURCES = CONFIG_FLAG(135, "fmiSources", NONE(), EXTERNAL(),
-  BOOL_FLAG(true), NONE(),
-  "Defines if FMUs will be exported with sources or not. --fmiFilter=blackBox might override this, because black box FMUs do never contain their source code.");
+  ENUM_FLAG(FMI_SOURCES_NONE, {("false", FMI_SOURCES_NONE), ("true", FMI_SOURCES_SLIM),
+                               ("slim", FMI_SOURCES_SLIM), ("full", FMI_SOURCES_FULL)}),
+  SOME(STRING_DESC_OPTION({
+    ("false", "The FMU carries no sources at all [default]."),
+    ("true", "Same as slim."),
+    ("slim", "The FMU carries the sources it was built from. Under --simCodeTarget=C that is a mix of C and Rust, and rebuilding needs cargo to fetch the Rust dependencies from crates.io."),
+    ("full", "As slim, plus a vendored copy of the Rust dependencies, so the FMU rebuilds without network access. Only differs from slim under --simCodeTarget=C.")
+    })),
+  "Defines how much source code FMUs will be exported with. --fmiFilter=blackBox might override this, because black box FMUs do never contain their source code.");
 constant ConfigFlag FMI_FLAGS = CONFIG_FLAG(136, "fmiFlags", NONE(), EXTERNAL(),
   STRING_LIST_FLAG({}), NONE(),
   "Add simulation flags to FMU. Will create <fmiPrefix>_flags.json in resources folder with given flags. Use --fmiFlags or --fmiFlags=none to disable [default]. Use --fmiFlags=default for the default simulation flags. To pass flags use e.g. --fmiFlags=s:cvode,nls:homotopy or --fmiFlags=path/to/yourFlags.json.");
 constant ConfigFlag FMU_CMAKE_BUILD = CONFIG_FLAG(137, "fmuCMakeBuild",
   NONE(), EXTERNAL(), BOOL_FLAG(true), NONE(),
-  "Configured and build FMU with CMake if true.");
+  "Deprecated and ignored. Source-code FMUs are always built with CMake.");
 constant ConfigFlag NEW_BACKEND = CONFIG_FLAG(138, "newBackend",
   NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
   "Activates experimental new backend for better array handling. This also activates the new frontend. [WIP]");
@@ -1328,7 +1340,7 @@ constant ConfigFlag DUMP_FLAT_MODEL = CONFIG_FLAG(145, "dumpFlatModel",
     ("translateResidualsDAE", "Show the result of the translateResidualsDAE API.")
   })),
   "Dumps the flat model at the given stages of the frontend.");
-constant ConfigFlag SIMULATION = CONFIG_FLAG(146, "simulation",
+constant ConfigFlag SIMULATION = CONFIG_FLAG(146, "simulate",
   SOME("u"), EXTERNAL(), BOOL_FLAG(false), NONE(),
   "Simulates the last model in the given Modelica file.");
 constant ConfigFlag OBFUSCATE = CONFIG_FLAG(147, "obfuscate",
@@ -1347,12 +1359,12 @@ constant ConfigFlag FMU_RUNTIME_DEPENDS = CONFIG_FLAG(148, "fmuRuntimeDepends",
     ("none",     "No runtime library dependencies are copied into the FMU."),
     ("modelica", "All modelica runtime library dependencies are copied into the FMU." +
                                  "System librarys located in '/lib*', '/usr/lib*' and '/usr/local/lib*' are excluded." +
-                                 "Needs --fmuCMakeBuild=true and CMake version >= 3.21."),
+                                 "Needs CMake version >= 3.21."),
     ("all",      "All runtime library dependencies are copied into the FMU." +
                                  "System librarys are copied as well." +
-                                 "Needs --fmuCMakeBuild=true and CMake version >= 3.21.")
+                                 "Needs CMake version >= 3.21.")
     })),
-  "Defines if runtime library dependencies are included in the FMU. Only used when compiler flag fmuCMakeBuild=true.");
+  "Defines if runtime library dependencies are included in the FMU.");
 constant ConfigFlag FRONTEND_INLINE = CONFIG_FLAG(149, "frontendInline",
   NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
   "Enables inlining of functions in the frontend.");
@@ -1446,16 +1458,19 @@ constant ConfigFlag TPL_OUTPUT_DIR = CONFIG_FLAG(170, "tplOutputDir",
 constant ConfigFlag FMU_DIRECTORY = CONFIG_FLAG(171, "fmuDirectory",
   NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
   "Write an exported FMU as an unzipped directory named <prefix>.fmu rather than\na zip file. An importer that reads a directory (OpenModelica's own does) then\npays neither the compression nor the extraction, which for a wasm FMU carrying a\nprecompiled artifact is most of what packing it costs. wasm FMUs only.");
-constant ConfigFlag HAND_GUIDED_TEARING = CONFIG_FLAG(172, "handGuidedTearing",
+constant ConfigFlag TPL_INTERFACE_DIR = CONFIG_FLAG(172, "tplInterfaceDir",
+  NONE(), EXTERNAL(), STRING_FLAG(""), NONE(),
+  "Directory searched before the current one for the interface files a Susan\n.tpl imports with 'import interface'.");
+constant ConfigFlag HAND_GUIDED_TEARING = CONFIG_FLAG(173, "handGuidedTearing",
   NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
   "Enables hand guided tearing, i.e. the __OpenModelica_HGT annotations that select\niteration variables and residual equations. Corresponds to the OCT option\nhand_guided_tearing. Like in OCT, only steady-state models are supported.");
-constant ConfigFlag ACCEPT_MODELON_HGT = CONFIG_FLAG(173, "acceptModelonHGT",
+constant ConfigFlag ACCEPT_MODELON_HGT = CONFIG_FLAG(174, "acceptModelonHGT",
   NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
   "Also reads the hand guided tearing part of __Modelon annotations, so that\nmodels written for OCT can be used without changes.");
-constant ConfigFlag HGT_MERGE_BLT_BLOCKS = CONFIG_FLAG(174, "hgtMergeBLTBlocks",
+constant ConfigFlag HGT_MERGE_BLT_BLOCKS = CONFIG_FLAG(175, "hgtMergeBLTBlocks",
   NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
   "Puts all hand guided tearing pairs and unpaired iteration variables and residual\nequations into the same BLT block. Corresponds to the OCT option merge_blt_blocks.");
-constant ConfigFlag HGT_ALLOW_MULTIPLE_RESIDUALS = CONFIG_FLAG(175, "hgtAllowMultipleResiduals",
+constant ConfigFlag HGT_ALLOW_MULTIPLE_RESIDUALS = CONFIG_FLAG(176, "hgtAllowMultipleResiduals",
   NONE(), EXTERNAL(), STRING_FLAG("level1"), SOME(
     STRING_DESC_OPTION({
     ("false", "Every hand guided tearing block may only have one residual equation."),

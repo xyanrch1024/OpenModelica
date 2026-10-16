@@ -186,7 +186,7 @@ algorithm
     // prepare a DAE
     DAE := BackendDAEUtil.copyBackendDAE(inBackendDAE);
     if debug then execStat("detectSparsePatternODE -> copy dae "); end if;
-    DAE := BackendDAEOptimize.collapseIndependentBlocks(DAE);
+    DAE := BackendDAEOptimize.collapseIndependentContinuousBlocks(DAE);
     if debug then execStat("detectSparsePatternODE -> collapse blocks "); end if;
     DAE := BackendDAEUtil.transformBackendDAE(DAE, SOME((BackendDAE.NO_INDEX_REDUCTION(), BackendDAE.EXACT())), NONE(), NONE());
     if debug then execStat("detectSparsePatternODE -> transform backend dae "); end if;
@@ -336,7 +336,7 @@ algorithm
     print("analytical Jacobians -> start generate system for matrix A time : " + realString(clock()) + "\n");
   end if;
   backendDAE2 := BackendDAEUtil.copyBackendDAE(inBackendDAE);
-  backendDAE2 := BackendDAEOptimize.collapseIndependentBlocks(backendDAE2);
+  backendDAE2 := BackendDAEOptimize.collapseIndependentContinuousBlocks(backendDAE2);
   backendDAE2 := BackendDAEUtil.transformBackendDAE(backendDAE2,SOME((BackendDAE.NO_INDEX_REDUCTION(),BackendDAE.EXACT())),NONE(),NONE());
   BackendDAE.DAE({BackendDAE.EQSYSTEM(orderedVars = v)},BackendDAE.SHARED(globalKnownVars = globalKnownVars)) := backendDAE2;
 
@@ -405,7 +405,7 @@ algorithm
   end if;
 
   backendDAE2 := BackendDAEUtil.copyBackendDAE(inBackendDAE);
-  backendDAE2 := BackendDAEOptimize.collapseIndependentBlocks(backendDAE2);
+  backendDAE2 := BackendDAEOptimize.collapseIndependentContinuousBlocks(backendDAE2);
   backendDAE2 := BackendDAEUtil.transformBackendDAE(backendDAE2,SOME((BackendDAE.NO_INDEX_REDUCTION(),BackendDAE.EXACT())),NONE(),NONE());
   BackendDAE.DAE({BackendDAE.EQSYSTEM(orderedVars = v)},BackendDAE.SHARED(globalKnownVars = globalKnownVars)) := backendDAE2;
 
@@ -3417,6 +3417,8 @@ algorithm
         (compeqns, compvars) := getStateSetCompVarEqns(inComps, marked, inEqns, inVars);
         // remove the state set equation
         compeqns := List.select(compeqns, removeStateSetEqn);
+        // the residuals are scalar, split the tuple equations
+        compeqns := List.flatten(list(splitTupleEquation(eq) for eq in compeqns));
         // remove the state candidates to geht the other vars
         hs := List.fold(crstates, BaseHashSet.add, HashSet.emptyHashSet());
         compvars := List.select1(compvars, removeStateSetStates, hs);
@@ -3526,6 +3528,33 @@ algorithm
     end if;
   end for;
 end getStateSetCompVarEqns;
+
+protected function splitTupleEquation
+  "Splits (a, b) = f(x) into a = f(x)[1]; b = f(x)[2], skipping wildcards."
+  input BackendDAE.Equation eqn;
+  output list<BackendDAE.Equation> eqns = {};
+protected
+  list<DAE.Exp> lhs, rhs;
+  DAE.Exp r;
+algorithm
+  _ := match eqn
+    case BackendDAE.COMPLEX_EQUATION(left = DAE.TUPLE(PR = lhs))
+      algorithm
+        rhs := BackendEquation.tupleElements(eqn.right, lhs);
+        for l in lhs loop
+          r :: rhs := rhs;
+          if not Expression.isWild(l) then
+            eqns := BackendEquation.generateEquation(l, r, eqn.source, eqn.attr) :: eqns;
+          end if;
+        end for;
+        eqns := listReverse(eqns);
+      then ();
+    else
+      algorithm
+        eqns := {eqn};
+      then ();
+  end match;
+end splitTupleEquation;
 
 protected function createResidualSetEquations
   input list<BackendDAE.Equation> iEqs;
@@ -4027,6 +4056,10 @@ algorithm
       then (exp,false,tpl);
     case (DAE.CALL(path = Absyn.IDENT(name = "previous")),_)
       then (exp,false,tpl);
+    case (DAE.CALL(path = Absyn.IDENT(name = "smooth")),_)
+      then (exp,true,tpl);
+    case (DAE.CALL(path = Absyn.IDENT(name = "noEvent")),_)
+      then (exp,true,tpl);
     case (DAE.CALL(expLst=expLst),_)
       algorithm
         // check if vars occurs not in argument list

@@ -40,7 +40,7 @@
 
 extern crate alloc;
 
-mod delay;
+pub mod delay;
 mod files;
 /// The run's model and `SimData`, for the analyses the nonlinear solver runs from
 /// inside a solve.
@@ -52,7 +52,7 @@ mod omclog;
 pub use nls::{
     rt_context_addr, rt_error_stage_addr, rt_nls_clean_history, rt_no_throw_div_zero_addr, rt_set_step_size,
 };
-mod spatial;
+pub mod spatial;
 // SUNDIALS/KLU. The archives are wasip1-only (they need a libc) and only linked
 // when the build script found them, so `cfg(sundials)` gates the calls; the module
 // itself compiles everywhere for its capability report.
@@ -108,6 +108,12 @@ pub extern "C" fn rt_set_solvers(nls: u32, nls_ls: u32, ls: u32, lss: u32) {
 #[unsafe(no_mangle)]
 pub extern "C" fn rt_set_newton_tuning(ftol: f64, xtol: f64, max_step_factor: f64) {
     openmodelica_solvers::solverflags::set_newton_tuning(ftol, xtol, max_step_factor);
+}
+
+/// `-newton` / `-noScaling` / `-stopAtSystem`, as `simflags::nls_option_codes`.
+#[unsafe(no_mangle)]
+pub extern "C" fn rt_set_nls_options(newton_strategy: u32, no_scaling: u32, stop_at_system: i32) {
+    openmodelica_solvers::solverflags::set_nls_options(newton_strategy, no_scaling, stop_at_system);
 }
 
 /// `-lvMaxWarn`, which caps warnings printed in-wasm.
@@ -180,11 +186,84 @@ use alloc::format;
 use alloc::string::String;
 use core::alloc::{GlobalAlloc, Layout};
 
-// dlmalloc is the global allocator on both targets so every allocation in the
+// dlmalloc is the heap on both targets so every allocation in the
 // merged module — runtime `rt_alloc`, and on wasip1 the driver's `Vec`s — shares
 // one heap. (It builds for wasip1 too.)
-#[global_allocator]
+#[cfg_attr(not(target_arch = "wasm32"), global_allocator)]
 static GLOBAL: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
+
+/// The Rust heap in wasm: `GLOBAL` behind size-class free lists, as `rt_alloc`
+/// has, for the solvers' per-call work vectors. Single-threaded, as `FREE`.
+#[cfg(target_arch = "wasm32")]
+mod rust_heap {
+    use super::{ALIGN, GLOBAL};
+    use core::alloc::{GlobalAlloc, Layout};
+
+    const CACHE_MAX: usize = 1024;
+    /// Class `c` holds blocks of `(c + 1) * ALIGN` bytes.
+    const CLASSES: usize = CACHE_MAX / ALIGN;
+
+    struct RustHeap(core::cell::UnsafeCell<[*mut u8; CLASSES]>);
+    unsafe impl Sync for RustHeap {}
+
+    #[global_allocator]
+    static RUST_HEAP: RustHeap = RustHeap(core::cell::UnsafeCell::new([core::ptr::null_mut(); CLASSES]));
+
+    /// Rust's own handler would print a bare "memory allocation failed".
+    #[inline]
+    fn checked(p: *mut u8, size: usize) -> *mut u8 {
+        if p.is_null() {
+            super::out_of_memory(size);
+        }
+        p
+    }
+
+    #[inline]
+    fn class(l: Layout) -> Option<usize> {
+        (l.size() <= CACHE_MAX && l.align() <= ALIGN).then(|| (l.size().max(1) - 1) / ALIGN)
+    }
+
+    unsafe impl GlobalAlloc for RustHeap {
+        #[inline]
+        unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+            let Some(c) = class(l) else { return checked(unsafe { GLOBAL.alloc(l) }, l.size()) };
+            let lists = unsafe { &mut *self.0.get() };
+            let head = lists[c];
+            if head.is_null() {
+                let p = unsafe { GLOBAL.alloc(Layout::from_size_align_unchecked((c + 1) * ALIGN, ALIGN)) };
+                return checked(p, l.size());
+            }
+            lists[c] = unsafe { *(head as *mut *mut u8) };
+            head
+        }
+
+        #[inline]
+        unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+            let Some(c) = class(l) else { return unsafe { GLOBAL.dealloc(p, l) } };
+            let lists = unsafe { &mut *self.0.get() };
+            unsafe { *(p as *mut *mut u8) = lists[c] };
+            lists[c] = p;
+        }
+
+        unsafe fn realloc(&self, p: *mut u8, l: Layout, new_size: usize) -> *mut u8 {
+            let new = unsafe { Layout::from_size_align_unchecked(new_size, l.align()) };
+            match (class(l), class(new)) {
+                (None, None) => checked(unsafe { GLOBAL.realloc(p, l, new_size) }, new_size),
+                (Some(a), Some(b)) if a == b => p,
+                _ => {
+                    let q = unsafe { self.alloc(new) };
+                    if !q.is_null() {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(p, q, l.size().min(new_size));
+                            self.dealloc(p, l);
+                        }
+                    }
+                    q
+                }
+            }
+        }
+    }
+}
 
 /// Abort into a wasm trap; on the host `cargo test` build (no wasm intrinsics)
 /// this is an ordinary unreachable — the numeric paths under test never hit it.
@@ -409,6 +488,24 @@ mod ext_report_hosted {
 #[cfg(all(target_os = "wasi", feature = "standalone"))]
 mod standalone;
 
+/// The WASI reactor entry point, which a host calls once after instantiation.
+/// Without a use of `__wasm_call_ctors`, wasm-ld ends every export in
+/// `__wasm_call_dtors`, a full stdio flush; C `stdout` is line-buffered instead.
+#[cfg(all(target_os = "wasi", not(feature = "standalone")))]
+#[unsafe(no_mangle)]
+pub extern "C" fn _initialize() {
+    unsafe extern "C" {
+        fn __wasm_call_ctors();
+        static stdout: *mut core::ffi::c_void;
+        fn setvbuf(f: *mut core::ffi::c_void, buf: *mut u8, mode: i32, size: usize) -> i32;
+    }
+    const IOLBF: i32 = 1;
+    unsafe {
+        __wasm_call_ctors();
+        setvbuf(stdout, core::ptr::null_mut(), IOLBF, 0);
+    }
+}
+
 #[cfg(all(target_os = "wasi", any(feature = "standalone", feature = "session")))]
 
 // The in-wasm session driver (`rt_sim_*`): the shared driver + daskr compiled
@@ -604,6 +701,17 @@ fn release_reserve() {
     }
 }
 
+/// `memory.grow` refused. Say so: the bare trap reads as a codegen fault.
+#[cold]
+#[inline(never)]
+fn out_of_memory(size: usize) -> ! {
+    release_reserve();
+    note_runtime_error(&alloc::format!(
+        "wasm-jit: out of memory. The simulation asked for {size} more bytes and its wasm linear memory cannot grow.",
+    ));
+    trap();
+}
+
 /// Recycling free lists in front of `dlmalloc`. Generated code allocates and frees
 /// one array/record per array/record-typed function local on every call (an IF97
 /// property evaluation does hundreds), so a same-size block is nearly always
@@ -647,18 +755,19 @@ pub extern "C" fn rt_alloc(size: u32) -> u32 {
             return head + HEADER as u32;
         }
     }
+    alloc_fresh(total, size)
+}
+
+/// Out of line so the recycling path above stays small enough to inline.
+#[inline(never)]
+fn alloc_fresh(total: usize, size: u32) -> u32 {
     let layout = Layout::from_size_align(total, ALIGN).expect("bad layout");
     // Off the recycling path: the first allocation of a size class comes through
     // here, so the reserve is armed long before the heap can fill.
     arm_reserve();
     let raw = unsafe { GLOBAL.alloc(layout) } as u32;
     if raw == 0 {
-        // `memory.grow` refused. Say so: the bare trap reads as a codegen fault.
-        release_reserve();
-        note_runtime_error(&alloc::format!(
-            "wasm-jit: out of memory. The simulation asked for {size} more bytes and its wasm linear memory cannot grow.",
-        ));
-        trap();
+        out_of_memory(size as usize);
     }
     unsafe { store_u32(raw, total as u32) };
     #[cfg(feature = "heap_stats")]
@@ -697,6 +806,11 @@ pub extern "C" fn rt_free(obj: u32) {
         lists[class] = raw;
         return;
     }
+    free_uncached(raw, total);
+}
+
+#[inline(never)]
+fn free_uncached(raw: u32, total: usize) {
     let layout = Layout::from_size_align(total, ALIGN).expect("bad layout");
     unsafe { GLOBAL.dealloc(raw as *mut u8, layout) };
 }
@@ -795,6 +909,9 @@ fn copy_kind(kind: u32, handle: u32) -> u32 {
     }
 }
 
+/// Largest array the 32-bit linear memory can hold, minus the object header.
+const MAX_ARRAY_BYTES: u64 = i32::MAX as u64 - 64;
+
 /// Round `n` up to the next multiple of 8 (element-area alignment).
 fn align8(n: u32) -> u32 {
     (n + 7) & !7
@@ -816,19 +933,40 @@ fn arr_data(obj: u32) -> u32 {
 /// partially filled array is safe.
 #[unsafe(no_mangle)]
 pub extern "C" fn rt_array_new(elem_kind: u32, ndims: u32, total: u32) -> u32 {
+    let obj = array_new_uninit(elem_kind, ndims, total);
+    // Zero the dim words and the element area (rt_alloc does not zero).
+    let size = arr_data_off(ndims) + total * elem_stride(elem_kind);
+    unsafe { core::ptr::write_bytes((obj + ARR_DIMS_OFF) as *mut u8, 0, (size - ARR_DIMS_OFF) as usize) };
+    obj
+}
+
+/// [`rt_array_new`] with the dim words and elements left for the caller to fill.
+fn array_new_uninit(elem_kind: u32, ndims: u32, total: u32) -> u32 {
     stat_inc(STAT_ARRAY_NEW);
     let data_off = arr_data_off(ndims);
-    let size = data_off + total * elem_stride(elem_kind);
-    let obj = rt_alloc(size);
+    let bytes = data_off as u64 + total as u64 * elem_stride(elem_kind) as u64;
+    if bytes > MAX_ARRAY_BYTES {
+        array_too_large(total, bytes);
+    }
+    let obj = rt_alloc(bytes as u32);
     unsafe {
         store_u32(obj, 1); // refcount
         store_u32(obj + ARR_KIND_OFF, elem_kind);
         store_u32(obj + ARR_NDIMS_OFF, ndims);
         store_u32(obj + ARR_TOTAL_OFF, total);
-        // Zero the dim words and the element area (rt_alloc does not zero).
-        core::ptr::write_bytes((obj + ARR_DIMS_OFF) as *mut u8, 0, (size - ARR_DIMS_OFF) as usize);
     }
     obj
+}
+
+/// Out of line: formatting the message would give every allocation a stack frame.
+#[cold]
+#[inline(never)]
+fn array_too_large(total: u32, bytes: u64) -> ! {
+    // Otherwise `size` wraps, or the allocator traps with no message.
+    note_runtime_error(&alloc::format!(
+        "wasm-jit: cannot allocate an array of {total} elements ({bytes} bytes); a dimension was computed from a value that is not a valid size."
+    ));
+    trap();
 }
 
 /// Set the size of dimension `axis` (0-based) of an array.
@@ -952,7 +1090,7 @@ pub extern "C" fn rt_array_copy(obj: u32) -> u32 {
     let kind = unsafe { load_u32(obj + ARR_KIND_OFF) };
     let ndims = rt_array_ndims(obj);
     let total = rt_array_total(obj);
-    let dup = rt_array_new(kind, ndims, total);
+    let dup = array_new_uninit(kind, ndims, total);
     for axis in 0..ndims {
         unsafe { store_u32(dup + ARR_DIMS_OFF + axis * 4, load_u32(obj + ARR_DIMS_OFF + axis * 4)) };
     }
@@ -1232,47 +1370,46 @@ pub extern "C" fn rt_array_cat(dim: u32, n: u32, handles: u32) -> u32 {
         rt_array_set_dim(result, a, d);
     }
 
-    let scratch = rt_alloc(ndims * 4); // per-axis source coordinate
+    // Row-major: each input is, per index over the axes before `axis`, one
+    // contiguous block, and the result lays those blocks side by side.
     let stride = elem_stride(kind);
     let heap = matches!(kind, EK_STR | EK_ARRAY | EK_RECORD);
+    let mut outer = 1u32;
+    for a in 0..axis {
+        outer *= rt_array_dim(first, a as i32 + 1);
+    }
     let dst_base = arr_data(result);
-    let mut off = 0u32; // running offset of this input along `axis`
+    // (source data, block bytes) per input.
+    let blocks = rt_alloc(n * 8);
     for c in 0..n {
         let src = unsafe { load_u32(hdata + c * 4) };
-        let src_total = rt_array_total(src);
-        let src_base = arr_data(src);
-        for e in 0..src_total {
-            // Decompose `e` into per-axis source coordinates (row-major).
-            let mut rem = e;
-            let mut a = ndims;
-            while a > 0 {
-                a -= 1;
-                let d = rt_array_dim(src, a as i32 + 1);
-                unsafe { store_u32(scratch + a * 4, rem % d) };
-                rem /= d;
-            }
-            // Shift the concatenation axis by this input's running offset.
-            let shifted = unsafe { load_u32(scratch + axis * 4) } + off;
-            unsafe { store_u32(scratch + axis * 4, shifted) };
-            // Recompose into the result linear index (row-major over result dims).
-            let mut r = 0u32;
-            for a in 0..ndims {
-                let rd = unsafe { load_u32(result + ARR_DIMS_OFF + a * 4) };
-                r = r * rd + unsafe { load_u32(scratch + a * 4) };
-            }
-            let sp = src_base + e * stride;
-            let dp = dst_base + r * stride;
+        unsafe {
+            store_u32(blocks + c * 8, arr_data(src));
+            store_u32(blocks + c * 8 + 4, if outer == 0 { 0 } else { rt_array_total(src) / outer * stride });
+        }
+    }
+    let mut dp = dst_base;
+    for o in 0..outer {
+        for c in 0..n {
+            let (sp, block) = unsafe { (load_u32(blocks + c * 8), load_u32(blocks + c * 8 + 4)) };
+            let sp = sp + o * block;
             unsafe {
-                core::ptr::copy_nonoverlapping(sp as *const u8, dp as *mut u8, stride as usize);
-                if heap {
-                    store_u32(dp, copy_kind(kind, load_u32(dp)));
+                if block == 8 {
+                    store_f64(dp, load_f64(sp));
+                } else {
+                    core::ptr::copy_nonoverlapping(sp as *const u8, dp as *mut u8, block as usize);
                 }
             }
+            dp += block;
         }
-        off += rt_array_dim(src, dim as i32);
     }
-
-    rt_free(scratch);
+    rt_free(blocks);
+    if heap {
+        for e in 0..total {
+            let p = dst_base + e * stride;
+            unsafe { store_u32(p, copy_kind(kind, load_u32(p))) };
+        }
+    }
     result
 }
 
@@ -1917,21 +2054,12 @@ fn ew_i32(x: i32, y: i32, op: u32) -> i32 {
     }
 }
 
-fn ew_f64(x: f64, y: f64, op: u32) -> f64 {
-    match op {
-        OP_ADD => x + y,
-        OP_SUB => x - y,
-        OP_MUL => x * y,
-        OP_DIV => x / y,
-        _ => libm::pow(x, y),
-    }
-}
-
-/// A fresh array with the same kind and dimensions as `obj`, zeroed data.
+/// A fresh array with the same kind and dimensions as `obj`, every element for
+/// the caller to write.
 fn array_like(obj: u32) -> u32 {
     let kind = unsafe { load_u32(obj + ARR_KIND_OFF) };
     let ndims = rt_array_ndims(obj);
-    let res = rt_array_new(kind, ndims, rt_array_total(obj));
+    let res = array_new_uninit(kind, ndims, rt_array_total(obj));
     for axis in 0..ndims {
         unsafe { store_u32(res + ARR_DIMS_OFF + axis * 4, load_u32(obj + ARR_DIMS_OFF + axis * 4)) };
     }
@@ -1954,12 +2082,40 @@ pub extern "C" fn rt_array_ew_i32(a: u32, b: u32, op: u32) -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn rt_array_ew_f64(a: u32, b: u32, op: u32) -> u32 {
     let res = array_like(a);
-    let (da, db, dr) = (arr_data(a), arr_data(b), arr_data(res));
-    for i in 0..rt_array_total(a) {
-        let v = ew_f64(unsafe { load_f64(da + i * 8) }, unsafe { load_f64(db + i * 8) }, op);
-        unsafe { store_f64(dr + i * 8, v) };
+    let (x, y, r) = unsafe { (f64s(a), f64s(b), f64s_mut(res)) };
+    // One loop per operator, so each one vectorizes.
+    match op {
+        OP_ADD => map2(x, y, r, |p, q| p + q),
+        OP_SUB => map2(x, y, r, |p, q| p - q),
+        OP_MUL => map2(x, y, r, |p, q| p * q),
+        OP_DIV => map2(x, y, r, |p, q| p / q),
+        _ => map2(x, y, r, libm::pow),
     }
     res
+}
+
+/// The f64 elements of array `obj`.
+unsafe fn f64s<'a>(obj: u32) -> &'a [f64] {
+    unsafe { core::slice::from_raw_parts(arr_data(obj) as *const f64, rt_array_total(obj) as usize) }
+}
+
+/// [`f64s`] of an array nothing else refers to.
+unsafe fn f64s_mut<'a>(obj: u32) -> &'a mut [f64] {
+    unsafe { core::slice::from_raw_parts_mut(arr_data(obj) as *mut f64, rt_array_total(obj) as usize) }
+}
+
+#[inline(always)]
+fn map1(x: &[f64], r: &mut [f64], f: impl Fn(f64) -> f64) {
+    for (r, x) in r.iter_mut().zip(x) {
+        *r = f(*x);
+    }
+}
+
+#[inline(always)]
+fn map2(x: &[f64], y: &[f64], r: &mut [f64], f: impl Fn(f64, f64) -> f64) {
+    for ((r, x), y) in r.iter_mut().zip(x).zip(y) {
+        *r = f(*x, *y);
+    }
 }
 
 /// Broadcast a scalar over an i32-element array: `rev ? (s op a[i]) : (a[i] op s)`.
@@ -1979,10 +2135,32 @@ pub extern "C" fn rt_array_scalar_i32(a: u32, s: i32, op: u32, rev: u32) -> u32 
 #[unsafe(no_mangle)]
 pub extern "C" fn rt_array_scalar_f64(a: u32, s: f64, op: u32, rev: u32) -> u32 {
     let res = array_like(a);
+    let (x, r) = unsafe { (f64s(a), f64s_mut(res)) };
+    match (op, rev != 0) {
+        (OP_ADD, false) => map1(x, r, |p| p + s),
+        (OP_ADD, true) => map1(x, r, |p| s + p),
+        (OP_SUB, false) => map1(x, r, |p| p - s),
+        (OP_SUB, true) => map1(x, r, |p| s - p),
+        (OP_MUL, false) => map1(x, r, |p| p * s),
+        (OP_MUL, true) => map1(x, r, |p| s * p),
+        (OP_DIV, false) => map1(x, r, |p| p / s),
+        (OP_DIV, true) => map1(x, r, |p| s / p),
+        (_, false) => map1(x, r, |p| libm::pow(p, s)),
+        (_, true) => map1(x, r, |p| libm::pow(s, p)),
+    }
+    res
+}
+
+/// `a ./ s` in an equation: C's `division_alloc_real_array_scalar_sim`, the checks of
+/// `rt_div_sim` for every element (e.g. 0/0 is 0 during initialization).
+#[unsafe(no_mangle)]
+pub extern "C" fn rt_array_div_sim_f64(a: u32, s: f64, msg: u32, time: f64, initial: i32) -> u32 {
+    let res = array_like(a);
     let (da, dr) = (arr_data(a), arr_data(res));
     for i in 0..rt_array_total(a) {
         let x = unsafe { load_f64(da + i * 8) };
-        let v = if rev != 0 { ew_f64(s, x, op) } else { ew_f64(x, s, op) };
+        let q = x / s;
+        let v = if s == 0.0 || !q.is_finite() { nls::rt_div_sim(x, s, msg, time, initial) } else { q };
         unsafe { store_f64(dr + i * 8, v) };
     }
     res
@@ -2014,10 +2192,8 @@ pub extern "C" fn rt_array_not_i32(a: u32) -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn rt_array_neg_f64(a: u32) -> u32 {
     let res = array_like(a);
-    let (da, dr) = (arr_data(a), arr_data(res));
-    for i in 0..rt_array_total(a) {
-        unsafe { store_f64(dr + i * 8, -load_f64(da + i * 8)) };
-    }
+    let (x, r) = unsafe { (f64s(a), f64s_mut(res)) };
+    map1(x, r, |p| -p);
     res
 }
 
@@ -3262,7 +3438,7 @@ pub extern "C" fn rt_solve_lin_sparse(colptr: u32, rowidx: u32, values: u32, b_p
     let b = unsafe { core::slice::from_raw_parts_mut(b_ptr as *mut f64, n) };
 
     #[cfg(all(target_os = "wasi", feature = "inwasm_solve"))]
-    {
+    if inwasm_rsparse() {
         let a = rsparse::data::Sprs {
             nzmax: nnz,
             m: n,
@@ -3272,26 +3448,31 @@ pub extern "C" fn rt_solve_lin_sparse(colptr: u32, rowidx: u32, values: u32, b_p
             x: vals.to_vec(),
         };
         // order 2 = AMD on A'A (CSparse's LU ordering); tol 1.0 = partial pivoting.
-        match rsparse::lusol(&a, b, 2, 1.0) {
+        return match rsparse::lusol(&a, b, 2, 1.0) {
             Ok(()) => 0,
             Err(_) => 1,
+        };
+    }
+    // Densify + dense LU.
+    let mut dense = alloc::vec![0.0f64; n * n];
+    for col in 0..n {
+        for k in colp[col] as usize..colp[col + 1] as usize {
+            dense[col * n + rowi[k] as usize] = vals[k];
         }
     }
-    #[cfg(not(all(target_os = "wasi", feature = "inwasm_solve")))]
-    {
-        // No in-wasm rsparse (native interactive / no_std): densify + dense LU.
-        let mut dense = alloc::vec![0.0f64; n * n];
-        for col in 0..n {
-            for k in colp[col] as usize..colp[col + 1] as usize {
-                dense[col * n + rowi[k] as usize] = vals[k];
-            }
-        }
-        if nls::lu_solve(&dense, b, n) || nls::total_pivot_solve(&dense, b, n) {
-            0
-        } else {
-            1
-        }
+    if nls::lu_solve(&dense, b, n) || nls::total_pivot_solve(&dense, b, n) {
+        0
+    } else {
+        1
     }
+}
+
+/// Whether the uncached solves use in-wasm rsparse. A runtime that also links the
+/// host solver follows `rt_set_host_lin_solve`, and while that picks the host they
+/// keep the lean build's dense LU.
+#[cfg(all(target_os = "wasi", feature = "inwasm_solve"))]
+fn inwasm_rsparse() -> bool {
+    !(cfg!(feature = "host_lin_solve") && openmodelica_solvers::solverflags::host_lin_solve())
 }
 
 /// Solve `A x = b` from a dense column-major `A` (`a_ptr`, `n*n` f64) with the
@@ -3319,9 +3500,9 @@ pub extern "C" fn rt_solve_lin_dense_sparse(a_ptr: u32, b_ptr: u32, x_ptr: u32, 
     }
     let a = unsafe { core::slice::from_raw_parts(a_ptr as *const f64, n * n) };
 
+    let b = unsafe { core::slice::from_raw_parts_mut(b_ptr as *mut f64, n) };
     #[cfg(all(target_os = "wasi", feature = "inwasm_solve"))]
-    {
-        let b = unsafe { core::slice::from_raw_parts_mut(b_ptr as *mut f64, n) };
+    if inwasm_rsparse() {
         let mut p = alloc::vec![0isize; n + 1];
         let mut i = alloc::vec::Vec::new();
         let mut x = alloc::vec::Vec::new();
@@ -3336,20 +3517,16 @@ pub extern "C" fn rt_solve_lin_dense_sparse(a_ptr: u32, b_ptr: u32, x_ptr: u32, 
             p[col + 1] = i.len() as isize;
         }
         let sp = rsparse::data::Sprs { nzmax: i.len(), m: n, n, p, i, x };
-        match rsparse::lusol(&sp, b, 2, 1.0) {
+        return match rsparse::lusol(&sp, b, 2, 1.0) {
             Ok(()) => 0,
             Err(_) => 1,
-        }
+        };
     }
-    #[cfg(not(all(target_os = "wasi", feature = "inwasm_solve")))]
-    {
-        // No in-wasm rsparse: A is already dense column-major, solve directly.
-        let b = unsafe { core::slice::from_raw_parts_mut(b_ptr as *mut f64, n) };
-        if nls::lu_solve(a, b, n) || nls::total_pivot_solve(a, b, n) {
-            0
-        } else {
-            1
-        }
+    // A is already dense column-major: solve directly.
+    if nls::lu_solve(a, b, n) || nls::total_pivot_solve(a, b, n) {
+        0
+    } else {
+        1
     }
 }
 

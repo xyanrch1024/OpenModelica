@@ -556,7 +556,8 @@ end SparsityRow;
       PartitionData partitionData;
       Option<DaeModeData> daeModeData;
       list<SimEqSystem> inlineEquations;
-      Option<OMSIData> omsiData;
+      Boolean scalarized;
+      list<FmiFigure> fmiFigures;
     end SIMCODE;
   end SimCode;
 
@@ -635,25 +636,6 @@ end SparsityRow;
       list<ExtAlias> aliases;
     end EXTOBJINFO;
   end ExtObjInfo;
-
-  uniontype OMSIData
-    record OMSI_DATA
-      OMSIFunction initialization;
-      OMSIFunction simulation;
-    end OMSI_DATA;
-  end OMSIData;
-
-  uniontype OMSIFunction
-    record OMSI_FUNCTION
-      list<SimEqSystem> equations;
-      list<SimCodeVar.SimVar> inputVars;
-      list<SimCodeVar.SimVar> outputVars;
-      list<SimCodeVar.SimVar> innerVars;
-      Integer nAllVars;
-      SimCodeFunction.Context context;
-      Integer nAlgebraicSystems;
-    end OMSI_FUNCTION;
-  end OMSIFunction;
 
   uniontype SimEqSystem
     record SES_RESIDUAL
@@ -812,37 +794,7 @@ end SparsityRow;
     record SES_ALIAS
       Integer aliasOf;
     end SES_ALIAS;
-
-    record SES_ALGEBRAIC_SYSTEM
-      Integer index;
-      Integer algSysIndex;
-      Integer dim_n;
-      Boolean partOfMixed;
-      Boolean tornSystem;
-      Boolean linearSystem;
-      OMSIFunction residual;
-      Option<DerivativeMatrix> matrix;
-      list<Integer> zeroCrossingConditions;
-      list<DAE.ElementSource> sources;
-      BackendDAE.EquationAttributes eqAttr;
-    end SES_ALGEBRAIC_SYSTEM;
   end SimEqSystem;
-
-  uniontype DerivativeMatrix
-    "represents directional derivatives with sparsity and coloring"
-    record DERIVATIVE_MATRIX
-      list<OMSIFunction> columns;         // column(s) equations and variables
-                                          // inputVars:  seedVars
-                                          // innerVars:  inner column vars
-                                          // outputVars: result vars of the column
-
-      String matrixName;                  // unique matrix name
-      SparsityPattern sparsity;
-      SparsityPattern sparsityT;
-      list<list<Integer>> coloredCols;
-      Integer maxColorCols;
-    end DERIVATIVE_MATRIX;
-  end DerivativeMatrix;
 
   uniontype LinearSystem
     record LINEARSYSTEM
@@ -1279,6 +1231,8 @@ package SimCodeFunction
       String ctor_name;
       String name;
       list<Variable> variables;
+      Absyn.Path defPath;
+      Boolean usedExternally;
     end RECORD_DECL_ADD_CONSTRCTOR;
     record RECORD_DECL_DEF
       Absyn.Path path;
@@ -1312,6 +1266,7 @@ package SimCodeFunction
   uniontype Context
     record SIMULATION_CONTEXT
       Boolean genDiscrete;
+      Boolean whenBody;
     end SIMULATION_CONTEXT;
     record FUNCTION_CONTEXT
       String cref_prefix;
@@ -1336,13 +1291,11 @@ package SimCodeFunction
     end FMI_CONTEXT;
     record DAE_MODE_CONTEXT
     end DAE_MODE_CONTEXT;
-    record OMSI_CONTEXT
-      Option<HashTableCrefSimVar.HashTable> hashTable;
-    end OMSI_CONTEXT;
   end Context;
 
   constant Context contextSimulationNonDiscrete;
   constant Context contextSimulationDiscrete;
+  constant Context contextSimulationWhenBody;
   constant Context contextFunction;
   constant Context contextOther;
   constant Context contextAlgloopJacobian;
@@ -1354,12 +1307,11 @@ package SimCodeFunction
   constant Context contextOptimization;
   constant Context contextFMI;
   constant Context contextDAEmode;
-  constant Context contextOMSI;
   constant list<DAE.Exp> listExpLength1;
   constant list<SimCodeFunction.Variable> boxedRecordOutVars;
 end SimCodeFunction;
 
-package SimCodeUtil
+package SimCodeCodegenUtil
 
   function getHGTBound
     input SimCode.SimCode simCode;
@@ -1536,6 +1488,119 @@ package SimCodeUtil
     output Integer n;
   end numScalarElems;
 
+  function jacobianIndexExp
+    input SimCodeVar.SimVar var;
+    input HashTableCrefSimVar.HashTable ht;
+    output DAE.Exp exp;
+  end jacobianIndexExp;
+
+  function isDimensionParameter
+    input SimCodeVar.SimVar var;
+    output Boolean b;
+  end isDimensionParameter;
+
+  function isWholeArrayCref
+    input DAE.ComponentRef cref;
+    output Boolean b;
+  end isWholeArrayCref;
+
+  function isResizableSimVar
+    input SimCodeVar.SimVar var;
+    output Boolean b;
+  end isResizableSimVar;
+
+  function hasResizableVars
+    input SimCode.ModelInfo modelInfo;
+    output Boolean b;
+  end hasResizableVars;
+
+  function resizableFixedSize
+    input SimCode.ModelInfo modelInfo;
+    input Integer varType;
+    output Integer n;
+  end resizableFixedSize;
+
+  function resizableFixedStates
+    input SimCode.ModelInfo modelInfo;
+    output Integer n;
+  end resizableFixedStates;
+
+  function simVarDims
+    input SimCodeVar.SimVar var;
+    output list<DAE.Dimension> dims;
+  end simVarDims;
+
+  function jacobianResultVars
+    input SimCode.Sparsity sparsity;
+    input Option<HashTableCrefSimVar.HashTable> crefsHT;
+    output list<SimCodeVar.SimVar> vars;
+  end jacobianResultVars;
+
+  function hasSymbolicDims
+    input list<SimCodeVar.SimVar> vars;
+    output Boolean b;
+  end hasSymbolicDims;
+
+  function isSymbolicArrayVar
+    input SimCodeVar.SimVar var;
+    output Boolean b;
+  end isSymbolicArrayVar;
+
+  function jacobianOffsetVars
+    input HashTableCrefSimVar.HashTable ht;
+    input String kind;
+    output list<SimCodeVar.SimVar> vars;
+  end jacobianOffsetVars;
+
+  function jacobianOffsetSize
+    input list<SimCodeVar.SimVar> vars;
+    output Integer n;
+  end jacobianOffsetSize;
+
+  function simVarSizeExp
+    input SimCodeVar.SimVar var;
+    output DAE.Exp exp;
+  end simVarSizeExp;
+
+  function simVarDimExps
+    input SimCodeVar.SimVar var;
+    output list<DAE.Exp> exps;
+  end simVarDimExps;
+
+  function isWholeResizableArray
+    input DAE.ComponentRef cr;
+    input SimCodeVar.SimVar var;
+    output Boolean b;
+  end isWholeResizableArray;
+
+  function residualOffsetExp
+    input list<SimCode.SimEqSystem> eqs;
+    input Integer n;
+    output DAE.Exp exp;
+  end residualOffsetExp;
+
+  function numScalarElemsBeforeExp
+    input list<SimCodeVar.SimVar> vars;
+    input Integer n;
+    output DAE.Exp exp;
+  end numScalarElemsBeforeExp;
+
+  function numScalarElemsBefore
+    input list<SimCodeVar.SimVar> vars;
+    input Integer n;
+    output Integer numScalars;
+  end numScalarElemsBefore;
+
+  function numScalarElemsVar
+    input SimCodeVar.SimVar var;
+    output Integer n;
+  end numScalarElemsVar;
+
+  function arrayElementSubscripts
+    input SimCodeVar.SimVar var;
+    output list<String> subscripts;
+  end arrayElementSubscripts;
+
   function getFMIScalarVRs
     input SimCodeVar.SimVar var;
     input SimCode.SimCode simCode;
@@ -1551,11 +1616,6 @@ package SimCodeUtil
     input SimCode.SimCode simCode;
     output list<SimCode.FmiTerminal> terminals;
   end getFMI3Terminals;
-
-  function getFMI3Figures
-    input SimCode.SimCode simCode;
-    output list<SimCode.FmiFigure> figures;
-  end getFMI3Figures;
 
   function getFMI3VisualizationResource
     input SimCode.SimCode simCode;
@@ -1596,14 +1656,6 @@ package SimCodeUtil
   function fmiLsDaeVersion
     output String version;
   end fmiLsDaeVersion;
-
-  function getLocalValueReference
-    input SimCodeVar.SimVar inSimVar;
-    input SimCode.SimCode inSimCode;
-    input HashTableCrefSimVar.HashTable inCrefToSimVarHT;
-    input Boolean inElimNegAliases;
-    output String outValueReference;
-  end getLocalValueReference;
 
   function getVarIndexListByMapping
     input HashTableCrIListArray.HashTable iVarToArrayIndexMapping;
@@ -1697,16 +1749,60 @@ package SimCodeUtil
     output SimCode.SimCode code;
   end getSimCode;
 
+  function isSimulationCodegen
+    output Boolean simulation;
+  end isSimulationCodegen;
+
+  function timeEventTrigger
+    input DAE.Exp rel;
+    output Option<DAE.Exp> trigger;
+  end timeEventTrigger;
+
+  function isTimeEventRelation
+    input DAE.Exp rel;
+    output Boolean b;
+  end isTimeEventRelation;
+
   function cref2simvar
     input DAE.ComponentRef cref;
     input SimCode.SimCode simCode;
     output SimCodeVar.SimVar outSimVar;
   end cref2simvar;
 
+  function isJacobianColumnCref
+    input DAE.ComponentRef cr;
+    output Boolean b;
+  end isJacobianColumnCref;
+
   function isContiguousArrayCref
     input DAE.ComponentRef inCref;
+    input SimCodeFunction.Context context;
     output Boolean outContiguous;
   end isContiguousArrayCref;
+
+  function contiguousSliceStart
+    input list<DAE.Subscript> subs;
+    input list<DAE.Dimension> dims;
+    output list<DAE.Subscript> start;
+  end contiguousSliceStart;
+
+  function contiguousSliceDims
+    input list<DAE.Subscript> subs;
+    input list<DAE.Dimension> dims;
+    output list<Integer> sliceDims;
+  end contiguousSliceDims;
+
+  function stackArrayLength
+    input SimCodeFunction.Variable var;
+    input SimCodeFunction.Function fn;
+    output Integer n;
+  end stackArrayLength;
+
+  function simVarExactFromHT
+    input DAE.ComponentRef inCref;
+    input HashTableCrefSimVar.HashTable crefToSimVarHT;
+    output Option<SimCodeVar.SimVar> outSimVar;
+  end simVarExactFromHT;
 
   function simVarFromHT
     input DAE.ComponentRef inCref;
@@ -1720,23 +1816,16 @@ package SimCodeUtil
     output SimCodeFunction.Context outContext;
   end createJacContext;
 
-  function localCref2SimVar
-    input DAE.ComponentRef inCref;
-    input HashTableCrefSimVar.HashTable inCrefToSimVarHT;
-    output SimCodeVar.SimVar outSimVar;
-  end localCref2SimVar;
-
-  function localCref2Index
-    input DAE.ComponentRef inCref;
-    input HashTableCrefSimVar.HashTable inCrefToSimVarHT;
-    output String outIndex;
-  end localCref2Index;
-
   function codegenExpSanityCheck
     input DAE.Exp inExp;
     input SimCodeFunction.Context context;
     output DAE.Exp outExp;
   end codegenExpSanityCheck;
+
+  function unboxFunctionReferenceCall
+    input DAE.Exp inExp;
+    output DAE.Exp outExp;
+  end unboxFunctionReferenceCall;
 
   function selectScalarLiteralAssignments
     input list<SimCode.SimEqSystem> inEqs;
@@ -1765,6 +1854,11 @@ package SimCodeUtil
     output Integer vr;
   end lookupVR;
 
+  function isFMUSimCode
+    input SimCode.SimCode simCode;
+    output Boolean isFMU;
+  end isFMUSimCode;
+
   function lookupVRForRealOutputDerivative
     input DAE.ComponentRef cr;
     input SimCode.SimCode simCode;
@@ -1788,6 +1882,12 @@ package SimCodeUtil
     output Boolean b ;
   end jacobianColumnsAreEmpty;
 
+  function stripAsubIfNoIter
+    input DAE.Exp exp;
+    input Boolean hasIter;
+    output DAE.Exp outExp;
+  end stripAsubIfNoIter;
+
   function getFmiInitialAttributeStr
     input SimCodeVar.SimVar simVar;
     output String out_string;
@@ -1802,7 +1902,7 @@ package SimCodeUtil
     input SimCode.SimGenericCall call;
     output String str;
   end simGenericCallString;
-end SimCodeUtil;
+end SimCodeCodegenUtil;
 
 package SimCodeFunctionUtil
   function varName
@@ -1931,8 +2031,19 @@ package SimCodeFunctionUtil
     output DAE.Exp cRefOut;
   end buildCrefExpFromSubs;
 
+  function padAsubSubscripts
+    input DAE.Exp exp;
+    input list<DAE.Subscript> subs;
+    output list<DAE.Subscript> outSubs;
+  end padAsubSubscripts;
+
   function codegenResetTryThrowIndex
   end codegenResetTryThrowIndex;
+
+  function isTrivialRecord
+    input String name;
+    output Boolean b;
+  end isTrivialRecord;
 
   function codegenPushTryThrowIndex
     input Integer i;
@@ -2256,6 +2367,17 @@ package System
     output Boolean success;
   end covertTextFileToCLiteral;
 
+  function openModelicaPlatform
+    output String platform;
+  end openModelicaPlatform;
+
+  function gccDumpMachine
+    output String machine;
+  end gccDumpMachine;
+
+  function gccVersion
+    output String version;
+  end gccVersion;
 end System;
 
 package Autoconf
@@ -2300,7 +2422,7 @@ package Tpl
 end Tpl;
 
 
-package Absyn
+protected package Absyn
 
   type Ident = String;
 
@@ -2343,12 +2465,13 @@ package Absyn
   constant builtin.SourceInfo dummyInfo;
 end Absyn;
 
-package AbsynUtil
+protected package AbsynUtil
 
   function pathString
     input Absyn.Path path;
     input String delimiter;
     input Boolean usefq;
+    input Boolean reverse;
     output String outString;
   end pathString;
 
@@ -3326,7 +3449,7 @@ package ClassInfUtil
   end getStateName;
 end ClassInfUtil;
 
-package SCode
+protected package SCode
 
   type Ident = Absyn.Ident "Some definitions are borrowed from `Absyn\'";
 
@@ -3805,9 +3928,17 @@ package SCode
 
 end SCode;
 
-package SCodeDump
+protected package SCodeDump
   constant SCodeDumpOptions defaultOptions;
 end SCodeDump;
+
+package StringUtil
+  function endsWith
+    input String str;
+    input String suffix;
+    output Boolean endsWith;
+  end endsWith;
+end StringUtil;
 
 package Util
 
@@ -3853,12 +3984,6 @@ package Util
     input String delim;
     output Integer i;
   end mulStringDelimit2Int;
-
-  function endsWith
-    input String str;
-    input String suffix;
-    output Boolean b;
-  end endsWith;
 
   function isCIdentifier
     input String str;
@@ -4183,6 +4308,11 @@ package Expression
     output Boolean outIsCref;
   end isCref;
 
+  function containsAnyCall
+    input DAE.Exp inExp;
+    output Boolean outContainsCall;
+  end containsAnyCall;
+
   function subscriptConstants
     "returns true if all subscripts are known (i.e no cref) constant values (no slice or wholedim "
     input list<DAE.Subscript> inSubs;
@@ -4321,7 +4451,7 @@ package Expression
   end makeCrefExp;
 end Expression;
 
-package ExpressionDump
+protected package ExpressionDump
   function binopSymbol
     input DAE.Operator inOperator;
     output String outString;
@@ -4540,10 +4670,10 @@ package Values
 end Values;
 
 package ValuesUtil
-  function valueExp
+  function valueExpNoOriginal
     input Values.Value inValue;
     output DAE.Exp outExp;
-  end valueExp;
+  end valueExpNoOriginal;
 end ValuesUtil;
 
 package DAEDump
@@ -4563,7 +4693,7 @@ package Algorithm
   end getStatementSource;
 end Algorithm;
 
-package ElementSource
+protected package ElementSource
   function getElementSourceFileInfo
     input DAE.ElementSource source;
     output builtin.SourceInfo info;

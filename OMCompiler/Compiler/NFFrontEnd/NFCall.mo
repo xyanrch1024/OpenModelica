@@ -42,6 +42,7 @@ import DAE;
 import Expression = NFExpression;
 import NFCallAttributes;
 import NFInstNode.InstNode;
+  import NFInstNode;
 import NFPrefixes.{Variability, Purity};
 import Type = NFType;
 import Record = NFRecord;
@@ -91,14 +92,12 @@ public
     ComponentRef ref;
     list<Expression> arguments;
     list<NamedArg> named_args;
-    InstNode call_scope;
   end UNTYPED_CALL;
 
   record ARG_TYPED_CALL
     ComponentRef ref;
     list<TypedArg> positional_args;
     list<TypedArg> named_args;
-    InstNode call_scope;
   end ARG_TYPED_CALL;
 
   record TYPED_CALL
@@ -387,13 +386,11 @@ public
     list<Expression> args;
     list<TypedArg> typed_args;
     MatchedFunction matchedFunc;
-    InstNode scope;
     Variability var, arg_var;
     Purity pur, arg_pur;
     Type ty;
     Expression arg_exp;
   algorithm
-    ARG_TYPED_CALL(call_scope = scope) := call;
     matchedFunc := checkMatchingFunctions(call, context, info, vectorize);
 
     func := matchedFunc.func;
@@ -431,7 +428,7 @@ public
     // using the vectorization dim. This means going through each argument
     // and subscripting it with an iterator for each dim and creating a map call.
     if MatchedFunction.isVectorized(matchedFunc) then
-      call := vectorizeCall(call, matchedFunc.mk, scope, info);
+      call := vectorizeCall(call, matchedFunc.mk, info);
     end if;
 
     if Function.isExternal(func) then
@@ -621,8 +618,8 @@ public
     isConstructor := match call
       case UNTYPED_CALL()
         then SCodeUtil.isRecord(InstNode.definition(ComponentRef.node(call.ref)));
-      case TYPED_CALL() guard(not InstNode.isEmpty(call.fn.node))
-        then SCodeUtil.isRecord(InstNode.definition(call.fn.node));
+      case TYPED_CALL() guard(not InstNode.isEmpty(InstNode.fromHandle(call.fn.node)))
+        then SCodeUtil.isRecord(InstNode.definition(InstNode.fromHandle(call.fn.node)));
       else false;
     end match;
   end isRecordConstructor;
@@ -1902,7 +1899,7 @@ public
             nargs := (s, e) :: nargs;
           end for;
         then
-          UNTYPED_CALL(call.ref, args, listReverse(nargs), call.call_scope);
+          UNTYPED_CALL(call.ref, args, listReverse(nargs));
 
       case ARG_TYPED_CALL()
         algorithm
@@ -1919,7 +1916,7 @@ public
             tnargs := arg :: tnargs;
           end for;
         then
-          ARG_TYPED_CALL(call.ref, listReverse(targs), listReverse(tnargs), call.call_scope);
+          ARG_TYPED_CALL(call.ref, listReverse(targs), listReverse(tnargs));
 
       case TYPED_CALL()
         algorithm
@@ -2012,7 +2009,7 @@ public
             nargs := (s, e) :: nargs;
           end for;
         then
-          UNTYPED_CALL(call.ref, args, listReverse(nargs), call.call_scope);
+          UNTYPED_CALL(call.ref, args, listReverse(nargs));
 
       case ARG_TYPED_CALL()
         algorithm
@@ -2029,7 +2026,7 @@ public
             tnargs := arg :: tnargs;
           end for;
         then
-          ARG_TYPED_CALL(call.ref, listReverse(targs), listReverse(tnargs), call.call_scope);
+          ARG_TYPED_CALL(call.ref, listReverse(targs), listReverse(tnargs));
 
       case TYPED_CALL()
         algorithm
@@ -2125,7 +2122,7 @@ public
             nargs := (s, e) :: nargs;
           end for;
         then
-          UNTYPED_CALL(call.ref, args, listReverse(nargs), call.call_scope);
+          UNTYPED_CALL(call.ref, args, listReverse(nargs));
 
       case ARG_TYPED_CALL()
         algorithm
@@ -2144,7 +2141,7 @@ public
             targs := arg :: targs;
           end for;
         then
-          ARG_TYPED_CALL(call.ref, listReverse(targs), listReverse(tnargs), call.call_scope);
+          ARG_TYPED_CALL(call.ref, listReverse(targs), listReverse(tnargs));
 
       case TYPED_CALL()
         algorithm
@@ -2248,7 +2245,7 @@ public
             nargs := (s, e) :: nargs;
           end for;
         then
-          UNTYPED_CALL(call.ref, args, listReverse(nargs), call.call_scope);
+          UNTYPED_CALL(call.ref, args, listReverse(nargs));
 
       case ARG_TYPED_CALL()
         algorithm
@@ -2267,7 +2264,7 @@ public
             targs := arg :: targs;
           end for;
         then
-          ARG_TYPED_CALL(call.ref, listReverse(targs), listReverse(tnargs), call.call_scope);
+          ARG_TYPED_CALL(call.ref, listReverse(targs), listReverse(tnargs));
 
       case TYPED_CALL()
         algorithm
@@ -2417,6 +2414,69 @@ public
     end match;
   end isConnectionsOperator;
 
+  function isConnectionGraphDefinition
+    input Call call;
+    output Boolean res;
+  protected
+    String name;
+
+    function is_def
+      input String name;
+      output Boolean res;
+    algorithm
+      res := match name
+        case "branch" then true;
+        case "root" then true;
+        case "potentialRoot" then true;
+        case "uniqueRoot" then true;
+        else false;
+      end match;
+    end is_def;
+  algorithm
+    res := match call
+      case TYPED_CALL()
+        guard Function.isBuiltin(call.fn)
+        then match Function.name(call.fn)
+               case Absyn.Path.QUALIFIED("Connections", Absyn.Path.IDENT(name))
+                 then is_def(name);
+               else false;
+             end match;
+
+      // Also handle untyped calls, because connection operators in invalid
+      // if-branches might not be typed.
+      case UNTYPED_CALL()
+        guard ComponentRef.isQualified(call.ref) and
+              ComponentRef.firstName(ComponentRef.rest(call.ref)) == "Connections"
+        then is_def(ComponentRef.firstName(call.ref));
+
+      else false;
+    end match;
+  end isConnectionGraphDefinition;
+
+  function isConnectionGraphQuery
+    input Call call;
+    output Boolean res;
+  protected
+    String name;
+  algorithm
+    res := match call
+      case TYPED_CALL()
+        guard Function.isBuiltin(call.fn)
+        then match Function.name(call.fn)
+               case Absyn.Path.IDENT("cardinality") then true;
+               case Absyn.Path.QUALIFIED("Connections", Absyn.Path.IDENT(name))
+                 then match name
+                     case "rooted" then true;
+                     case "isRoot" then true;
+                     case "uniqueRootIndices" then true;
+                     else false;
+                 end match;
+               else false;
+             end match;
+      else false;
+    end match;
+  end isConnectionGraphQuery;
+
   function isStreamOperator
     input Call call;
     output Boolean isOp;
@@ -2488,25 +2548,16 @@ protected
       // If it had iterators then it will not reach here. The args would have been parsed to
       // Absyn.FOR_ITER_FARG and that is handled in instIteratorCall.
       case "array" then BuiltinCall.makeArrayExp(args, named_args, info);
-
-      case _ guard InstContext.inAnnotation(context)
-        algorithm
-          // If we're in a graphic annotation expression, first try to find the
-          // function in the top scope in case there's a user-defined function
-          // with the same name. If it's not found, check the normal scope.
-          try
-            fn_ref := Function.instFunction(functionName, InstNode.topScope(scope), context, info);
-          else
-            fn_ref := Function.instFunction(functionName, scope, context, info);
-          end try;
-        then
-          Expression.CALL(UNTYPED_CALL(fn_ref, args, named_args, scope));
+      // getInstanceName is normally derived from the prefix during the flattening,
+      // but sometimes the call is constant evaluated instead (e.g. when it's used
+      // in a package). So we create an expression here that contains the scope.
+      case "getInstanceName" then Expression.INSTANCE_NAME(scope);
 
       else
         algorithm
           fn_ref := Function.instFunction(functionName, scope, context, info);
         then
-          Expression.CALL(UNTYPED_CALL(fn_ref, args, named_args, scope));
+          Expression.CALL(UNTYPED_CALL(fn_ref, args, named_args));
 
     end match;
   end instNormalCall;
@@ -2624,9 +2675,10 @@ protected
       // If the range is a cref, use it as the iterator type to allow lookup in
       // the iterator.
       ty := match range
-        case Expression.CREF(cref = ComponentRef.CREF(node = range_node))
-          guard InstNode.isComponent(range_node)
-          then Type.COMPLEX(Component.classInstance(InstNode.component(range_node)), ComplexType.CLASS());
+        case Expression.CREF(cref = ComponentRef.CREF())
+          guard InstNode.isComponent(ComponentRef.node(range.cref))
+          then Type.COMPLEX(InstNode.identityCell(Component.classInstance(
+          InstNode.component(ComponentRef.node(range.cref)))), ComplexType.CLASS());
         else Type.UNKNOWN();
       end match;
 
@@ -2651,7 +2703,7 @@ protected
     list<Dimension> dims = {};
     list<tuple<InstNode, Expression>> iters = {};
     InstContext.Type next_context;
-    Boolean is_structural;
+    Boolean is_structural, has_iterator;
   algorithm
     (call, ty, variability, purity) := match call
       case UNTYPED_ARRAY_CONSTRUCTOR()
@@ -2671,7 +2723,11 @@ protected
 
             (range, iter_ty, iter_var, iter_pur) := Typing.typeIterator(iter, range, next_context, is_structural);
 
-            if is_structural then
+            // Don't try to evaluate the range if it contains an iterator.
+            has_iterator := iter_pur == Purity.IMPURE and Expression.contains(range, Expression.isIterator);
+
+            // ranges over resizable sizes stay symbolic
+            if is_structural and not has_iterator and not Expression.contains(range, Expression.isResizableCref) then
               if InstContext.inRelaxed(context) then
                 range := Ceval.tryEvalExp(range);
               else
@@ -2825,7 +2881,7 @@ protected
       foldExp := match AbsynUtil.pathFirstIdent(Function.name(reductionFn))
         case "sum"
           algorithm
-            Type.COMPLEX(cls = op_node) := reductionType;
+            op_node := Type.complexNode(reductionType);
             op_node := Class.lookupElement("'+'", InstNode.getClass(op_node));
             Function.instFunctionNode(op_node, NFInstContext.NO_CONTEXT, info);
             {fn} := Function.typeNodeCache(op_node);
@@ -2909,7 +2965,7 @@ protected
 
           typed_nargs := listReverse(typed_nargs);
         then
-          ARG_TYPED_CALL(call.ref, typed_args, typed_nargs, call.call_scope);
+          ARG_TYPED_CALL(call.ref, typed_args, typed_nargs);
     end match;
   end typeArgs;
 
@@ -2929,15 +2985,17 @@ protected
     ErrorExt.setCheckpoint("NFCall:checkMatchingFunctions");
 
     matchedFunctions := match call
-      case ARG_TYPED_CALL(ref = ComponentRef.CREF(node = fn_node))
+      case ARG_TYPED_CALL(ref = ComponentRef.CREF())
         algorithm
+          fn_node := ComponentRef.node(call.ref);
           allfuncs := Function.getCachedFuncs(fn_node);
 
           if listLength(allfuncs) > 1 then
             allfuncs := list(fn for fn guard not Function.isDefaultRecordConstructor(fn) in allfuncs);
           end if;
         then
-          Function.matchFunctions(allfuncs, call.positional_args, call.named_args, context, info, vectorize);
+          Function.matchFunctions(allfuncs, call.positional_args, call.named_args, context, info, vectorize,
+            callPrefix = ComponentRef.stripGeneratedInnerScope(ComponentRef.stripClassScope(ComponentRef.rest(call.ref))));
     end match;
 
     if listEmpty(matchedFunctions) then
@@ -3008,7 +3066,6 @@ protected
   function vectorizeCall
     input NFCall base_call;
     input FunctionMatchKind mk;
-    input InstNode scope;
     input SourceInfo info;
     output NFCall vectorized_call;
   protected
@@ -3140,7 +3197,7 @@ protected
       case Type.COMPLEX()
         guard Type.isRecord(ty) and not Function.isNonDefaultRecordConstructor(fn)
         algorithm
-          binding := Component.getBinding(InstNode.component(listGet(fn.outputs, outputIndex)));
+          binding := Component.getBinding(InstNode.component(InstNode.fromHandle(listGet(fn.outputs, outputIndex))));
 
           if Binding.isBound(binding) then
             // If the output has a binding, replace inputs in it and update the type of the output.
@@ -3167,25 +3224,56 @@ protected
     dim := match dim
       local
         Expression exp;
+        Dimension new_dim;
 
       case Dimension.EXP()
         algorithm
           ptree := buildParameterTree(fn, args, ptree);
           exp := Expression.map(dim.exp, function evaluateCallTypeDimExp(ptree = ptree));
+          // size(x, i) of a resizable dimension is its expression (e.g. N), the
+          // dimension of the output stays resizable instead of being evaluated
+          exp := Expression.map(exp, resizableSizeExp);
 
-          ErrorExt.setCheckpoint(getInstanceName());
-          try
-            Structural.markExp(exp);
-            exp := Ceval.evalExp(exp);
+          if Expression.contains(exp, Expression.isResizableCref) then
+            new_dim := Dimension.fromExp(SimplifyExp.simplify(exp), Variability.NON_STRUCTURAL_PARAMETER);
           else
-          end try;
-          ErrorExt.rollBack(getInstanceName());
+            ErrorExt.setCheckpoint(getInstanceName());
+            try
+              Structural.markExp(exp);
+              exp := Ceval.evalExp(exp);
+            else
+            end try;
+            ErrorExt.rollBack(getInstanceName());
+            new_dim := Dimension.fromExp(exp, Variability.CONSTANT);
+          end if;
         then
-          Dimension.fromExp(exp, Variability.CONSTANT);
+          new_dim;
 
       else dim;
     end match;
   end evaluateCallTypeDim;
+
+  function resizableSizeExp
+    "size(x, i) -> the expression of dimension i of x if it is resizable"
+    input Expression exp;
+    output Expression outExp = exp;
+  protected
+    Integer i;
+    Dimension d;
+  algorithm
+    () := match exp
+      case Expression.SIZE(dimIndex = SOME(Expression.INTEGER(i))) algorithm
+        try
+          d := Type.nthDimension(Expression.typeOf(exp.exp), i);
+          if Dimension.isResizable(d) then
+            outExp := Dimension.sizeExp(d);
+          end if;
+        else
+        end try;
+      then ();
+      else ();
+    end match;
+  end resizableSizeExp;
 
   function buildParameterTree
     input Function fn;
@@ -3220,14 +3308,14 @@ protected
       case Expression.CREF(cref = ComponentRef.CREF())
         algorithm
           cref :: cref_parts := ComponentRef.toListReverse(exp.cref);
-          oexp := ParameterTree.getOpt(ptree, InstNode.name(ComponentRef.node(cref)));
+          oexp := ParameterTree.getOpt(ptree, ComponentRef.nodeName(cref));
 
           if isSome(oexp) then
             SOME(outExp) := oexp;
             outExp := Expression.applySubscripts(ComponentRef.getSubscripts(cref), outExp);
 
             for cr in cref_parts loop
-              outExp := Expression.recordElement(InstNode.name(ComponentRef.node(cr)), outExp);
+              outExp := Expression.recordElement(ComponentRef.nodeName(cr), outExp);
               outExp := Expression.applySubscripts(ComponentRef.getSubscripts(cr), outExp);
             end for;
           else

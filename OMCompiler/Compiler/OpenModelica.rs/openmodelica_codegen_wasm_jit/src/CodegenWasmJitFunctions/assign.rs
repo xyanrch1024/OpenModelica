@@ -3,7 +3,7 @@
 
 use super::*;
 
-pub(super) fn compile_stmts(ctx: &mut FnCtx, stmts: &List<Arc<DAE::Statement>>) -> Result<()> {
+pub(super) fn compile_stmts(ctx: &mut FnCtx, stmts: &List<metamodelica::Ref<DAE::Statement>>) -> Result<()> {
     for s in &**stmts {
         compile_stmt(ctx, s)?;
     }
@@ -20,7 +20,7 @@ pub(super) fn compile_assign(ctx: &mut FnCtx, lhs: &DAE::Exp, rhs: &DAE::Exp) ->
     let DAE::Exp::CREF { componentRef, .. } = lhs else {
         crate::CodegenWasmJit::record_error(format!(
             "CodegenWasmJit: assignment to non-cref lhs `{}`",
-            dumped_exp(&Arc::new(lhs.clone()))?
+            dumped_exp(lhs)?
         ));
         return Err("CodegenWasmJit: assignment to non-cref lhs not supported");
     };
@@ -29,12 +29,21 @@ pub(super) fn compile_assign(ctx: &mut FnCtx, lhs: &DAE::Exp, rhs: &DAE::Exp) ->
     if compile_sim_cref_assign(ctx, componentRef, RhsSource::Exp(rhs))? {
         return Ok(());
     }
+    if let Some(v) = flat_var_ref(ctx, lhs).cloned() {
+        return assign_flat(ctx, &v, rhs);
+    }
+    if let Some((v, i)) = flat_field_ref(ctx, componentRef) {
+        let w = compile_exp(ctx, rhs)?;
+        coerce(ctx, w, v.fields[i].1.wty());
+        ctx.emit(we::Instruction::LocalSet(v.locals[i]));
+        return Ok(());
+    }
     // A qualified-cref assignment `base[..].f1[..].….fn[..] := rhs`: navigate to
     // the record holding the final field, then store into it.
     if let DAE::ComponentRef::CREF_QUAL { .. } = &**componentRef {
         return compile_cref_assign_qual(ctx, componentRef, rhs);
     }
-    let DAE::ComponentRef::CREF_IDENT { ident, subscriptLst, .. } = &**componentRef else {
+    let DAE::ComponentRef::CREF_IDENT { ident, identType, subscriptLst } = &**componentRef else {
         return Err("CodegenWasmJit: assignment to qualified/record lhs not supported");
     };
     let name = ident.to_string();
@@ -61,28 +70,16 @@ pub(super) fn compile_assign(ctx: &mut FnCtx, lhs: &DAE::Exp, rhs: &DAE::Exp) ->
             return compile_slice_assign(ctx, idx, subscriptLst, RhsSource::Exp(rhs));
         }
         let idx_exps = index_subscripts(subscriptLst, rank)?;
-        return compile_elem_assign(ctx, idx, &elem, &idx_exps, rhs);
+        return compile_elem_assign(ctx, idx, &elem, &idx_exps, static_dims(identType).as_deref(), rhs);
     }
 
-    let src_wty = compile_exp(ctx, rhs)?;
-    // Value semantics for arrays and records: a whole-value assignment from
-    // anything that is not a fresh constructor/call result would otherwise share
-    // the source's mutable buffer (the rhs is a retained alias), so mutating the
-    // destination later would corrupt the source — copy it to a private object.
-    // A fresh rhs is already privately owned and is moved in. (Strings are
-    // immutable, so they are shared via the retain on read — no copy.)
-    if let Some((copy_fn, rel_fn)) = value_copy_fns(&dst_sty) {
-        if !value_rhs_is_fresh(rhs) {
-            let t = ctx.alloc_temp(WTy::I32);
-            ctx.emit(we::Instruction::LocalSet(t));
-            ctx.emit(we::Instruction::LocalGet(t));
-            ctx.emit(we::Instruction::Call(rt_index(copy_fn)?));
-            // Release the alias we copied from (the rhs's +1 reference).
-            ctx.emit(we::Instruction::LocalGet(t));
-            ctx.emit(we::Instruction::Call(rt_index(rel_fn)?));
-        }
-    }
-    if let Some(release_fn) = dst_sty.release_fn() {
+    let src_wty = compile_private_value(ctx, rhs, &dst_sty)?;
+    if ctx.ctrl_depth == 0
+        && let Some(k) = ctx.null_locals.iter().position(|s| *s == idx)
+    {
+        ctx.null_locals.swap_remove(k);
+        ctx.emit(we::Instruction::LocalSet(idx));
+    } else if let Some(release_fn) = dst_sty.release_fn() {
         // Release-on-overwrite: free the previous value the local held *after*
         // computing the new one (which may read the old value, as in `s := s + x`),
         // then move the new owned value in. Stack: [new] -> release old -> store.
@@ -133,8 +130,15 @@ pub(super) fn store_fresh_into_field(ctx: &mut FnCtx, rec_idx: u32, fields: &[(A
 /// Store a freshly-owned value held in temp `vt` into array element
 /// `arr[idx_exps...]` (the array local privately owns its buffer), releasing the
 /// previous element first. The value is already owned, so no copy is made.
-fn store_fresh_into_elem(ctx: &mut FnCtx, arr_idx: u32, elem: &SigTy, idx_exps: &[Arc<DAE::Exp>], vt: u32) -> Result<()> {
-    emit_elem_addr(ctx, arr_idx, elem, idx_exps)?;
+fn store_fresh_into_elem(
+    ctx: &mut FnCtx,
+    arr_idx: u32,
+    elem: &SigTy,
+    idx_exps: &[metamodelica::Ref<DAE::Exp>],
+    dims: Option<&[i32]>,
+    vt: u32,
+) -> Result<()> {
+    emit_elem_addr(ctx, arr_idx, elem, idx_exps, dims)?;
     let addr_t = ctx.alloc_temp(WTy::I32);
     ctx.emit(we::Instruction::LocalSet(addr_t));
     if let Some(release_fn) = elem.release_fn() {
@@ -157,6 +161,15 @@ fn store_fresh_into_cref(ctx: &mut FnCtx, cref: &DAE::ComponentRef, wty: WTy, vt
     if compile_sim_cref_assign(ctx, cref, RhsSource::Temp { local: vt, wty })? {
         return Ok(());
     }
+    if let Some((v, i)) = flat_field_ref(ctx, cref) {
+        ctx.emit(we::Instruction::LocalGet(vt));
+        coerce(ctx, wty, v.fields[i].1.wty());
+        ctx.emit(we::Instruction::LocalSet(v.locals[i]));
+        return Ok(());
+    }
+    if let Some(v) = flat_cref(ctx, cref).cloned() {
+        return store_fresh_into_flat(ctx, &v, vt);
+    }
     if let DAE::ComponentRef::CREF_QUAL { .. } = cref {
         let (rec, fields, leaf, lsubs) = navigate_qual(ctx, cref)?;
         if lsubs.is_empty() {
@@ -174,11 +187,11 @@ fn store_fresh_into_cref(ctx: &mut FnCtx, cref: &DAE::ComponentRef, wty: WTy, vt
                 return compile_slice_assign(ctx, arr_t, lsubs, RhsSource::Temp { local: vt, wty });
             }
             let idx_exps = index_subscripts(lsubs, rank)?;
-            store_fresh_into_elem(ctx, arr_t, &elem, &idx_exps, vt)?;
+            store_fresh_into_elem(ctx, arr_t, &elem, &idx_exps, None, vt)?;
         }
         return Ok(());
     }
-    let DAE::ComponentRef::CREF_IDENT { ident, subscriptLst, .. } = cref else {
+    let DAE::ComponentRef::CREF_IDENT { ident, identType, subscriptLst } = cref else {
         return Err("CodegenWasmJit: unsupported tuple-assignment target");
     };
     let name = ident.to_string();
@@ -197,18 +210,18 @@ fn store_fresh_into_cref(ctx: &mut FnCtx, cref: &DAE::ComponentRef, wty: WTy, vt
         return compile_slice_assign(ctx, idx, subscriptLst, RhsSource::Temp { local: vt, wty });
     }
     let idx_exps = index_subscripts(subscriptLst, rank)?;
-    store_fresh_into_elem(ctx, idx, &elem, &idx_exps, vt)
+    store_fresh_into_elem(ctx, idx, &elem, &idx_exps, static_dims(identType).as_deref(), vt)
 }
 
 /// Lower `(l1, l2, …) := f(args)` (`STMT_TUPLE_ASSIGN`): call the multi-output
 /// generated function (which leaves its results on the stack, first result
 /// deepest), then move each owned result into its target local. A `_` (wildcard)
 /// target discards its value (releasing it if heap).
-pub(super) fn compile_tuple_assign(ctx: &mut FnCtx, lhs: &List<Arc<DAE::Exp>>, call: &DAE::Exp) -> Result<()> {
+pub(super) fn compile_tuple_assign(ctx: &mut FnCtx, lhs: &List<metamodelica::Ref<DAE::Exp>>, call: &DAE::Exp) -> Result<()> {
     let DAE::Exp::CALL { path, expLst, attr } = call else {
         return Err("CodegenWasmJit: tuple assignment rhs is not a function call");
     };
-    let lhs_v: Vec<&Arc<DAE::Exp>> = (&**lhs).into_iter().collect();
+    let lhs_v: Vec<&metamodelica::Ref<DAE::Exp>> = (&**lhs).into_iter().collect();
     let results = compile_call(ctx, path, expLst, attr)?;
     // Trailing outputs the statement does not name are dropped, as in
     // `algStmtTupleAssign`.
@@ -299,14 +312,14 @@ fn store_fresh_into_tuple_target(ctx: &mut FnCtx, target: &DAE::Exp, sty: &SigTy
 /// declaration order), then release it.
 fn scatter_record_target(
     ctx: &mut FnCtx,
-    targets: &List<Arc<DAE::Exp>>,
+    targets: &List<metamodelica::Ref<DAE::Exp>>,
     sty: &SigTy,
     vt: u32,
 ) -> Result<()> {
     let SigTy::Record { fields, .. } = sty else {
         return Err("CodegenWasmJit: record-destructuring tuple target for a non-record output");
     };
-    let targets: Vec<&Arc<DAE::Exp>> = targets.into_iter().collect();
+    let targets: Vec<&metamodelica::Ref<DAE::Exp>> = targets.into_iter().collect();
     if targets.len() != fields.len() {
         return Err("CodegenWasmJit: record-destructuring tuple target has the wrong field count");
     }
@@ -343,6 +356,42 @@ pub(super) fn value_copy_fns(ty: &SigTy) -> Option<(&'static str, &'static str)>
 /// (so it can be moved into the destination without copying). Constructors,
 /// ranges and call results are fresh; a variable reference / shared literal
 /// aliases an existing object.
+/// Compile `e` as a value of type `sty` its consumer owns privately. Arrays and
+/// records are mutable, so a value that aliases another variable (a retained
+/// read) is copied; a fresh constructor/call result moves in as is. Strings are
+/// immutable and shared through the retain on read.
+pub(super) fn compile_private_value(ctx: &mut FnCtx, e: &DAE::Exp, sty: &SigTy) -> Result<WTy> {
+    let Some((copy_fn, rel_fn)) = value_copy_fns(sty) else {
+        return compile_exp(ctx, e);
+    };
+    // Boxing already makes a private copy.
+    if flat_var_ref(ctx, e).is_some() {
+        return compile_exp(ctx, e);
+    }
+    if let DAE::Exp::IFEXP { expCond, expThen, expElse } = e
+        && !shared_lits::is_shared(e)
+    {
+        let c = compile_exp(ctx, expCond)?;
+        coerce(ctx, c, WTy::I32);
+        ctx.emit(we::Instruction::If(we::BlockType::Result(we::ValType::I32)));
+        compile_private_value(ctx, expThen, sty)?;
+        ctx.emit(we::Instruction::Else);
+        compile_private_value(ctx, expElse, sty)?;
+        ctx.emit(we::Instruction::End);
+        return Ok(WTy::I32);
+    }
+    compile_exp(ctx, e)?;
+    if !value_rhs_is_fresh(e) {
+        let t = ctx.alloc_temp(WTy::I32);
+        ctx.emit(we::Instruction::LocalSet(t));
+        ctx.emit(we::Instruction::LocalGet(t));
+        ctx.emit(we::Instruction::Call(rt_index(copy_fn)?));
+        ctx.emit(we::Instruction::LocalGet(t));
+        ctx.emit(we::Instruction::Call(rt_index(rel_fn)?));
+    }
+    Ok(WTy::I32)
+}
+
 pub(super) fn value_rhs_is_fresh(e: &DAE::Exp) -> bool {
     use DAE::Exp as E;
     if shared_lits::is_shared(e) {

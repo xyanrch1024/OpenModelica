@@ -25,8 +25,6 @@ pub type modelica_string = *mut c_void;
 /// Also `mmc_sint_t`.
 pub type _index_t = modelica_integer;
 
-/// `util/rtclock.h`: `union { struct timespec; unsigned long long; }` on unix,
-/// `LARGE_INTEGER`/`uint64_t` elsewhere -- 16 bytes either way on the unix build.
 /// `gc/omc_gc.h`'s `errorStage`: `threadData->currentErrorStage`.
 pub const ERROR_SIMULATION: i32 = 1;
 pub const ERROR_INTEGRATOR: i32 = 2;
@@ -35,12 +33,24 @@ pub const ERROR_EVENTSEARCH: i32 = 4;
 pub const ERROR_EVENTHANDLING: i32 = 5;
 pub const ERROR_OPTIMIZE: i32 = 6;
 
+/// `util/rtclock.h`: a 16-byte union, `LARGE_INTEGER` on Windows, `uint64_t` on
+/// macOS, and a `typedef int` under an FMU's `OMC_MINIMAL_RUNTIME`. It is the last
+/// field of `NONLINEAR_SYSTEM_DATA`, so the wrong one gives the right offsets and
+/// the wrong stride -- `nonlinearSystemData[1]` then reads `sparsePattern` out of
+/// `eqn_simcode_indices`.
+#[cfg(all(not(omc_fmi_runtime), not(any(windows, target_vendor = "apple"))))]
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct rtclock_t {
     pub a: u64,
     pub b: u64,
 }
+
+#[cfg(all(not(omc_fmi_runtime), any(windows, target_vendor = "apple")))]
+pub type rtclock_t = u64;
+
+#[cfg(omc_fmi_runtime)]
+pub type rtclock_t = c_int;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -76,15 +86,38 @@ pub struct base_array_t {
     pub flexible: modelica_boolean,
 }
 pub type real_array = base_array_t;
+pub type integer_array = base_array_t;
+pub type boolean_array = base_array_t;
+pub type string_array = base_array_t;
 
 impl base_array_t {
-    /// The scalar (or first) element of a real attribute array; C's attributes are
-    /// `real_array` so an array variable can carry one value per element.
-    pub fn first_real(&self, fallback: f64) -> f64 {
-        if self.data.is_null() { fallback } else { unsafe { *(self.data as *const f64) } }
+    /// C's `base_array_nr_of_elements`; 0 if the array is unallocated.
+    pub fn n_elements(&self) -> usize {
+        if self.data.is_null() || self.dim_size.is_null() || self.ndims < 1 {
+            return 0;
+        }
+        (0..self.ndims as usize)
+            .map(|d| unsafe { *self.dim_size.add(d) }.max(0) as usize)
+            .product()
     }
+    /// Index of the attribute element that holds scalar element `i` of the
+    /// variable: an attribute with a single element (`each`) holds the value of
+    /// every array element. `None` if the array is unallocated or `i` out of range.
+    pub fn elem_index(&self, i: usize) -> Option<usize> {
+        let n = self.n_elements();
+        let j = if n == 1 { 0 } else { i };
+        (j < n).then_some(j)
+    }
+    /// Element `i` of an attribute array, see [`Self::elem_index`]. `fallback` if
+    /// there is no such element.
+    pub fn elem_at<T: Copy>(&self, i: usize, fallback: T) -> T {
+        self.elem_index(i)
+            .map_or(fallback, |j| unsafe { *(self.data as *const T).add(j) })
+    }
+    /// Element `i` of a real attribute array; C's attributes are `real_array` so
+    /// an array variable can carry one value per element.
     pub fn real_at(&self, i: usize, fallback: f64) -> f64 {
-        if self.data.is_null() { fallback } else { unsafe { *(self.data as *const f64).add(i) } }
+        self.elem_at(i, fallback)
     }
 }
 
@@ -108,10 +141,9 @@ pub struct SAMPLE_INFO {
 #[repr(C)]
 pub struct CHATTERING_INFO {
     pub numEventLimit: c_int,
-    pub lastSteps: *mut c_int,
     pub lastTimes: *mut f64,
     pub currentIndex: c_int,
-    pub lastStepsNumStateEvents: c_int,
+    pub stateEventsInARow: c_int,
     pub messageEmitted: c_int,
 }
 
@@ -146,9 +178,8 @@ pub struct NONLINEAR_PATTERN {
     pub rows: *mut c_uint,
 }
 
-pub type jacobianColumn_func_ptr = Option<
-    unsafe extern "C" fn(*mut DATA, *mut threadData_t, *mut JACOBIAN, *mut JACOBIAN) -> c_int,
->;
+pub type jacobianColumn_func_ptr =
+    Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, *mut JACOBIAN, *mut JACOBIAN) -> c_int>;
 pub type initialAnalyticalJacobian_func_ptr =
     Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, *mut JACOBIAN) -> c_int>;
 
@@ -224,21 +255,21 @@ pub struct REAL_ATTRIBUTE {
 
 #[repr(C)]
 pub struct INTEGER_ATTRIBUTE {
-    pub min: modelica_integer,
-    pub max: modelica_integer,
+    pub min: integer_array,
+    pub max: integer_array,
     pub fixed: modelica_boolean,
-    pub start: modelica_integer,
+    pub start: integer_array,
 }
 
 #[repr(C)]
 pub struct BOOLEAN_ATTRIBUTE {
     pub fixed: modelica_boolean,
-    pub start: modelica_boolean,
+    pub start: boolean_array,
 }
 
 #[repr(C)]
 pub struct STRING_ATTRIBUTE {
-    pub start: modelica_string,
+    pub start: string_array,
 }
 
 #[repr(C)]
@@ -298,9 +329,7 @@ pub struct RESIDUAL_USERDATA {
     pub solverData: *mut c_void,
 }
 
-pub type residual_func_ptr = Option<
-    unsafe extern "C" fn(*mut RESIDUAL_USERDATA, *const f64, *mut f64, *const c_int),
->;
+pub type residual_func_ptr = Option<unsafe extern "C" fn(*mut RESIDUAL_USERDATA, *const f64, *mut f64, *const c_int)>;
 
 #[repr(C)]
 pub struct NONLINEAR_SYSTEM_DATA {
@@ -332,10 +361,8 @@ pub struct NONLINEAR_SYSTEM_DATA {
             modelica_boolean,
         ),
     >,
-    pub freeStaticNLSData:
-        Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, *mut NONLINEAR_SYSTEM_DATA)>,
-    pub strictTearingFunctionCall:
-        Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t) -> c_int>,
+    pub freeStaticNLSData: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, *mut NONLINEAR_SYSTEM_DATA)>,
+    pub strictTearingFunctionCall: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t) -> c_int>,
     pub getIterationVars: Option<unsafe extern "C" fn(*mut DATA, *mut f64)>,
     pub checkConstraints: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t) -> c_int>,
     pub matrixFormat: c_int,
@@ -360,25 +387,23 @@ pub struct NONLINEAR_SYSTEM_DATA {
     pub jacobianTime: f64,
     pub jacobianTimeClock: rtclock_t,
     pub csvData: *mut c_void,
+    /// Resizable arrays: the size of the system from the size parameters, called
+    /// before the system is allocated. `None` if the size is fixed.
+    pub updateSize: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t) -> c_int>,
 }
 
 #[repr(C)]
 pub struct LINEAR_SYSTEM_DATA {
     pub setA: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, *mut LINEAR_SYSTEM_DATA)>,
     pub setb: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, *mut LINEAR_SYSTEM_DATA)>,
-    pub setAElement: Option<
-        unsafe extern "C" fn(c_int, c_int, f64, c_int, *mut LINEAR_SYSTEM_DATA, *mut threadData_t),
-    >,
-    pub setBElement:
-        Option<unsafe extern "C" fn(c_int, f64, *mut LINEAR_SYSTEM_DATA, *mut threadData_t)>,
+    pub setAElement: Option<unsafe extern "C" fn(c_int, c_int, f64, c_int, *mut LINEAR_SYSTEM_DATA, *mut threadData_t)>,
+    pub setBElement: Option<unsafe extern "C" fn(c_int, f64, *mut LINEAR_SYSTEM_DATA, *mut threadData_t)>,
     pub analyticalJacobianColumn: jacobianColumn_func_ptr,
     pub initialAnalyticalJacobian: initialAnalyticalJacobian_func_ptr,
     pub residualFunc: residual_func_ptr,
-    pub initializeStaticLSData: Option<
-        unsafe extern "C" fn(*mut DATA, *mut threadData_t, *mut LINEAR_SYSTEM_DATA, modelica_boolean),
-    >,
-    pub strictTearingFunctionCall:
-        Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t) -> c_int>,
+    pub initializeStaticLSData:
+        Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, *mut LINEAR_SYSTEM_DATA, modelica_boolean)>,
+    pub strictTearingFunctionCall: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t) -> c_int>,
     pub checkConstraints: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t) -> c_int>,
     pub min: *mut modelica_real,
     pub max: *mut modelica_real,
@@ -445,8 +470,7 @@ pub struct DAEMODE_DATA {
     pub residualVars: *mut modelica_real,
     pub auxiliaryVars: *mut modelica_real,
     pub sparsePattern: *mut SPARSE_PATTERN,
-    pub evaluateDAEResiduals:
-        Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, c_int) -> c_int>,
+    pub evaluateDAEResiduals: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, c_int) -> c_int>,
     pub algIndexes: *mut c_int,
 }
 
@@ -640,6 +664,8 @@ pub struct SPATIAL_DISTRIBUTION_DATA {
     pub transportedQuantity: *mut c_void,
     pub storedEvents: *mut c_void,
     pub lastStoredEventValue: c_int,
+    pub nWarningsRemovedEvents: c_ulong,
+    pub nWarningsOutputEvents: c_ulong,
 }
 
 #[repr(C)]
@@ -800,6 +826,8 @@ pub struct SIMULATION_DATA {
     pub inlineVars: *mut modelica_real,
 }
 
+/// Not present under `OMC_MINIMAL_RUNTIME`.
+#[cfg(not(omc_fmi_runtime))]
 #[repr(C)]
 pub struct real_time_sync_t {
     pub enabled: c_int,
@@ -816,7 +844,10 @@ pub struct DATA {
     pub modelData: *mut MODEL_DATA,
     pub simulationInfo: *mut SIMULATION_INFO,
     pub callback: *mut OpenModelicaGeneratedFunctionCallbacks,
+    // `OMC_MINIMAL_RUNTIME` ends the struct here.
+    #[cfg(not(omc_fmi_runtime))]
     pub embeddedServerState: *mut c_void,
+    #[cfg(not(omc_fmi_runtime))]
     pub real_time_sync: real_time_sync_t,
 }
 
@@ -844,18 +875,15 @@ pub type sim_fn = Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t) -> c
 
 #[repr(C)]
 pub struct OpenModelicaGeneratedFunctionCallbacks {
-    pub performSimulation:
-        Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, *mut c_void) -> c_int>,
-    pub performQSSSimulation:
-        Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, *mut c_void) -> c_int>,
+    pub performSimulation: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, *mut c_void) -> c_int>,
+    pub performQSSSimulation: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, *mut c_void) -> c_int>,
     pub updateContinuousSystem: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t)>,
     pub callExternalObjectDestructors: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t)>,
 
     pub initialNonLinearSystem: Option<unsafe extern "C" fn(c_int, *mut NONLINEAR_SYSTEM_DATA)>,
     pub initialLinearSystem: Option<unsafe extern "C" fn(c_int, *mut LINEAR_SYSTEM_DATA)>,
     pub initialMixedSystem: Option<unsafe extern "C" fn(c_int, *mut MIXED_SYSTEM_DATA)>,
-    pub initializeStateSets:
-        Option<unsafe extern "C" fn(c_int, *mut STATE_SET_DATA, *mut DATA)>,
+    pub initializeStateSets: Option<unsafe extern "C" fn(c_int, *mut STATE_SET_DATA, *mut DATA)>,
     pub initializeDAEmodeData: Option<unsafe extern "C" fn(*mut DATA, *mut DAEMODE_DATA) -> c_int>,
     pub getDAG_ODE: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t)>,
 
@@ -884,12 +912,9 @@ pub struct OpenModelicaGeneratedFunctionCallbacks {
     pub updateBoundParameters: sim_fn,
     pub checkForAsserts: sim_fn,
     pub function_ZeroCrossingsEquations: sim_fn,
-    pub function_ZeroCrossings:
-        Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, *mut f64) -> c_int>,
-    pub function_updateRelations:
-        Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, c_int) -> c_int>,
-    pub zeroCrossingDescription:
-        Option<unsafe extern "C" fn(c_int, *mut *mut c_int) -> *const c_char>,
+    pub function_ZeroCrossings: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, *mut f64) -> c_int>,
+    pub function_updateRelations: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, c_int) -> c_int>,
+    pub zeroCrossingDescription: Option<unsafe extern "C" fn(c_int, *mut *mut c_int) -> *const c_char>,
     pub relationDescription: Option<unsafe extern "C" fn(c_int) -> *const c_char>,
     pub function_initSample: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t)>,
 
@@ -923,11 +948,8 @@ pub struct OpenModelicaGeneratedFunctionCallbacks {
     pub linear_model_datarecovery_frame: Option<unsafe extern "C" fn() -> *const c_char>,
 
     pub mayer: Option<unsafe extern "C" fn(*mut DATA, *mut *mut modelica_real, *mut i16) -> c_int>,
-    pub lagrange: Option<
-        unsafe extern "C" fn(*mut DATA, *mut *mut modelica_real, *mut i16, *mut i16) -> c_int,
-    >,
-    pub getInputVarIndicesInOptimization:
-        Option<unsafe extern "C" fn(*mut DATA, *mut c_int, *mut c_int) -> c_int>,
+    pub lagrange: Option<unsafe extern "C" fn(*mut DATA, *mut *mut modelica_real, *mut i16, *mut i16) -> c_int>,
+    pub getInputVarIndicesInOptimization: Option<unsafe extern "C" fn(*mut DATA, *mut c_int, *mut c_int) -> c_int>,
     pub pickUpBoundsForInputsInOptimization: Option<
         unsafe extern "C" fn(
             *mut DATA,
@@ -941,23 +963,19 @@ pub struct OpenModelicaGeneratedFunctionCallbacks {
         ) -> c_int,
     >,
     pub setInputData: Option<unsafe extern "C" fn(*mut DATA) -> c_int>,
-    pub getTimeGrid: Option<
-        unsafe extern "C" fn(*mut DATA, *mut modelica_integer, *mut *mut modelica_integer) -> c_int,
-    >,
+    pub getTimeGrid:
+        Option<unsafe extern "C" fn(*mut DATA, *mut modelica_integer, *mut *mut modelica_integer) -> c_int>,
 
     pub symbolicInlineSystems: sim_fn,
 
     pub function_initSynchronous: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t)>,
-    pub function_updateSynchronous:
-        Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, c_long)>,
+    pub function_updateSynchronous: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, c_long)>,
     pub function_equationsSynchronous:
         Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t, c_long, c_long) -> c_int>,
 
     pub inputNames: Option<unsafe extern "C" fn(*mut DATA, *mut *mut c_char) -> c_int>,
-    pub dataReconciliationInputNames:
-        Option<unsafe extern "C" fn(*mut DATA, *mut *mut c_char) -> c_int>,
-    pub dataReconciliationUnmeasuredVariables:
-        Option<unsafe extern "C" fn(*mut DATA, *mut *mut c_char) -> c_int>,
+    pub dataReconciliationInputNames: Option<unsafe extern "C" fn(*mut DATA, *mut *mut c_char) -> c_int>,
+    pub dataReconciliationUnmeasuredVariables: Option<unsafe extern "C" fn(*mut DATA, *mut *mut c_char) -> c_int>,
 
     pub read_simulation_info: Option<unsafe extern "C" fn(*mut SIMULATION_INFO)>,
     pub read_input_fmu: Option<unsafe extern "C" fn(*mut MODEL_DATA)>,
@@ -969,6 +987,19 @@ pub struct OpenModelicaGeneratedFunctionCallbacks {
     pub initialPartialFMIDERINIT: initialAnalyticalJacobian_func_ptr,
     pub functionJacFMIDERINIT_column: jacobianColumn_func_ptr,
     pub INDEX_JAC_FMIDERINIT: c_int,
+
+    /// Per base type, the alias table an FMI value reference resolves through:
+    /// entry `vr - (nVariables + nParameters)` is the value reference this alias
+    /// stands for, or `-(vr + 1)` when it stands for its negation.
+    pub fmiRealAliasIndexes: *const c_int,
+    pub fmiIntegerAliasIndexes: *const c_int,
+    pub fmiBooleanAliasIndexes: *const c_int,
+    pub fmiStringAliasIndexes: *const c_int,
+    /// The size parameters of derived dimensions of resizable arrays (N-1), from
+    /// the start values; before the sizes are computed. `None` if the model has none.
+    pub updateStructuralParameters: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t)>,
+    /// The next time a `time >= e` / `time < e` relation switches, or `DBL_MAX`.
+    pub function_nextTimeEvent: Option<unsafe extern "C" fn(*mut DATA, *mut threadData_t) -> f64>,
 }
 
 /// The solver defaults `initializeDataStruc` installs (util/simulation_options.h,
@@ -996,6 +1027,17 @@ pub const LSS_KLU: c_int = 3;
 pub const LSS_UMFPACK: c_int = 4;
 pub const MIXED_SEARCH: c_int = 1;
 pub const NEWTON_DAMPED2: c_int = 2;
+/// The `*_MAX` sizes of the name/description tables `-help` prints.
+pub const S_MAX: c_int = 11;
+pub const IIM_MAX: c_int = 3;
+pub const LS_MAX: c_int = 7;
+pub const LSS_MAX: c_int = 5;
+pub const NLS_MAX: c_int = 7;
+pub const NLS_LS_MAX: c_int = 5;
+pub const NEWTON_MAX: c_int = 6;
+pub const JAC_MAX: c_int = 8;
+pub const IDA_LS_MAX: c_int = 6;
+pub const OMC_SIM_LOG_MAX: c_int = 57;
 
 /// `omc_alloc_interface_t` (gc/omc_gc.h): the allocator libOpenModelicaRuntimeC
 /// builds Strings with. Arrays that hold `modelica_string`s must come from its
@@ -1021,8 +1063,8 @@ unsafe extern "C" {
 /// `enum _FLAG` (util/simulation_options.h), indexing `omc_flag`/`omc_flagValue`.
 /// Only the entries the generated code or this runtime reads are named;
 /// `tests/abi_layout.rs` checks every one against the header.
-pub const FLAG_MAX: usize = 156;
-pub const FLAG_NO_SCALING: usize = 99;
+pub const FLAG_MAX: usize = 158;
+pub const FLAG_NO_SCALING: usize = 101;
 pub const FLAG_EMIT_PROTECTED: usize = 15;
 pub const FLAG_F: usize = 17;
 pub const FLAG_IDAS: usize = 41;
@@ -1031,13 +1073,12 @@ pub const FLAG_IIF: usize = 43;
 pub const FLAG_INPUT_CSV: usize = 48;
 pub const FLAG_INPUT_PATH: usize = 50;
 pub const FLAG_LV: usize = 66;
-pub const FLAG_MOO_OPTIMIZATION: usize = 75;
-pub const FLAG_NOEMIT: usize = 92;
-pub const FLAG_OUTPUT_FORMAT: usize = 105;
-pub const FLAG_OUTPUT_PATH: usize = 106;
-pub const FLAG_OVERRIDE: usize = 107;
-pub const FLAG_OVERRIDE_FILE: usize = 108;
-pub const FLAG_R: usize = 110;
-pub const FLAG_S: usize = 131;
-pub const FLAG_VARIABLE_FILTER: usize = 147;
-
+pub const FLAG_MOO_OPTIMIZATION: usize = 77;
+pub const FLAG_NOEMIT: usize = 94;
+pub const FLAG_OUTPUT_FORMAT: usize = 107;
+pub const FLAG_OUTPUT_PATH: usize = 108;
+pub const FLAG_OVERRIDE: usize = 109;
+pub const FLAG_OVERRIDE_FILE: usize = 110;
+pub const FLAG_R: usize = 112;
+pub const FLAG_S: usize = 133;
+pub const FLAG_VARIABLE_FILTER: usize = 149;

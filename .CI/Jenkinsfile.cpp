@@ -2,6 +2,7 @@ def common
 pipeline {
   agent none
   options {
+    skipDefaultCheckout()
     newContainerPerStage()
     buildDiscarder(logRotator(numToKeepStr: "100", artifactNumToKeepStr: "2"))
   }
@@ -28,6 +29,15 @@ pipeline {
             if (buildNumber > 1) milestone(buildNumber - 1)
             milestone(buildNumber)
           }
+          // common.checkoutSCM(), which is not loaded yet
+          echo "Checking out on ${env.NODE_NAME} in ${env.WORKSPACE}"
+          int attempt = 0
+          retry(2) {
+            if (attempt++ > 0) {
+              sh script: 'git submodule absorbgitdirs && git submodule deinit --all -f', returnStatus: true
+            }
+            checkout(scm).each { k, v -> env.setProperty(k, v) }
+          }
           common = load("${env.workspace}/.CI/common.groovy")
         }
       }
@@ -47,13 +57,21 @@ pipeline {
         retry(count: 2, conditions: [nonresumable()])
       }
       steps {
+        script { common.checkoutSCM() }
         script {
-          common.insideTestImage('docker.openmodelica.org/build-deps:ubuntu-22.04',
+          common.insideTestImage('docker.openmodelica.org/build-deps:ubuntu-24.04',
                                  "--mount type=volume,source=runtest-cpp-test-cache,target=/cache/runtest " +
                                  "--mount type=volume,source=omlibrary-cache,target=/cache/omlibrary") {
-            common.buildOMC('clang', 'clang++', '--without-hwloc')
+            common.buildOMC([
+              '-DCMAKE_BUILD_TYPE=Release',
+              '-DOM_USE_CCACHE=OFF',
+              '-DCMAKE_INSTALL_PREFIX=build',
+              '-DCMAKE_C_COMPILER=clang',
+              '-DCMAKE_CXX_COMPILER=clang++',
+              '-DOM_ENABLE_GUI_CLIENTS=OFF',
+              '-DOM_OMC_ENABLE_CPP_RUNTIME=ON'], 'cmake', false)
             common.makeLibsAndCache()
-            common.partest(true, '-cppruntime')
+            common.partest(1, 1, true, '-cppruntime')
           }
         }
       }

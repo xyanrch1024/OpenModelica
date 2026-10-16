@@ -40,7 +40,7 @@ pub(super) fn str_substring(ctx: &mut FnCtx, s: &DAE::Exp, i: &DAE::Exp, j: &DAE
 /// conversion `"%[-]{minimumLength}.{significantDigits}g"` (via `rt_real_format`,
 /// NOT the shortest-round-trip `realString`); the others format the scalar and
 /// then space-pad to `minimumLength` (`rt_str_pad`).
-pub(super) fn emit_string_builtin(ctx: &mut FnCtx, argv: &[&Arc<DAE::Exp>]) -> Result<SigTy> {
+pub(super) fn emit_string_builtin(ctx: &mut FnCtx, argv: &[&metamodelica::Ref<DAE::Exp>]) -> Result<SigTy> {
     // `String(Enumeration)` must render the enumeration literal *name*
     // (`Ceval.cevalBuiltinString` uses `AbsynUtil.pathLastIdent`); the wasm-jit
     // value model carries only the Integer index, so reject rather than silently
@@ -145,7 +145,7 @@ pub(super) fn emit_str_literal(ctx: &mut FnCtx, bytes: &[u8]) -> Result<()> {
 /// without the log line.
 pub(super) fn emit_reinit_note(ctx: &mut FnCtx, stateVar: &DAE::ComponentRef) -> Result<()> {
     let Ok(key) = sim_cref_key(stateVar) else { return Ok(()) };
-    let Some(slot) = ctx.sim()?.vars.get(&key).copied() else { return Ok(()) };
+    let Some(slot) = ctx.sim()?.vars.get(&key) else { return Ok(()) };
     if slot.wty != WTy::F64 {
         return Ok(());
     }

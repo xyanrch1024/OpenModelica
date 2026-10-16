@@ -54,6 +54,7 @@ protected
   import Variable = NFVariable;
 
   // backend imports
+  import NFInstNode.InstNode;
   import NBEquation.{Equation, Iterator, EquationPointers, EquationAttributes, EquationKind};
   import NBVariable.{VarData, VariablePointers};
   import BVariable = NBVariable;
@@ -150,7 +151,7 @@ public
     input ComponentRef cref_to_solve;
     output UnorderedMap<ComponentRef, EvalOrder> order = UnorderedMap.new<EvalOrder>(ComponentRef.hash, ComponentRef.isEqual);
   protected
-    PointerCyclic<Variable> var_ptr = BVariable.getVarPointer(cref_to_solve, sourceInfo());
+    Pointer<Variable> var_ptr = BVariable.getVarPointer(cref_to_solve, sourceInfo());
     UnorderedSet<ComponentRef> var_occurences = UnorderedSet.new(ComponentRef.hash, ComponentRef.isEqual);
     UnorderedSet<ComponentRef> ite_occurences;
     list<ComponentRef> occ_lst, iterators;
@@ -163,6 +164,7 @@ public
     Integer factor;
     Integer shift_value, v2;
     EvalOrder eval;
+    Boolean stop;
   algorithm
     order := match eqn
       case Equation.FOR_EQUATION() algorithm
@@ -175,6 +177,7 @@ public
             subs  := list(ComponentRef.subscriptsAllWithWholeFlat(cref) for cref in occ_lst);
             subs  := List.transposeList(subs);
             subs_to_solve := ComponentRef.subscriptsAllWithWholeFlat(cref_to_solve);
+            stop := false;
             for dim in List.zip(subs, subs_to_solve) loop
               (local_subs, sub_to_solve) := dim;
               ite_occurences := UnorderedSet.new(ComponentRef.hash, ComponentRef.isEqual);
@@ -183,6 +186,9 @@ public
               end for;
               iterators := UnorderedSet.toList(ite_occurences);
               () := match iterators
+                // literal subscripts in this dimension do not restrict the order
+                case {} then ();
+
                 case {iter} algorithm
                   eval := UnorderedMap.getSafe(iter, order, sourceInfo());
                   if eval < EvalOrder.FAILED then
@@ -223,9 +229,10 @@ public
                   for it in iterators loop
                     UnorderedMap.add(it, EvalOrder.FAILED, order);
                   end for;
-                  break;
+                  stop := true;
                 then ();
               end match;
+              if stop then break; end if;
             end for;
           end if;
         end for;
@@ -235,6 +242,103 @@ public
       then order;
     end match;
   end detect;
+
+  function addDimensionParameters
+    "A dimension of a resizable array that is an expression of parameters (N-1,
+    nT+1) gets an Integer parameter $DIM_k with the expression as start value.
+    The init.xml refers to it by value reference like to a plain size parameter,
+    and the generated function updateStructuralParameters computes it from the
+    start values of the other parameters (possibly changed with -override) before
+    the runtime allocates the arrays."
+    input output VarData varData;
+  protected
+    list<Expression> dim_exps = {};
+    list<Pointer<Variable>> dim_params = {};
+    Pointer<Variable> var_ptr;
+    Variable var;
+    ComponentRef cref;
+    Integer idx = 1;
+  algorithm
+    varData := match varData
+      case VarData.VAR_DATA_SIM() algorithm
+        // all lists: e.g. the function alias variables of the initialization are not in variables
+        for v in List.flatten(list(VariablePointers.toList(l) for l in {varData.variables, varData.unknowns,
+            varData.knowns, varData.initials, varData.auxiliaries, varData.aliasVars, varData.nonTrivialAlias})) loop
+          // calculated size parameters (s.N = N) have no start value at runtime
+          Pointer.update(v, Variable.applyToType(Pointer.access(v), function Type.applyToDims(func = resolveSizeParameters)));
+          for dim in Type.arrayDims(Variable.typeOf(Pointer.access(v))) loop
+            dim_exps := match dim
+              case Dimension.RESIZABLE() guard isDimensionExpression(dim.exp) and not List.isMemberOnTrue(dim.exp, dim_exps, Expression.isEqual)
+                then dim.exp :: dim_exps;
+              case Dimension.EXP() guard isDimensionExpression(dim.exp) and not List.isMemberOnTrue(dim.exp, dim_exps, Expression.isEqual)
+                then dim.exp :: dim_exps;
+              else dim_exps;
+            end match;
+          end for;
+        end for;
+        for e in listReverse(dim_exps) loop
+          (var_ptr, cref) := BVariable.makeAuxVar("$DIM", idx, Type.INTEGER(), true);
+          var := BVariable.setStartAttribute(Pointer.access(var_ptr), e, true);
+          Pointer.update(var_ptr, var);
+          dim_params := var_ptr :: dim_params;
+          idx := idx + 1;
+        end for;
+        if not listEmpty(dim_params) then
+          dim_params := listReverse(dim_params);
+          varData.variables := VariablePointers.addList(dim_params, varData.variables);
+          varData.knowns := VariablePointers.addList(dim_params, varData.knowns);
+          varData.resizables := VariablePointers.addList(dim_params, varData.resizables);
+        end if;
+      then varData;
+      else varData;
+    end match;
+  end addDimensionParameters;
+
+  function resolveSizeParameters
+    "replaces Integer parameters with a non-literal binding in a resizable
+    dimension by their binding, e.g. s.N with binding N"
+    input output Dimension dim;
+  algorithm
+    dim := match dim
+      case Dimension.RESIZABLE() algorithm
+        dim.exp := Expression.map(dim.exp, resolveSizeParameter);
+      then dim;
+      else dim;
+    end match;
+  end resolveSizeParameters;
+
+  function resolveSizeParameter
+    input output Expression exp;
+  protected
+    Pointer<Variable> var_ptr;
+    Variable var;
+  algorithm
+    exp := match exp
+      case Expression.CREF(ty = Type.INTEGER()) guard InstNode.isVar(ComponentRef.node(exp.cref)) algorithm
+        var_ptr := BVariable.getVarPointer(exp.cref, sourceInfo());
+        var := Pointer.access(var_ptr);
+      then match Binding.getExpOpt(var.binding)
+        local
+          Expression b;
+        case SOME(b) guard BVariable.isParamOrConst(var_ptr) and not Expression.isLiteral(b)
+          then Expression.map(b, resolveSizeParameter);
+        else exp;
+      end match;
+      else exp;
+    end match;
+  end resolveSizeParameter;
+
+  function isDimensionExpression
+    "true for a dimension that is neither a literal nor a plain parameter"
+    input Expression exp;
+    output Boolean b;
+  algorithm
+    b := match exp
+      case Expression.INTEGER() then false;
+      case Expression.CREF() then false;
+      else not Expression.isLiteral(exp);
+    end match;
+  end isDimensionExpression;
 
   function orderFailed
     input EvalOrder eo;
@@ -292,7 +396,8 @@ protected
         // fill the occurence sets traversing the body of the equation
         for body in eqn.body loop
           Equation.map(body, function collectOccurences(occs = occs));
-          Equation.map(body, function collectVars(func = BVariable.isArray, collector = constrained_vars));
+          // the branches of if-expressions are guarded by their conditions (e.g. x[i + 1] for i < n)
+          Equation.map(body, function collectUnguardedVars(func = BVariable.isArray, collector = constrained_vars), NONE(), Expression.fakeMap);
         end for;
         findOptimalValue(eqn, occs, resizables, parameters, min_parameters, optimal_values, c2pi);
         UnorderedSet.fold(constrained_vars, function addVariableConstraint(eqn = eqn, replacements = SOME(replacements)), c2pi);
@@ -378,6 +483,221 @@ protected
       end match;
     end for;
   end getVarReplacements;
+
+public
+  function restrictIterator
+    "The iterator restricted to the box of iterations given by flat slice indices
+     at the analysis sizes (zero based, last frame fastest). Positions near the
+     start of a range are counted from its start, positions near its end from
+     its stop, so the restriction holds for every value of the resizable
+     parameters. NONE() if the indices are no box or a bound is ambiguous."
+    input Iterator iter;
+    input list<Integer> indices;
+    output Option<Iterator> res = NONE();
+  protected
+    list<ComponentRef> names;
+    list<Expression> ranges, new_ranges = {};
+    list<Option<Iterator>> maps;
+    array<Integer> sizes, lo, hi;
+    list<Integer> uniq;
+    Integer n, tmp, p, count = 1;
+    Option<Expression> range;
+  algorithm
+    (names, ranges, maps) := Iterator.getFrames(iter);
+    if listEmpty(indices) or List.any(maps, isSome) then
+      return;
+    end if;
+    sizes := listArray(list(Expression.rangeSize(r, true) for r in ranges));
+    n := arrayLength(sizes);
+    lo := arrayCopy(sizes);
+    hi := arrayCreate(n, -1);
+    uniq := UnorderedSet.toList(UnorderedSet.fromList(indices, Util.id, intEq));
+    for idx in uniq loop
+      tmp := idx;
+      for d in n:-1:1 loop
+        p := mod(tmp, sizes[d]);
+        tmp := intDiv(tmp, sizes[d]);
+        lo[d] := intMin(lo[d], p);
+        hi[d] := intMax(hi[d], p);
+      end for;
+      if tmp <> 0 then
+        return;
+      end if;
+    end for;
+    for d in 1:n loop
+      count := count * (hi[d] - lo[d] + 1);
+    end for;
+    if count <> listLength(uniq) then
+      return;
+    end if;
+    for d in 1:n loop
+      range := restrictedRange(listGet(ranges, d), lo[d], hi[d], sizes[d]);
+      if isNone(range) then
+        return;
+      end if;
+      new_ranges := Util.getOption(range) :: new_ranges;
+    end for;
+    res := SOME(Iterator.fromFrames(List.zip3(names, listReverse(new_ranges), maps)));
+  end restrictIterator;
+
+  function boxes
+    "splits flat indices (zero based, last dimension fastest) of an array with
+     the given sizes into boxes, ordered by their first index"
+    input list<Integer> indices;
+    input list<Integer> sizes;
+    output list<list<Integer>> parts = {};
+  protected
+    list<list<Integer>> locs;
+  algorithm
+    locs := list(indexLocation(i, sizes) for i in List.sort(UnorderedSet.toList(UnorderedSet.fromList(indices, Util.id, intEq)), intGt));
+    for spec in boxSpecs(locs) loop
+      parts := boxIndices(spec, sizes) :: parts;
+    end for;
+    parts := List.sort(parts, function boxGreater());
+  end boxes;
+
+  function boxGreater
+    input list<Integer> a;
+    input list<Integer> b;
+    output Boolean res = listHead(a) > listHead(b);
+  end boxGreater;
+
+  function indexLocation
+    "zero based location of a flat index, last dimension fastest"
+    input Integer index;
+    input list<Integer> sizes;
+    output list<Integer> loc = {};
+  protected
+    Integer tmp = index;
+  algorithm
+    for s in listReverse(sizes) loop
+      loc := mod(tmp, s) :: loc;
+      tmp := intDiv(tmp, s);
+    end for;
+  end indexLocation;
+
+  function boxSpecs
+    "the locations as boxes of (first, last) per dimension: groups of the first
+     coordinate with equal boxes of the others are merged"
+    input list<list<Integer>> locs;
+    output list<list<tuple<Integer, Integer>>> specs = {};
+  protected
+    type Locations = list<list<Integer>>;
+    UnorderedMap<Integer, Locations> groups = UnorderedMap.new<Locations>(Util.id, intEq);
+    list<Integer> values;
+    list<list<tuple<Integer, Integer>>> sub, prev_sub = {};
+    Integer lo = -1, hi = -1;
+    String key, prev_key = "#none";
+  algorithm
+    if listEmpty(locs) then
+      return;
+    elseif listEmpty(listHead(locs)) then
+      specs := {{}};
+      return;
+    end if;
+    for loc in locs loop
+      UnorderedMap.add(listHead(loc), listRest(loc) :: UnorderedMap.getOrDefault(listHead(loc), groups, {}), groups);
+    end for;
+    values := List.sort(UnorderedMap.keyList(groups), intGt);
+    for v in values loop
+      sub := boxSpecs(listReverse(UnorderedMap.getOrFail(v, groups)));
+      key := specString(sub);
+      if v == hi + 1 and key == prev_key then
+        hi := v;
+      else
+        specs := addSpecs(lo, hi, prev_sub, specs);
+        (lo, hi, prev_sub, prev_key) := (v, v, sub, key);
+      end if;
+    end for;
+    specs := listReverse(addSpecs(lo, hi, prev_sub, specs));
+  end boxSpecs;
+
+  function addSpecs
+    input Integer lo;
+    input Integer hi;
+    input list<list<tuple<Integer, Integer>>> sub;
+    input output list<list<tuple<Integer, Integer>>> specs;
+  algorithm
+    if lo >= 0 then
+      for s in sub loop
+        specs := ((lo, hi) :: s) :: specs;
+      end for;
+    end if;
+  end addSpecs;
+
+  function specString
+    input list<list<tuple<Integer, Integer>>> specs;
+    output String str = stringDelimitList(list(stringDelimitList(list(intString(Util.tuple21(t)) + ":" + intString(Util.tuple22(t)) for t in s), ",") for s in specs), ";");
+  end specString;
+
+  function boxIndices
+    "the flat indices of a box"
+    input list<tuple<Integer, Integer>> spec;
+    input list<Integer> sizes;
+    output list<Integer> indices = {0};
+  protected
+    Integer lo, hi;
+  algorithm
+    for tpl in List.zip(spec, sizes) loop
+      ((lo, hi), _) := tpl;
+      indices := List.flatten(list(list(i * Util.tuple22(tpl) + p for p in lo:hi) for i in indices));
+    end for;
+  end boxIndices;
+
+  function restrictedRange
+    "the positions lo..hi (zero based) of a range with n elements at the analysis sizes"
+    input Expression range;
+    input Integer lo;
+    input Integer hi;
+    input Integer n;
+    output Option<Expression> res = NONE();
+  protected
+    Option<Expression> start, stop;
+    Expression size_exp;
+    Dimension dim;
+  algorithm
+    () := match range
+      case Expression.RANGE() guard isNone(range.step) or Expression.isOne(Util.getOption(range.step)) algorithm
+        if lo == 0 and hi == n - 1 then
+          res := SOME(range);
+          return;
+        end if;
+        start := rangeBound(lo, n, range.start, range.stop);
+        stop := rangeBound(hi, n, range.start, range.stop);
+        if isNone(start) or isNone(stop) then
+          return;
+        end if;
+        size_exp := SimplifyExp.simplify(Expression.MULTARY({Util.getOption(stop), Expression.INTEGER(1)}, {Util.getOption(start)}, Operator.makeAdd(Type.INTEGER())));
+        dim := match Type.nthDimension(range.ty, 1)
+          case dim as Dimension.RESIZABLE() then Dimension.RESIZABLE(dim.size - (n - (hi - lo + 1)), SOME(hi - lo + 1), size_exp, dim.var);
+          else Dimension.fromInteger(hi - lo + 1);
+        end match;
+        res := SOME(Expression.RANGE(Type.ARRAY(Type.INTEGER(), {dim}), Util.getOption(start), NONE(), Util.getOption(stop)));
+      then ();
+      else ();
+    end match;
+  end restrictedRange;
+
+  function rangeBound
+    "position p (zero based) of a range with n elements, counted from the nearer end"
+    input Integer p;
+    input Integer n;
+    input Expression start;
+    input Expression stop;
+    output Option<Expression> bound;
+  algorithm
+    if Expression.isInteger(start) and Expression.isInteger(stop) then
+      bound := SOME(Expression.INTEGER(Expression.integerValue(start) + p));
+    elseif p < n - 1 - p then
+      bound := SOME(SimplifyExp.simplify(Expression.MULTARY({start, Expression.INTEGER(p)}, {}, Operator.makeAdd(Type.INTEGER()))));
+    elseif p > n - 1 - p then
+      bound := SOME(SimplifyExp.simplify(Expression.MULTARY({stop}, {Expression.INTEGER(n - 1 - p)}, Operator.makeAdd(Type.INTEGER()))));
+    else
+      bound := NONE();
+    end if;
+  end rangeBound;
+
+protected
 
   function iteratorIsResizable
     input Expression range;
@@ -471,6 +791,25 @@ protected
       else();
     end match;
   end collectVars;
+
+  function collectUnguardedVars
+    "collectVars without the branches of if-expressions"
+    input output Expression exp;
+    input BVariable.checkVar func;
+    input UnorderedSet<ComponentRef> collector;
+  algorithm
+    () := match exp
+      case Expression.IF() algorithm
+        collectUnguardedVars(exp.condition, func, collector);
+      then ();
+      case Expression.CREF() algorithm
+        collectVars(exp, func, collector);
+      then ();
+      else algorithm
+        Expression.mapShallow(exp, function collectUnguardedVars(func = func, collector = collector));
+      then ();
+    end match;
+  end collectUnguardedVars;
 
   function findOptimalValue
     input Equation eqn;
@@ -612,7 +951,7 @@ protected
     input Option<UnorderedMap<ComponentRef, Expression>> replacements;
     input output UnorderedMap<Expression, ParameterList> c2pi;
   protected
-    Variable var = PointerCyclic.access(BVariable.getVarPointer(cref, sourceInfo()));
+    Variable var = Pointer.access(BVariable.getVarPointer(cref, sourceInfo()));
     list<Dimension> dims = Type.arrayDims(var.ty);
     list<Subscript> subs = ComponentRef.subscriptsAllWithWholeFlat(cref); // needs list reverse?
     Dimension dim;
@@ -628,7 +967,7 @@ protected
         addConstraint(const, replacements, c2pi, Expression.isNonPositive, ComponentRef.toString(cref) + " (variable)", ">=");
       else
         Error.addMessage(Error.INTERNAL_ERROR,{getInstanceName() + " failed.\nViolation of implicit constraint `" + Dimension.toString(dim) + " >= " + Subscript.toString(sub)
-          + "` for component reference `" + ComponentRef.toString(cref) + "` of variable `" + Variable.toString(PointerCyclic.access(BVariable.getVarPointer(cref, sourceInfo()))) + "`\nin equation:\n" + Equation.toString(eqn)});
+          + "` for component reference `" + ComponentRef.toString(cref) + "` of variable `" + Variable.toString(Pointer.access(BVariable.getVarPointer(cref, sourceInfo()))) + "`\nin equation:\n" + Equation.toString(eqn)});
         fail();
       end try;
       const   := Expression.MULTARY({Expression.INTEGER(1)}, {Dimension.sizeExp(dim)}, op);
@@ -636,7 +975,7 @@ protected
         addConstraint(const, replacements, c2pi, Expression.isNonPositive, ComponentRef.toString(cref) + " (variable)", ">=");
       else
         Error.addMessage(Error.INTERNAL_ERROR,{getInstanceName() + " failed.\nViolation of implicit constraint `" + Dimension.toString(dim) + " >= 1"
-          + "` for component reference `" + ComponentRef.toString(cref) + "` of variable `" + Variable.toString(PointerCyclic.access(BVariable.getVarPointer(cref, sourceInfo()))) + "`\nin equation:\n" + Equation.toString(eqn)});
+          + "` for component reference `" + ComponentRef.toString(cref) + "` of variable `" + Variable.toString(Pointer.access(BVariable.getVarPointer(cref, sourceInfo()))) + "`\nin equation:\n" + Equation.toString(eqn)});
         fail();
       end try;
     end for;
@@ -752,7 +1091,7 @@ protected
       // use max value as initial guess
     else
       // cannot be determined -> use actual binding value
-      var := PointerCyclic.access(BVariable.getVarPointer(cref, sourceInfo()));
+      var := Pointer.access(BVariable.getVarPointer(cref, sourceInfo()));
       binding := Binding.getExp(var.binding);
       UnorderedMap.add(cref, binding, optimal_values);
     end if;
@@ -768,7 +1107,7 @@ protected
     Expression value;
   algorithm
     if not UnorderedMap.contains(cref, optimal_values) then
-      var := PointerCyclic.access(BVariable.getVarPointer(cref, sourceInfo()));
+      var := Pointer.access(BVariable.getVarPointer(cref, sourceInfo()));
       value := match var
         case Variable.VARIABLE(backendinfo = BackendInfo.BACKEND_INFO(attributes = attributes as VariableAttributes.VAR_ATTR_INT())) algorithm
           if UnorderedSet.contains(cref, min_parameters) then
@@ -806,7 +1145,8 @@ protected
     for tpl in UnorderedMap.toList(c2p) loop
       (const, params) := tpl;
       for param in params loop
-        UnorderedMap.add(param, const :: UnorderedMap.getSafe(param, p2c, sourceInfo()), p2c);
+        // constraints of single elements (e.g. from expanded connections) may contain parameters that were not collected
+        UnorderedMap.add(param, const :: UnorderedMap.getOrDefault(param, p2c, {}), p2c);
       end for;
     end for;
   end invertConstraintParameterMap;
@@ -972,7 +1312,7 @@ protected
   algorithm
     for tpl in UnorderedMap.toList(optimal_values) loop
       (param, value)  := tpl;
-      var             := PointerCyclic.access(BVariable.getVarPointer(param, sourceInfo()));
+      var             := Pointer.access(BVariable.getVarPointer(param, sourceInfo()));
       names           := ComponentRef.toString(param) :: names;
       new_vals        := Expression.toString(value) :: new_vals;
       old_vals        := Binding.toString(var.binding) :: old_vals;

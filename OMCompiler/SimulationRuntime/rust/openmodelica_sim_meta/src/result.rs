@@ -82,13 +82,13 @@ pub fn open_stream(
     out: impl FnOnce() -> Option<Box<dyn ResultOut>>,
 ) -> crate::driver::Result<ResultStream> {
     let out: Box<dyn ResultOut> = match format {
-        "mat" | "csv" | "plt" | "arrow" => out().ok_or("CodegenWasmJit: cannot open the result file")?,
+        "mat" | "csv" | "plt" | "arrow" => out().ok_or("Cannot open the result file for writing")?,
         _ => Box::new(NullOut),
     };
     let params = crate::driver::read_params(e, model, sim_data)?;
     let mut first = Vec::new();
-    crate::driver::capture_row(e, &mut first, sim_data, &model.layout)?;
-    Ok(ResultStream::open(model, format, keep, &params, &first, model.layout.n_row_total(), precision, out))
+    crate::driver::capture_full_row(e, &mut first, sim_data, &model.layout)?;
+    Ok(ResultStream::open(model, format, keep, &params, &first, crate::driver::row_width(&model.layout), precision, out))
 }
 
 struct MatOut<'a> {
@@ -276,7 +276,7 @@ impl ResultStream {
         self.n_rows
     }
 
-    /// The initial result row (`n_reals` values).
+    /// The initial result row, every column.
     pub fn first_row(&self) -> &[f64] {
         &self.first_row
     }

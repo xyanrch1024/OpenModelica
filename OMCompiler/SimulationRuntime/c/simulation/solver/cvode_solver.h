@@ -44,6 +44,8 @@
 #include <cvode/cvode.h>                            /* prototypes for CVODE fcts., consts. */
 #include <nvector/nvector_serial.h>                 /* serial N_Vector types, fcts., macros */
 #include <sunlinsol/sunlinsol_dense.h>              /* Default dense linear solver */
+#include <sunlinsol/sunlinsol_klu.h>                /* Sparse linear solver over the ODE Jacobian */
+#include <sunmatrix/sunmatrix_sparse.h>
 #include <sunnonlinsol/sunnonlinsol_fixedpoint.h>   /* Default dense linear solver */
 
 /**
@@ -81,8 +83,6 @@ typedef struct CVODE_CONFIG
   JACOBIAN_METHOD jacobianMethod; /* Method for Jacobian computation */
 
   /* Optional configurations */
-  double minStepSize;          /* Lower bound on the magnitude of the step size.
-                                * Minimum value is 0.0, default value is 1e-12. */
   double maxStepSize;          /* Upper bound on the magnitude of the step size.
                                 * Set to 0.0 to obtain default value infinity. */
   double initStepSize;         /* Initial step size for CVODE.
@@ -118,6 +118,17 @@ typedef struct CVODE_SOLVER
   N_Vector y_linSol;          /* Template for cloning vectors needed inside linear solver */
   SUNMatrix J;                /* Sparse matrix template for cloning matrices needed within
                                  linear solver */
+  /* colored numerical Jacobian */
+  N_Vector fProbe;            /* f at the perturbed states */
+  double *ysave;
+  double *delta_hh;
+  double jacNominalFactor;
+#ifndef OMC_FMI_RUNTIME
+  /* where CVODE starts, with initialization's derivatives there */
+  double startTime;
+  double *yStart;
+  double *fStart;
+#endif
 
   /* Non-linear solver data */
   SUNNonlinearSolver nonLinSol; /* Non-linear solver object */

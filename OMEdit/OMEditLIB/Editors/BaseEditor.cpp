@@ -43,6 +43,7 @@
 #include "Modeling/ModelWidgetContainer.h"
 #include "Modeling/DocumentationWidget.h"
 #include "Util/Helper.h"
+#include "Util/Style.h"
 #include "Util/NavigationManager.h"
 #include "Debugger/Breakpoints/BreakpointsWidget.h"
 #include "Util/ResourceCache.h"
@@ -754,8 +755,8 @@ bool PlainTextEdit::eventFilter(QObject *pObject, QEvent *pEvent)
   QWidget *pCompleterToolTipWidget = qobject_cast<QWidget*>(pObject);
   if (pCompleterToolTipWidget && pEvent->type() == QEvent::Paint) {
     QPainter painter (pCompleterToolTipWidget);
-    painter.setPen(Qt::black);
-    painter.setBrush(Qt::white);
+    painter.setPen(Style::completerToolTipPenColor());
+    painter.setBrush(Style::completerToolTipBrushColor());
     QRect rectangle = pCompleterToolTipWidget->rect();
     rectangle.setWidth(pCompleterToolTipWidget->rect().width() - 1);
     rectangle.setHeight(pCompleterToolTipWidget->rect().height() - 1);
@@ -894,11 +895,7 @@ int PlainTextEdit::lineNumberAreaWidth()
     ++digits;
   }
   const QFontMetrics fm(document()->defaultFont());
-#if QT_VERSION >= QT_VERSION_CHECK(5, 11, 0)
   int space = fm.horizontalAdvance(QLatin1Char('9')) * digits;
-#else // QT_VERSION_CHECK
-  int space = fm.width(QLatin1Char('9')) * digits;
-#endif // QT_VERSION_CHECK
   if (canHaveBreakpoints()) {
     space += fm.lineSpacing();
   } else {
@@ -922,7 +919,7 @@ int PlainTextEdit::lineNumberAreaWidth()
 void PlainTextEdit::lineNumberAreaPaintEvent(QPaintEvent *event)
 {
   QPainter painter(mpLineNumberArea);
-  painter.fillRect(event->rect(), QColor(240, 240, 240));
+  painter.fillRect(event->rect(), Style::lineNumberAreaBackgroundColor());
 
   QTextBlock block = firstVisibleBlock();
   int blockNumber = block.blockNumber();
@@ -980,9 +977,9 @@ void PlainTextEdit::lineNumberAreaPaintEvent(QPaintEvent *event)
       }
       // make the current highlighted line number darker
       if (blockNumber == textCursor().blockNumber()) {
-        painter.setPen(QColor(64, 64, 64));
+        painter.setPen(Style::currentLineNumberColor());
       } else {
-        painter.setPen(Qt::gray);
+        painter.setPen(Style::lineNumberColor());
       }
       painter.setFont(document()->defaultFont());
       painter.drawText(0, top, lineNumbersWidth, fm.height(), Qt::AlignRight, number);
@@ -992,7 +989,7 @@ void PlainTextEdit::lineNumberAreaPaintEvent(QPaintEvent *event)
     if (pTextEditorPage->getSyntaxHighlightingGroupBox()->isChecked() && pTextEditorPage->getCodeFoldingCheckBox()->isChecked()) {
       painter.save();
       painter.setRenderHint(QPainter::Antialiasing, false);
-      painter.setPen(Qt::gray);
+      painter.setPen(Style::lineNumberColor());
 
       TextBlockUserData *nextBlockUserData = BaseEditorDocumentLayout::testUserData(nextBlock);
       bool drawFoldingControl = nextBlockUserData && BaseEditorDocumentLayout::foldingIndent(block) < nextBlockUserData->foldingIndent();
@@ -1080,11 +1077,7 @@ void PlainTextEdit::lineNumberAreaMouseEvent(QMouseEvent *event)
         QMenu menu(this);
         mpBaseEditor->getToggleBreakpointAction()->setData(QStringList() << fileName << QString::number(lineNumber));
         menu.addAction(mpBaseEditor->getToggleBreakpointAction());
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
         menu.exec(event->globalPosition().toPoint());
-#else
-        menu.exec(event->globalPos());
-#endif
       }
     }
   }
@@ -1615,7 +1608,7 @@ QCompleter *PlainTextEdit::completer()
 void PlainTextEdit::setReadOnlyStyleSheet()
 {
   // read-only PlainTextEdit with gray background
-  setStyleSheet(QString("QPlainTextEdit[readOnly=\"true\"] { background-color: #f0f0f0 }"));
+  setStyleSheet(Style::readOnlyEditorStyleSheet());
 }
 
 /*!
@@ -1836,11 +1829,7 @@ QMimeData* PlainTextEdit::createMimeDataFromSelection() const
     const int selectionStart = cursor.selectionStart();
     const int endOfDocument = tempDocument->characterCount() - 1;
     for (QTextBlock current = start; current.isValid() && current != end; current = current.next()) {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 6, 0)
   foreach (const QTextLayout::FormatRange &range, current.layout()->formats()) {
-#else // QT_VERSION_CHECK
-  foreach (const QTextLayout::FormatRange &range, current.layout()->additionalFormats()) {
-#endif // QT_VERSION_CHECK
         const int startPosition = current.position() + range.start - selectionStart;
         const int endPosition = startPosition + range.length;
         if (endPosition <= 0 || startPosition >= endOfDocument) {
@@ -2031,11 +2020,7 @@ void PlainTextEdit::paintEvent(QPaintEvent *e)
         QString rectReplacement = QLatin1String(" ") + replacement + QLatin1String("); ");
 
         const QFontMetrics fm(document()->defaultFont());
-#if QT_VERSION >= QT_VERSION_CHECK(5, 11, 0)
         QRectF collapseRect(lineRect.right() + 12, lineRect.top(), fm.horizontalAdvance(rectReplacement), lineRect.height());
-#else // QT_VERSION_CHECK
-        QRectF collapseRect(lineRect.right() + 12, lineRect.top(), fm.width(rectReplacement), lineRect.height());
-#endif // QT_VERSION_CHECK
         painter.setRenderHint(QPainter::Antialiasing, true);
         painter.translate(.5, .5);
         painter.drawRoundedRect(collapseRect.adjusted(0, 0, 0, -1), 3, 3);
@@ -2079,11 +2064,7 @@ void PlainTextEdit::paintEvent(QPaintEvent *e)
 void PlainTextEdit::wheelEvent(QWheelEvent *event)
 {
   if (event->modifiers() & Qt::ControlModifier) {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 6, 0)
   if (event->angleDelta().x() > 0 || event->angleDelta().y() > 0) {
-#else // QT_VERSION_CHECK
-  if (event->delta() > 0) {
-#endif // QT_VERSION_CHECK
       zoomIn();
     } else {
       zoomOut();
@@ -3023,8 +3004,8 @@ InfoBar::InfoBar(QWidget *pParent)
   : QFrame(pParent)
 {
   QPalette pal = palette();
-  pal.setColor(QPalette::Window, QColor(255, 255, 225));
-  pal.setColor(QPalette::WindowText, Qt::black);
+  pal.setColor(QPalette::Window, Style::infoBarBackgroundColor());
+  pal.setColor(QPalette::WindowText, Style::infoBarTextColor());
   setPalette(pal);
   setFrameStyle(QFrame::StyledPanel);
   setAutoFillBackground(true);
@@ -3066,8 +3047,8 @@ ReloadAsModelicaInfoBar::ReloadAsModelicaInfoBar(BaseEditor *pBaseEditor)
   : QFrame(pBaseEditor)
 {
   QPalette pal = palette();
-  pal.setColor(QPalette::Window, QColor(255, 255, 225));
-  pal.setColor(QPalette::WindowText, Qt::black);
+  pal.setColor(QPalette::Window, Style::infoBarBackgroundColor());
+  pal.setColor(QPalette::WindowText, Style::infoBarTextColor());
   setPalette(pal);
   setFrameStyle(QFrame::StyledPanel);
   setAutoFillBackground(true);

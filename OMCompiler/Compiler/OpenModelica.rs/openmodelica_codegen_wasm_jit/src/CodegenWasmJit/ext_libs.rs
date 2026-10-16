@@ -20,6 +20,12 @@ pub(crate) struct ExtLibraries {
     /// `#include` lines for the C sources a `Library` named, which the C target
     /// hands to the compiler rather than the linker.
     pub sources: Vec<String>,
+    /// `NAME=value` variables the wasm libraries need in the guest's environment.
+    pub env: Vec<String>,
+    /// The generation of the prebuilt modules taken, the newest all libraries have.
+    pub generation: Option<u64>,
+    /// That generation's libc, when its bundles carry one, named by its path.
+    pub libc: Option<ExtLibrary>,
 }
 
 /// Resolve the `Library` annotations against the library directories. A name that
@@ -31,8 +37,24 @@ pub(crate) fn resolve_ext_libraries(
     fortran: bool,
     notes: &mut Vec<String>,
 ) -> Result<ExtLibraries> {
+    let mut out = ExtLibraries::default();
+    out.generation = bundle_generation(lst(&mp.libPaths).map(|d| d.as_str())).unwrap_or_else(|e| {
+        notes.push(e);
+        None
+    });
     let mut dirs: Vec<String> = vec![String::new()]; // relative to the working directory
     for d in lst(&mp.libPaths) {
+        // A bundle's modules before what the library ships itself.
+        if let Some(g) = out.generation.filter(|_| d.trim_end_matches('/').ends_with("wasm32-wasip1")) {
+            let bundle = format!("{}/{GENERATION_PREFIX}{g}/", d.trim_end_matches('/'));
+            if out.libc.is_none() {
+                let path = format!("{bundle}libc/libc.so");
+                if let Ok(bytes) = openmodelica_wasi::fs::read(&path) {
+                    out.libc = Some(ExtLibrary { name: path, bytes, fixed: true });
+                }
+            }
+            dirs.push(bundle);
+        }
         dirs.push(format!("{d}/"));
     }
     for lib in lst(&mp.libs) {
@@ -48,11 +70,10 @@ pub(crate) fn resolve_ext_libraries(
     for d in ld_search_dirs(&mp.ldflags) {
         dirs.push(format!("{d}/"));
     }
-    let mut out = ExtLibraries::default();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: HashSet<String> = HashSet::default();
     // A `Library` yields `<name>.wasm` and the `-l<name>` a native host falls back
     // to, both naming the same file. Placing one twice re-runs its `_initialize`.
-    let mut placed: HashSet<String> = HashSet::new();
+    let mut placed: HashSet<String> = HashSet::default();
     for lib in lst(&mp.libs) {
         let lib = lib.to_string();
         if !seen.insert(lib.clone()) {
@@ -64,7 +85,7 @@ pub(crate) fn resolve_ext_libraries(
             // Both are kept — the `Include` wrappers over the library are served by
             // the host, and those link against the platform build.
             let mut have_wasm = false;
-            if let Some((path, bytes)) = find_wasm_library(&lib, &dirs) {
+            if let Some((path, bytes)) = find_wasm_library(&lib, &dirs, &mut out.env) {
                 have_wasm = true;
                 if placed.insert(path.clone()) {
                     out.wasm.push(ExtLibrary { name: path, bytes, fixed: true });
@@ -87,10 +108,10 @@ pub(crate) fn resolve_ext_libraries(
             }
             continue;
         }
-        let Some((path, bytes)) = find_ext_library(&lib, &dirs) else {
+        let Some((path, bytes)) = find_ext_library(&lib, &dirs, &mut out.env) else {
             notes.push(format!(
                 "`{lib}` was not found (looked in {}); a wasm target loads a prebuilt shared \
-                 library, built with `clang --target=wasm32-wasip1 -fPIC -shared`",
+                 library, built with `clang --target=wasm32-wasip1 -fPIC -shared -Wl,--export-all`",
                 dirs.iter().map(|d| if d.is_empty() { "." } else { d.trim_end_matches('/') })
                     .collect::<Vec<_>>().join(", ")
             ));
@@ -98,6 +119,42 @@ pub(crate) fn resolve_ext_libraries(
         };
         if placed.insert(path.clone()) {
             out.wasm.push(ExtLibrary { name: path, bytes, fixed: true });
+        }
+    }
+    // What modules link against (`libc++.so`), placed first: via a bundle's
+    // manifest, else from the toolchain a library of the model's own was built with.
+    let toolchain_lib = wasi_sysroot().map(|s| s.join("lib/wasm32-wasip1"));
+    let mut k = 0;
+    while k < out.wasm.len() {
+        let needed = openmodelica_wasm_jit::dylink::parse(&out.wasm[k].bytes).map(|d| d.needed).unwrap_or_default();
+        let dep = needed
+            .iter()
+            .filter(|n| *n != "libc.so")
+            .filter_map(|n| {
+                dirs.iter().find_map(|d| library_alias(d, n)).map(|(path, _)| path).or_else(|| {
+                    let path = toolchain_lib.as_ref()?.join(n).display().to_string();
+                    openmodelica_wasi::fs::exists(&path).then_some(path)
+                })
+            })
+            .find(|path| !placed.contains(path))
+            .and_then(|path| openmodelica_wasi::fs::read(&path).ok().map(|bytes| (path, bytes)));
+        match dep {
+            Some((path, bytes)) => {
+                placed.insert(path.clone());
+                out.wasm.insert(k, ExtLibrary { name: path, bytes, fixed: true });
+            }
+            None => k += 1,
+        }
+    }
+    if !out.wasm.is_empty() {
+        // A native process has it; CoolProp caches its tables there.
+        let home = openmodelica_util::Settings::getHomeDir(openmodelica_util::Testsuite::isRunning().unwrap_or(false));
+        if !home.is_empty() && !out.env.iter().any(|v| v.starts_with("HOME=")) {
+            out.env.push(format!("HOME={home}"));
+        }
+        // Modules from no bundle were built against the toolchain, if any.
+        if out.libc.is_none() {
+            out.libc = toolchain_libc();
         }
     }
     if fortran {
@@ -118,6 +175,21 @@ pub(crate) fn resolve_ext_libraries(
     Ok(out)
 }
 
+/// Whether `external "C"` may be served from anything but a prebuilt wasm library:
+/// platform libraries, archives and compiled `Include` sources. Never in the browser
+/// omc; `OMC_WASM_NATIVE_EXTERNALS=0` makes a native omc refuse them the same way.
+pub(crate) fn native_externals_allowed() -> bool {
+    cfg!(not(target_arch = "wasm32"))
+        && !matches!(std::env::var("OMC_WASM_NATIVE_EXTERNALS").as_deref(), Ok("0"))
+}
+
+fn no_compiler_note() -> String {
+    "the implementation comes from an `Include` annotation with C source, which has to be \
+     compiled — the browser omc has no compiler. Provide it as a `Library` built with \
+     `clang --target=wasm32-wasip1 -fPIC -shared -Wl,--export-all`"
+        .to_string()
+}
+
 /// Compile the model's `Include` annotations into a wasm library: C *source* has no
 /// `Library` to load. Native only; the browser omc has no compiler. A failure is a
 /// note, not an error: only a symbol nothing defines is fatal.
@@ -131,6 +203,10 @@ pub(crate) fn compile_include_library(
     notes: &mut Vec<String>,
 ) -> Result<Option<ExtLibrary>> {
     if includes.is_empty() {
+        return Ok(None);
+    }
+    if !native_externals_allowed() {
+        notes.push(no_compiler_note());
         return Ok(None);
     }
     let wrappers = openmodelica_wasm_jit::model::ext_wrappers(missing);
@@ -151,7 +227,14 @@ fn compile_include_tu(
     notes: &mut Vec<String>,
 ) -> Result<Option<ExtLibrary>> {
     use std::process::Command;
-    let sysroot = wasi_sysroot();
+    let Some(sysroot) = wasi_sysroot() else {
+        notes.push(
+            "no wasm toolchain is installed to compile the `Include` C sources with; \
+             installWasmToolchain() fetches it"
+                .to_string(),
+        );
+        return Ok(None);
+    };
     let clang = std::env::var("OMC_WASI_CLANG").unwrap_or_else(|_| "clang".to_owned());
     let dir = std::env::temp_dir().join(format!("om-wasm-include-{}-{prefix}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(|_| "CodegenWasmJit: cannot create a temporary directory")?;
@@ -214,25 +297,41 @@ pub(crate) fn compile_include_library(
     if includes.is_empty() {
         return Ok(None);
     }
-    notes.push(
-        "the implementation comes from an `Include` annotation with C source, which has to be \
-         compiled — the browser omc has no compiler. Provide it as a `Library` built with \
-         `clang --target=wasm32-wasip1 -fPIC -shared`"
-            .to_string(),
-    );
+    notes.push(no_compiler_note());
     Ok(None)
 }
 
-/// The sysroot omc ships, unless pointed elsewhere.
-#[cfg(not(target_arch = "wasm32"))]
-fn wasi_sysroot() -> std::path::PathBuf {
+/// Where `installWasmToolchain` puts a generation's sysroot.
+fn toolchain_dir() -> std::path::PathBuf {
+    let running = openmodelica_util::Testsuite::isRunning().unwrap_or(false);
+    std::path::PathBuf::from(openmodelica_util::Settings::getHomeDir(running).to_string())
+        .join(".openmodelica/wasm32-wasip1")
+}
+
+/// The sysroot to compile against: `OMC_WASI_SYSROOT`, else the newest generation
+/// `installWasmToolchain` installed.
+fn wasi_sysroot() -> Option<std::path::PathBuf> {
     if let Ok(p) = std::env::var("OMC_WASI_SYSROOT") {
-        return std::path::PathBuf::from(p);
+        return Some(std::path::PathBuf::from(p));
     }
-    let home = openmodelica_util::Settings::getInstallationDirectoryPath()
-        .map(|p| p.to_string())
-        .unwrap_or_default();
-    std::path::PathBuf::from(home).join("lib/wasm32-wasip1/omc/sysroot")
+    let dir = toolchain_dir();
+    openmodelica_wasi::fs::read_dir(&dir.display().to_string())
+        .ok()?
+        .into_iter()
+        .filter_map(|e| generation_of(&e.name))
+        .filter(|g| {
+            openmodelica_wasi::fs::exists(&format!("{}/{GENERATION_PREFIX}{g}/sysroot/lib/wasm32-wasip1/libc.so", dir.display()))
+        })
+        .max()
+        .map(|g| dir.join(format!("{GENERATION_PREFIX}{g}")).join("sysroot"))
+}
+
+/// The libc of the sysroot `Include` sources are compiled against, which a model
+/// whose libraries bring none then runs with.
+pub(crate) fn toolchain_libc() -> Option<ExtLibrary> {
+    let path = wasi_sysroot()?.join("lib/wasm32-wasip1/libc.so");
+    let bytes = openmodelica_wasi::fs::read(&path.display().to_string()).ok()?;
+    Some(ExtLibrary { name: path.display().to_string(), bytes, fixed: true })
 }
 
 /// The shipped sysroot carries a copy; otherwise probe clang, whose 21 driver
@@ -268,11 +367,19 @@ pub(crate) fn include_overrides_builtin(sources: &[String]) -> bool {
 /// load (libc, ModelicaExternalC, LAPACK) export — what an `Include` still has to
 /// provide.
 pub(crate) fn missing_ext_symbols(ext_imports: &[ExtCallSig], libs: &[ExtLibrary]) -> Vec<ExtCallSig> {
-    let mut defined: HashSet<&str> = HashSet::new();
-    for bytes in libs.iter().map(|l| &l.bytes[..]).chain([LIBC_PIC(), EXTERNAL_C_DYLINK(), LAPACK_DYLINK()]) {
+    let mut defined: HashSet<&str> = HashSet::default();
+    for bytes in libs.iter().map(|l| &l.bytes[..]).chain([LIBC_PIC()]) {
         defined.extend(wasm_exports(bytes));
     }
-    ext_imports.iter().filter(|s| !defined.contains(s.name.as_str())).cloned().collect()
+    // The libraries omc ships as files answer for themselves, through the index.
+    ext_imports
+        .iter()
+        .filter(|s| {
+            !defined.contains(s.name.as_str())
+                && openmodelica_wasm_jit::dylink::libraries_for([s.name.as_str()]).is_empty()
+        })
+        .cloned()
+        .collect()
 }
 
 /// What a dylink library needs from outside: the functions it calls (`env`) and
@@ -309,13 +416,19 @@ pub(super) fn dylink_needs(bytes: &[u8]) -> Vec<String> {
 }
 
 /// Which of `needs` nothing in the wasm world defines; `--allow-undefined` lets a
-/// library link without them.
-pub(super) fn unresolved_dylink_needs(needs: &[String], lib: &ExtLibrary, others: &[ExtLibrary]) -> Vec<String> {
-    let mut defined: HashSet<&str> = HashSet::new();
+/// library link without them. `carried` are the shipped libraries loaded beside it.
+pub(super) fn unresolved_dylink_needs(
+    needs: &[String],
+    lib: &ExtLibrary,
+    others: &[ExtLibrary],
+    carried: &[&str],
+) -> Vec<String> {
+    let mut defined: HashSet<&str> = HashSet::default();
     for bytes in others
         .iter()
         .map(|l| &l.bytes[..])
-        .chain([&lib.bytes[..], LIBC_PIC(), EXTERNAL_C_DYLINK(), LAPACK_DYLINK(), openmodelica_wasm_jit::RUNTIME_WASM()])
+        .chain(carried.iter().filter_map(|f| openmodelica_wasm_jit::ext_library(f)))
+        .chain([&lib.bytes[..], LIBC_PIC(), openmodelica_wasm_jit::RUNTIME_WASM()])
     {
         defined.extend(wasm_exports(bytes));
     }
@@ -421,9 +534,19 @@ fn find_native_library(spec: &str, dirs: &[String]) -> Option<NativeLib> {
 
 /// `<dir><name>` or `<dir>lib<name>`, the two spellings a `Library="foo"`
 /// annotation is written with.
-fn find_ext_library(name: &str, dirs: &[String]) -> Option<(String, Vec<u8>)> {
+fn find_ext_library(name: &str, dirs: &[String], env: &mut Vec<String>) -> Option<(String, Vec<u8>)> {
     let stem = name.strip_suffix(".wasm").unwrap_or(name);
     for dir in dirs {
+        if let Some((candidate, vars)) = library_alias(dir, stem) {
+            if let Ok(bytes) = openmodelica_wasi::fs::read(&candidate) {
+                for v in vars {
+                    if !env.contains(&v) {
+                        env.push(v);
+                    }
+                }
+                return Some((candidate, bytes));
+            }
+        }
         for candidate in [format!("{dir}{stem}.wasm"), format!("{dir}lib{stem}.wasm")] {
             if let Ok(bytes) = openmodelica_wasi::fs::read(&candidate) {
                 return Some((candidate, bytes));
@@ -434,32 +557,29 @@ fn find_ext_library(name: &str, dirs: &[String]) -> Option<(String, Vec<u8>)> {
 }
 
 /// [`find_ext_library`] for a linker spec (`-lFoo`, `Foo`, `dir/Foo.wasm`).
-fn find_wasm_library(spec: &str, dirs: &[String]) -> Option<(String, Vec<u8>)> {
+fn find_wasm_library(spec: &str, dirs: &[String], env: &mut Vec<String>) -> Option<(String, Vec<u8>)> {
     let name = match spec.strip_prefix("-l") {
         Some(n) => n,
         // Any other linker flag (`-L`, `-Wl,…`, `-pthread`) names no library.
         None if spec.starts_with('-') => return None,
         None => spec,
     };
-    find_ext_library(name, dirs)
+    find_ext_library(name, dirs, env)
 }
 
-/// Whether the built-in ModelicaExternalC side module defines an `external "C"`
-/// the model's own libraries leave open ([`SimModel::ext_builtin`]). It carries
-/// the whole MSL C set, which no installed `.wasm` names, so it is matched by
-/// symbol rather than by `Library` name.
+/// Whether a library omc ships defines an `external "C"` the model's own libraries
+/// leave open ([`SimModel::ext_builtin`]). They carry the MSL C set, which no
+/// installed `.wasm` names, so they are matched by symbol (through the index)
+/// rather than by `Library` name.
 ///
-/// It does not join `ext_libs`: those are the model's *own*, and the FMU link adds
-/// this one itself.
+/// They do not join `ext_libs`: those are the model's *own*, and the FMU link and
+/// the simulation host add these themselves.
 pub(super) fn builtin_wasm_needed(ext_imports: &[ExtCallSig], libs: &[ExtLibrary]) -> bool {
-    if EXTERNAL_C_DYLINK().is_empty() {
-        return false;
-    }
     let mut open: HashSet<&str> = ext_imports.iter().map(|s| s.name.as_str()).collect();
     for l in libs {
         for n in wasm_exports(&l.bytes) {
             open.remove(n);
         }
     }
-    !open.is_empty() && wasm_exports(EXTERNAL_C_DYLINK()).any(|n| open.contains(n))
+    !openmodelica_wasm_jit::dylink::carried_libraries(open, libs.iter().map(|l| &l.bytes[..])).is_empty()
 }

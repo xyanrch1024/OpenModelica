@@ -79,6 +79,7 @@ import Util;
 import Sorting;
 import System;
 import ElementSource;
+import SimCodeCodegenUtil;
 
 // =============================================================================
 // section for type definitions
@@ -591,8 +592,8 @@ algorithm
   costTornSparse := buildTorn + solveCost(rt, intReal(nnzA), true);
 
   // costed at the format the backend will emit for each
-  costUntorn := if BackendDAEUtil.useSparseSolver(n, nnz, isLinear) then costSparse else costDense;
-  costTorn := if BackendDAEUtil.useSparseSolver(t, nnzA, isLinear) then costTornSparse else costTornDense;
+  costUntorn := if SimCodeCodegenUtil.useSparseSolver(n, nnz, isLinear) then costSparse else costDense;
+  costTorn := if SimCodeCodegenUtil.useSparseSolver(t, nnzA, isLinear) then costTornSparse else costTornDense;
 
   if Flags.isSet(Flags.TEARING_COST) then
     print("[tearingCost] component " + intString(strongComponentIndex) + " " + (if isLinear then "LS" else "NLS")
@@ -603,8 +604,8 @@ algorithm
           + " digitsLost=" + realString(digitsLost) + " valuedCoeffs=" + intString(valued) + "/" + intString(nnz)
           + " cost dense=" + realString(costDense) + " sparse=" + realString(costSparse)
           + " tornDense=" + realString(costTornDense) + " tornSparse=" + realString(costTornSparse)
-          + " format=" + (if BackendDAEUtil.useSparseSolver(n, nnz, isLinear) then "sparse" else "dense")
-          + " tornFormat=" + (if BackendDAEUtil.useSparseSolver(t, nnzA, isLinear) then "sparse" else "dense") + "\n");
+          + " format=" + (if SimCodeCodegenUtil.useSparseSolver(n, nnz, isLinear) then "sparse" else "dense")
+          + " tornFormat=" + (if SimCodeCodegenUtil.useSparseSolver(t, nnzA, isLinear) then "sparse" else "dense") + "\n");
   end if;
 
   // a nonlinear system's cost is its Newton iterations, which this does not model
@@ -638,6 +639,9 @@ algorithm
     case BackendDAE.RESIDUAL_EQUATION() algorithm
       exp := dEqn.exp;
       for i in 1:3 loop
+        if Expression.isScalarConst(exp) then
+          break;
+        end if;
         (exp, _) := Expression.traverseExpBottomUp(exp, substituteKnownVar, globalKnownVars);
         (exp, _) := ExpressionSimplify.simplify(exp);
       end for;
@@ -2372,14 +2376,7 @@ algorithm
   // dependency is intended: even when initialization still succeeds, the start value (a guess) is
   // never actually used to initialize the variable.
   for baseCref in cyclicBaseCrefs loop
-    Error.addCompilerWarning("Initialization start-value cycle: the start attribute of '" +
-      ComponentReferenceBasics.printComponentRefStr(baseCref) +
-      "' depends, directly or transitively, on the variable itself. The start attribute defines the " +
-      "initial value of '" + ComponentReferenceBasics.printComponentRefStr(baseCref) + "' and therefore " +
-      "cannot be computed from it, so this start value cannot be used to initialize the variable (see " +
-      "Modelica Specification section 4.9.6). This is possibly a modeling error; if unintended, give '" +
-      ComponentReferenceBasics.printComponentRefStr(baseCref) + "' a start value that does not depend on " +
-      "itself. Use the transformational debugger to inspect the dependency chain.");
+    BackendDAEUtil.warnStartValueCycle(baseCref);
   end for;
   // ticket #15433: a $START.x->x cycle is NECESSARY but NOT SUFFICIENT to need the degree-1
   // forcing. Such a cycle is always an ill-posed start value (the start attribute of x cannot be
@@ -2679,8 +2676,8 @@ algorithm
          inSimulation and BackendVariable.isStateVar(var) and not listMember(index, always) then
         always := index :: always;
 
-      // Also prefer variables with start value
-      elseif preferTVarsWithStartValue and BackendVariable.varHasStartValue(var) then
+      // Also prefer variables with start value that is not just the default of their type
+      elseif preferTVarsWithStartValue and BackendVariable.varHasStartValue(var) and not BackendVariable.varStartFromType(var) then
         prefer := index :: prefer;
       end if;
     end if;
@@ -3693,15 +3690,37 @@ protected function preferAvoidVariables
   input list<Integer> preferAvoidIn;
   input Real factor;
 protected
-  Integer preferAvoidVar, pos;
+  array<Integer> pointsArr, firstPos "1-based position of each variable in varsIn";
+  Integer pos, maxVar;
 algorithm
-  for preferAvoidVar in preferAvoidIn loop
-    try
-      pos := List.position(preferAvoidVar,varsIn);
-      points := List.set(points,pos,realInt(realMul(factor,intReal(listGet(points,pos)))));
-    else
-    end try;
+  if listEmpty(preferAvoidIn) then
+    return;
+  end if;
+  maxVar := List.fold(varsIn, intMax, 0);
+  firstPos := arrayCreate(maxVar, 0);
+  pos := 1;
+  for v in varsIn loop
+    if v > 0 and firstPos[v] == 0 then
+      firstPos[v] := pos;
+    end if;
+    pos := pos + 1;
   end for;
+  pointsArr := listArray(points);
+  for preferAvoidVar in preferAvoidIn loop
+    if preferAvoidVar > 0 and preferAvoidVar <= maxVar then
+      pos := firstPos[preferAvoidVar];
+    else
+      try
+        pos := List.position(preferAvoidVar, varsIn);
+      else
+        pos := 0;
+      end try;
+    end if;
+    if pos > 0 and pos <= arrayLength(pointsArr) then
+      pointsArr[pos] := realInt(realMul(factor, intReal(pointsArr[pos])));
+    end if;
+  end for;
+  points := arrayList(pointsArr);
 end preferAvoidVariables;
 
 

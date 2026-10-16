@@ -38,7 +38,6 @@
 //! `localDecls`, and `for`-loop iterators of any enclosing loop.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
 use openmodelica_ast::Absyn;
 
@@ -90,7 +89,7 @@ fn collect_functions<'a>(
 
 /// Pull the declared component names out of a `localDecls` list.
 fn collect_local_names(
-    decls: &metamodelica::List<Arc<Absyn::ElementItem>>,
+    decls: &metamodelica::List<metamodelica::Ref<Absyn::ElementItem>>,
     out: &mut BTreeSet<String>,
 ) {
     for item in (&**decls).into_iter() {
@@ -245,9 +244,9 @@ impl<'a> Scan<'a> {
     fn process_match(
         &mut self,
         match_ty: &Absyn::MatchType,
-        match_locals: &metamodelica::List<Arc<Absyn::ElementItem>>,
+        match_locals: &metamodelica::List<metamodelica::Ref<Absyn::ElementItem>>,
         input_exp: &Absyn::Exp,
-        cases: &metamodelica::List<Arc<Absyn::Case>>,
+        cases: &metamodelica::List<metamodelica::Ref<Absyn::Case>>,
         env: &BTreeSet<String>,
     ) {
         let kind = match match_ty {
@@ -362,7 +361,7 @@ impl<'a> Scan<'a> {
     fn walk_exp(&mut self, e: &Absyn::Exp, env: &BTreeSet<String>) {
         use Absyn::Exp::*;
         match e {
-            INTEGER { .. } | REAL { .. } | STRING { .. } | BOOL { .. } | END | BREAK => {}
+            INTEGER { .. } | REAL { .. } | STRING { .. } | BOOL { .. } | END | BREAK | UNITFUL_LITERAL { .. } => {}
             CODE { .. } => {}
             CREF { .. } => {}
             BINARY { exp1, exp2, .. } | LBINARY { exp1, exp2, .. } | RELATION { exp1, exp2, .. } => {

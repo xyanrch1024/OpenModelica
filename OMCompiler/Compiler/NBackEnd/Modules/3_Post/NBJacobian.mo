@@ -92,6 +92,7 @@ protected
 
   // Util imports
   import StringUtil;
+  import PointerWeak;
   import UnorderedMap;
   import UnorderedSet;
   import Util;
@@ -192,17 +193,32 @@ public
       then jacobianSymbolic
       else jacobianNumeric;
   algorithm
-    jacobian := func(
-        name                = name,
-        jacType             = JacobianType.NLS,
-        seedCandidates      = seedCandidates,
-        partialCandidates   = partialCandidates,
-        equations           = equations,
-        strongComponents    = SOME(comps),
-        full                = full,
-        funcMap             = funcMap,
-        staticAsContinuous  = staticAsContinuous
-      );
+    try
+      jacobian := func(
+          name                = name,
+          jacType             = JacobianType.NLS,
+          seedCandidates      = seedCandidates,
+          partialCandidates   = partialCandidates,
+          equations           = equations,
+          strongComponents    = SOME(comps),
+          full                = full,
+          funcMap             = funcMap,
+          staticAsContinuous  = staticAsContinuous
+        );
+    else
+      // not everything can be differentiated symbolically, e.g. functions with function inputs
+      jacobian := jacobianNumeric(
+          name                = name,
+          jacType             = JacobianType.NLS,
+          seedCandidates      = seedCandidates,
+          partialCandidates   = partialCandidates,
+          equations           = equations,
+          strongComponents    = SOME(comps),
+          full                = full,
+          funcMap             = funcMap,
+          staticAsContinuous  = staticAsContinuous
+        );
+    end try;
   end nonlinear;
 
   function combine
@@ -211,8 +227,8 @@ public
     output BackendDAE jacobian;
   protected
     JacobianType jacType = JacobianType.NLS;
-    list<PointerCyclic<Variable>> variables = {}, unknowns = {}, auxiliaryVars = {}, aliasVars = {};
-    list<PointerCyclic<Variable>> diffVars = {}, dependencies = {}, resultVars = {}, tmpVars = {}, seedVars = {};
+    list<Pointer<Variable>> variables = {}, unknowns = {}, auxiliaryVars = {}, aliasVars = {};
+    list<Pointer<Variable>> diffVars = {}, dependencies = {}, resultVars = {}, tmpVars = {}, seedVars = {};
     list<StrongComponent> comps = {};
     list<Adjacency.Matrix> sparsity_patterns = {};
     VarData varData;
@@ -322,7 +338,7 @@ protected
   // TODO: refactor with map
   function getOptimizableVars
     input VariablePointers variables;
-    output list<PointerCyclic<Variable>> optimizable_vars = {};
+    output list<Pointer<Variable>> optimizable_vars = {};
   algorithm
     for var_ptr in VariablePointers.toList(variables) loop
       if BVariable.isOptimizable(var_ptr) then
@@ -335,9 +351,9 @@ protected
     input Partition.Partition part;
     input VariablePointers all_knowns;
     input BVariable.checkVar filter;
-    output list<PointerCyclic<Variable>> unknowns;
+    output list<Pointer<Variable>> unknowns;
   protected
-    list<PointerCyclic<Variable>> derivative_vars, unknown_states;
+    list<Pointer<Variable>> derivative_vars, unknown_states;
   algorithm
     // we could absorb the filter into getOptimizableVars as its faster
     unknowns := getOptimizableVars(all_knowns); // all optimizable inputs + parameters
@@ -350,9 +366,9 @@ protected
 
   function getLfgPartialCandidates
     input Partition.Partition part;
-    output list<PointerCyclic<Variable>> partialCandidates;
+    output list<Pointer<Variable>> partialCandidates;
   protected
-    list<PointerCyclic<Variable>> lagrange_vars = {}, derivative_vars = {}, path_vars = {};
+    list<Pointer<Variable>> lagrange_vars = {}, derivative_vars = {}, path_vars = {};
   algorithm
     for var_ptr in VariablePointers.toList(part.unknowns) loop
       if BVariable.isLagrange(var_ptr) then
@@ -368,9 +384,9 @@ protected
 
   function getMrfPartialCandidates
     input Partition.Partition part;
-    output list<PointerCyclic<Variable>> partialCandidates;
+    output list<Pointer<Variable>> partialCandidates;
   protected
-    list<PointerCyclic<Variable>> mayer_vars = {}, final_vars = {};
+    list<Pointer<Variable>> mayer_vars = {}, final_vars = {};
   algorithm
     for var_ptr in VariablePointers.toList(part.unknowns) loop
       if BVariable.isMayer(var_ptr) then
@@ -384,7 +400,7 @@ protected
 
   function getR0PartialCandidates
     input Partition.Partition part;
-    output list<PointerCyclic<Variable>> partialCandidates = {};
+    output list<Pointer<Variable>> partialCandidates = {};
   algorithm
     for var_ptr in VariablePointers.toList(part.unknowns) loop
       if BVariable.isInitialConstraint(var_ptr) then
@@ -444,7 +460,7 @@ protected
   protected
     JacobianType jacType;
     VariablePointers unknowns;
-    list<PointerCyclic<Variable>> derivative_vars, state_vars;
+    list<Pointer<Variable>> derivative_vars, state_vars;
     VariablePointers seedCandidates, partialCandidates;
     Option<Jacobian> jacobian, LFG_jacobian = NONE(), MRF_jacobian = NONE(), R0_jacobian = NONE()  "Resulting jacobians";
     Option<Jacobian> adjointJac;
@@ -516,6 +532,19 @@ protected
     end match;
   end forEquationStart;
 
+  function withInnerComps
+    "an algebraic loop (also behind an alias) preceded by its inner components"
+    input StrongComponent comp;
+    output list<StrongComponent> comps;
+  algorithm
+    comps := match StrongComponent.removeAlias(comp)
+      local
+        Tearing strict;
+      case StrongComponent.ALGEBRAIC_LOOP(strict = strict) then listAppend(arrayList(strict.innerEquations), {comp});
+      else {comp};
+    end match;
+  end withInnerComps;
+
   function partialSliceSeedCandidates
     "Creates per-element seed candidates for partial iteration-var slices where
      the for-loop starts at or above the slice's first element index.  This
@@ -535,7 +564,7 @@ protected
   algorithm
     // Find minimum for-loop start across all FOR_EQUATION residuals.
     for eqn_slice in residual_eqns loop
-      s := forEquationStart(PointerCyclic.access(Slice.getT(eqn_slice)));
+      s := forEquationStart(Pointer.access(Slice.getT(eqn_slice)));
       if s > 0 then
         if for_start == 0 then
           for_start := s;
@@ -551,7 +580,7 @@ protected
         seed_candidates := Slice.getT(var_slice) :: seed_candidates;
       else
         // Partial slice: first 0-based index + 1 gives the 1-based start element.
-        var_elem := PointerCyclic.access(Slice.getT(var_slice));
+        var_elem := Pointer.access(Slice.getT(var_slice));
         slice_first_1based := listHead(var_slice.indices) + 1;
         if (for_start == 0 or for_start >= slice_first_1based) and
            (Type.isReal(Type.arrayElementType(var_elem.ty)) or Type.isComplex(Type.arrayElementType(var_elem.ty))) then
@@ -574,9 +603,10 @@ protected
           // for-loop starts at 1 but x is sliced from x[2], so a symbolic body term like
           // x[$i1] at $i1=1 needs a seed for x[1], which per-element scalarization of just
           // x[2..4] can never provide).
-          elem_vars := Scalarize.scalarizeBackendVariable(var_elem, var_slice.indices);
+          // the slice indices refer to the resized sizes of resizable dimensions
+          elem_vars := Scalarize.scalarizeBackendVariable(var_elem, var_slice.indices, resize = true);
           for v in elem_vars loop
-            seed_candidates := PointerCyclic.create(v) :: seed_candidates;
+            seed_candidates := Pointer.create(v) :: seed_candidates;
           end for;
         else
           // Unsafe or no phantom risk avoidance possible: fall back to whole-array seed pointer.
@@ -600,6 +630,11 @@ protected
     constant Boolean staticAsContinuous = Partition.kindIsInitial(kind);
   algorithm
     (comp, updated) := match comp
+      // nothing to differentiate if all iteration variables are discrete (e.g. Boolean)
+      case StrongComponent.ALGEBRAIC_LOOP(strict = strict)
+        guard(not List.any(list(Slice.getT(v) for v in strict.iteration_vars), function BVariable.isContinuous(staticAsContinuous = staticAsContinuous)))
+      then (comp, false);
+
       case StrongComponent.ALGEBRAIC_LOOP(strict = strict) algorithm
         // create residual components
         residual_comps        := list(StrongComponent.fromSolvedEquationSlice(eqn) for eqn in strict.residual_eqns);
@@ -647,21 +682,22 @@ protected
   function jacobianSymbolic extends Module.jacobianInterface;
   protected
     list<StrongComponent> comps, diffed_comps;
-    PointerCyclic<list<PointerCyclic<Variable>>> seed_vars_ptr = PointerCyclic.create({});
-    PointerCyclic<list<PointerCyclic<Variable>>> pDer_vars_ptr = PointerCyclic.create({});
+    Pointer<list<Pointer<Variable>>> seed_vars_ptr = Pointer.create({});
+    Pointer<list<Pointer<Variable>>> pDer_vars_ptr = Pointer.create({});
     UnorderedMap<ComponentRef,ComponentRef> diff_map = UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual);
     UnorderedMap<ComponentRef,ComponentRef> seed_diff_map;
     Differentiate.DifferentiationArguments diffArguments;
     Pointer<Integer> idx = Pointer.create(0);
 
     VariablePointers adjacencyVars;
-    list<PointerCyclic<Variable>> all_vars, unknown_vars, aux_vars, alias_vars, depend_vars, res_vars, res_vars_d, tmp_vars, tmp_vars_d, seed_vars, seed_vars_d;
+    list<StrongComponent> sparsity_comps;
+    list<Pointer<Variable>> all_vars, unknown_vars, aux_vars, alias_vars, depend_vars, res_vars, res_vars_d, tmp_vars, tmp_vars_d, seed_vars, seed_vars_d;
     BVariable.VarData varDataJac;
     Adjacency.Matrix fullLocal, sparsity;
     UnorderedSet<ComponentRef> seed_set = UnorderedSet.new(ComponentRef.hash, ComponentRef.isEqual);
     UnorderedSet<ComponentRef> pder_set = UnorderedSet.new(ComponentRef.hash, ComponentRef.isEqual);
     UnorderedSet<ComponentRef> adj_base_seen;
-    list<PointerCyclic<Variable>> adj_seed_list;
+    list<Pointer<Variable>> adj_seed_list;
     ComponentRef adj_base_cref;
     BVariable.checkVar func = getTmpFilterFunction(jacType);
   algorithm
@@ -698,9 +734,9 @@ protected
     for v in res_vars loop
       UnorderedSet.add(BVariable.getVarName(v), pder_set);
     end for;
-    res_vars_d := listReverse(PointerCyclic.access(pDer_vars_ptr));
+    res_vars_d := listReverse(Pointer.access(pDer_vars_ptr));
 
-    pDer_vars_ptr := PointerCyclic.create({});
+    pDer_vars_ptr := Pointer.create({});
     // Snapshot diff_map before adding inner LS tmp pder entries.
     // When an outer iter var and an inner LS var share the same base ComponentRef
     // (slices of the same array variable), the tmp pder pass below would overwrite
@@ -709,7 +745,7 @@ protected
     // to inner LS tmp pder columns (N..N+M-1).
     seed_diff_map := UnorderedMap.copy(diff_map);
     for v in tmp_vars loop makeVarTraverse(v, name, pDer_vars_ptr, diff_map, function BVariable.makePDerVar(isTmp = true), staticAsContinuous = staticAsContinuous); end for;
-    tmp_vars_d := PointerCyclic.access(pDer_vars_ptr);
+    tmp_vars_d := Pointer.access(pDer_vars_ptr);
 
     // Build differentiation argument structure
     diffArguments := Differentiate.DIFFERENTIATION_ARGUMENTS(
@@ -731,7 +767,7 @@ protected
     unknown_vars  := listAppend(res_vars_d, tmp_vars_d);
     all_vars      := unknown_vars;  // add other vars later on
 
-    seed_vars_d   := listReverse(PointerCyclic.access(seed_vars_ptr));
+    seed_vars_d   := listReverse(Pointer.access(seed_vars_ptr));
     aux_vars      := seed_vars_d;     // add other auxiliaries later on
     alias_vars    := {};
     depend_vars   := {};
@@ -774,9 +810,11 @@ protected
     if jacType == JacobianType.ODE then
       adjacencyVars := VariablePointers.addList(res_vars, adjacencyVars);
     end if;
+    // the inner equations of algebraic loops are needed for their dependencies
+    sparsity_comps := List.flatten(list(withInnerComps(comp) for comp in comps));
     fullLocal := Adjacency.Matrix.createFull(adjacencyVars,
-      EquationPointers.fromList(List.flatten(list(StrongComponent.getEquations(comp) for comp in comps))));
-    sparsity := Adjacency.Matrix.fullToSparsity(fullLocal, comps, seed_set, pder_set, seed_diff_map);
+      EquationPointers.fromList(List.flatten(list(StrongComponent.getEquations(comp) for comp in sparsity_comps))));
+    sparsity := Adjacency.Matrix.fullToSparsity(fullLocal, sparsity_comps, seed_set, pder_set, seed_diff_map);
 
     jacobian := SOME(Jacobian.JACOBIAN(
       name      = name,
@@ -869,9 +907,9 @@ protected
     input Integer eqIndex;
     output NBStrongComponent diffed_comp;
   protected
-    PointerCyclic<NBEquation.Equation> eqPtr;
+    Pointer<NBEquation.Equation> eqPtr;
     NBEquation.Equation eq;
-    PointerCyclic<Variable> lhsVarPtr;
+    Pointer<Variable> lhsVarPtr;
   algorithm
     eqPtr := Equation.makeAssignment(
       Expression.fromCref(lhsKey),
@@ -883,7 +921,7 @@ protected
     );
 
     lhsVarPtr := BVariable.getVarPointer(lhsKey, sourceInfo());
-    eq := PointerCyclic.access(eqPtr);
+    eq := Pointer.access(eqPtr);
 
     diffed_comp := match eq
       case NBEquation.SCALAR_EQUATION() algorithm
@@ -922,7 +960,7 @@ protected
   end makeAdjointComponentFromRhs;
 
   function addEntryToLPAMap
-    input PointerCyclic<Variable> vptr;
+    input Pointer<Variable> vptr;
     input UnorderedMap<ComponentRef, ComponentRef> diff_map;
     input UnorderedMap<ComponentRef, AdjointTermList> loop_product_adjoint_map;
   protected
@@ -1016,19 +1054,19 @@ protected
     input Pointer<Integer> idx;
     input String contextName;
     input VariablePointers seedCandidates "for algebraic loop x-inputs";
-    input list<PointerCyclic<Variable>> tmpVarCandidates "base tmp variables to also include in diff_map_x for algebraic loops";
+    input list<Pointer<Variable>> tmpVarCandidates "base tmp variables to also include in diff_map_x for algebraic loops";
     output list<StrongComponent> adjointComps = {};
-    output list<PointerCyclic<Variable>> newTmpVars = {};
+    output list<Pointer<Variable>> newTmpVars = {};
   protected
     StrongComponent c_noalias;
     UnorderedMap<ComponentRef, AdjointTermList> fresh_adjoint_map;
     Differentiate.DifferentiationArguments diffArgs;
     Equation eq;
     list<Statement> adjStmts;
-    PointerCyclic<Equation> eqPtr;
+    Pointer<Equation> eqPtr;
     list<Slice<VariablePointer>> adjVarSlices;
     // SSA helper: accumulator for pDer vars created for SSA temporaries
-    PointerCyclic<list<PointerCyclic<Variable>>> ssaPDerVarsPtr = PointerCyclic.create({});
+    Pointer<list<Pointer<Variable>>> ssaPDerVarsPtr = Pointer.create({});
   algorithm
     c_noalias := StrongComponent.removeAlias(comp);
 
@@ -1038,25 +1076,25 @@ protected
         Tearing tearing;
         list<VariablePointer> itVarPtrs;
         list<Expression> residuals;
-        list<PointerCyclic<Variable>> lambdaPtrs;
+        list<Pointer<Variable>> lambdaPtrs;
         list<ComponentRef> lambdaCrefs;
         Integer iRes;
-        PointerCyclic<Variable> lhsVarPtr;
+        Pointer<Variable> lhsVarPtr;
         ComponentRef newC;
         UnorderedMap<ComponentRef, ComponentRef> diff_map_y, diff_map_x, diff_map_union;
         UnorderedMap<ComponentRef, AdjointTermList> loop_product_adjoint_map;
-        list<PointerCyclic<Variable>> seedPtrListX;
-        list<PointerCyclic<Equation>> linResEqnPtrs;
+        list<Pointer<Variable>> seedPtrListX;
+        list<Pointer<Equation>> linResEqnPtrs;
         AdjointTermList terms_j, terms_x;
         Expression lhs_j, rhs_j, rhs_x;
-        PointerCyclic<Equation> resid_j;
+        Pointer<Equation> resid_j;
         Option<ComponentRef> o_ySeedCref, o_pDerX;
         ComponentRef ySeedCref, baseX, pDerX;
         StrongComponent loopComp;
 
         StrongComponent ssaAlg;
         list<tuple<ComponentRef, tuple<ComponentRef, Integer>>> replacements = {};
-        list<PointerCyclic<Variable>> newVars = {};
+        list<Pointer<Variable>> newVars = {};
         // SSA seed-init locals (used in MULTI_COMPONENT adjoint)
         UnorderedSet<ComponentRef> seenCrefs;
         ComponentRef origCref, finalSsaCref, pDerOrigCref, pDerSsaCref;
@@ -1073,7 +1111,7 @@ protected
       case StrongComponent.ALGEBRAIC_LOOP(strict = tearing) algorithm
         // Collect iteration vars and residual equations and turn into residual expressions
         itVarPtrs := Tearing.getIterationVars(tearing);
-        residuals := list(Equation.getResidualExp(PointerCyclic.access(e)) for e in Tearing.getResidualEqns(tearing));
+        residuals := list(Equation.getResidualExp(Pointer.access(e)) for e in Tearing.getResidualEqns(tearing));
 
         // Create scalar lambda_i temporaries
         // Is it possible to create it as a vector?
@@ -1180,7 +1218,7 @@ protected
 
       // ===================== SINGLE_COMPONENT (scalar/array/record equation) =====================
       case StrongComponent.SINGLE_COMPONENT() algorithm
-        eq := PointerCyclic.access(c_noalias.eqn);
+        eq := Pointer.access(c_noalias.eqn);
 
         // Build fresh adjoint_map
         fresh_adjoint_map := UnorderedMap.new<AdjointTermList>(ComponentRef.hash, ComponentRef.isEqual, 16);
@@ -1215,7 +1253,7 @@ protected
 
       // ===================== MULTI_COMPONENT (algorithm or if-equation) =====================
       case StrongComponent.MULTI_COMPONENT() algorithm
-        eq := match PointerCyclic.access(Slice.getT(c_noalias.eqn))
+        eq := match Pointer.access(Slice.getT(c_noalias.eqn))
           case Equation.ALGORITHM() algorithm
             (ssaAlg, replacements, newVars) := algorithmToSSA(c_noalias);
             if Flags.isSet(Flags.DEBUG_ADJOINT) then
@@ -1231,16 +1269,16 @@ protected
                 function BVariable.makePDerVar(isTmp = true), staticAsContinuous = staticAsContinuous);
             end for;
             // Collect the newly created pDer vars as temporaries
-            for pDerVarPtr in PointerCyclic.access(ssaPDerVarsPtr) loop
+            for pDerVarPtr in Pointer.access(ssaPDerVarsPtr) loop
               newTmpVars := pDerVarPtr :: newTmpVars;
             end for;
 
           then match ssaAlg
-            case StrongComponent.MULTI_COMPONENT() then PointerCyclic.access(Slice.getT(ssaAlg.eqn));
-            else PointerCyclic.access(Slice.getT(c_noalias.eqn));
+            case StrongComponent.MULTI_COMPONENT() then Pointer.access(Slice.getT(ssaAlg.eqn));
+            else Pointer.access(Slice.getT(c_noalias.eqn));
           end match;
           else algorithm
-            then PointerCyclic.access(Slice.getT(c_noalias.eqn));
+            then Pointer.access(Slice.getT(c_noalias.eqn));
           end match;
 
         // Build fresh adjoint_map
@@ -1305,17 +1343,17 @@ protected
 
       // ===================== ForComponent: SLICED / RESIZABLE / GENERIC =====================
       case StrongComponent.SLICED_COMPONENT() algorithm
-        eq := PointerCyclic.access(Slice.getT(c_noalias.eqn));
+        eq := Pointer.access(Slice.getT(c_noalias.eqn));
         adjointComps := generateAdjointForComponent(eq, c_noalias, diff_map, funcMap, scalarized, init, idx, contextName);
       then ();
 
       case StrongComponent.RESIZABLE_COMPONENT() algorithm
-        eq := PointerCyclic.access(Slice.getT(c_noalias.eqn));
+        eq := Pointer.access(Slice.getT(c_noalias.eqn));
         adjointComps := generateAdjointForComponent(eq, c_noalias, diff_map, funcMap, scalarized, init, idx, contextName);
       then ();
 
       case StrongComponent.GENERIC_COMPONENT() algorithm
-        eq := PointerCyclic.access(Slice.getT(c_noalias.eqn));
+        eq := Pointer.access(Slice.getT(c_noalias.eqn));
         adjointComps := generateAdjointForComponent(eq, c_noalias, diff_map, funcMap, scalarized, init, idx, contextName);
       then ();
 
@@ -1341,7 +1379,7 @@ protected
     UnorderedMap<ComponentRef, AdjointTermList> fresh_adjoint_map;
     Differentiate.DifferentiationArguments diffArgs;
     list<Statement> adjStmts;
-    PointerCyclic<Equation> eqPtr;
+    Pointer<Equation> eqPtr;
     list<Slice<VariablePointer>> adjVarSlices;
     ComponentRef adjVarCref;
   algorithm
@@ -1391,7 +1429,7 @@ protected
     input list<Statement> stmts;
     input output list<Slice<VariablePointer>> varSlices;
   protected
-    PointerCyclic<Variable> vPtr;
+    Pointer<Variable> vPtr;
     ComponentRef baseCref;
   algorithm
     for s in stmts loop
@@ -1420,12 +1458,12 @@ protected
   function jacobianSymbolicAdjoint extends Module.jacobianInterface;
   protected
     list<StrongComponent> comps, primalComps, diffed_comps = {};
-    PointerCyclic<list<PointerCyclic<Variable>>> seed_vars_ptr = PointerCyclic.create({});
-    PointerCyclic<list<PointerCyclic<Variable>>> pDer_vars_ptr = PointerCyclic.create({});
+    Pointer<list<Pointer<Variable>>> seed_vars_ptr = Pointer.create({});
+    Pointer<list<Pointer<Variable>>> pDer_vars_ptr = Pointer.create({});
     UnorderedMap<ComponentRef,ComponentRef> diff_map = UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual);
     Pointer<Integer> idx = Pointer.create(0);
 
-    list<PointerCyclic<Variable>> all_vars, unknown_vars, aux_vars, alias_vars, depend_vars, res_vars, tmp_vars, seed_vars, old_res_vars, baseTmpVarCandidates;
+    list<Pointer<Variable>> all_vars, unknown_vars, aux_vars, alias_vars, depend_vars, res_vars, tmp_vars, seed_vars, old_res_vars, baseTmpVarCandidates;
     BVariable.VarData varDataJac;
 
     VariablePointers adjacencyVars;
@@ -1439,7 +1477,7 @@ protected
 
     // Per-component adjoint generation
     list<StrongComponent> compAdjComps;
-    list<PointerCyclic<Variable>> compNewVars;
+    list<Pointer<Variable>> compNewVars;
   algorithm
     newName := name + "_ADJ";
     if isSome(strongComponents) then
@@ -1475,7 +1513,7 @@ protected
         UnorderedSet.add(BVariable.getVarName(v), seed_set);
       end if;
     end for;
-    res_vars := listReverse(PointerCyclic.access(pDer_vars_ptr));
+    res_vars := listReverse(Pointer.access(pDer_vars_ptr));
 
     // create pDer vars (also filters out discrete vars)
     (old_res_vars, tmp_vars) := List.splitOnTrue(VariablePointers.toList(partialCandidates), func);
@@ -1486,7 +1524,7 @@ protected
     end for;
 
     for v in old_res_vars loop makeVarTraverse(v, newName, seed_vars_ptr, diff_map, BVariable.makeSeedVar, staticAsContinuous = staticAsContinuous); end for;
-    seed_vars := listReverse(PointerCyclic.access(seed_vars_ptr));
+    seed_vars := listReverse(Pointer.access(seed_vars_ptr));
 
     if Flags.isSet(Flags.DEBUG_ADJOINT) then
       print("seed vars after seed creation:\n" + BVariable.VariablePointers.toString(VariablePointers.fromList(seed_vars), "Seed Vars") + "\n");
@@ -1494,9 +1532,9 @@ protected
       print("tmp vars after pDer creation:\n" + BVariable.VariablePointers.toString(VariablePointers.fromList(tmp_vars), "Tmp Vars") + "\n");
     end if;
 
-    pDer_vars_ptr := PointerCyclic.create({});
+    pDer_vars_ptr := Pointer.create({});
     for v in tmp_vars loop makeVarTraverse(v, newName, pDer_vars_ptr, diff_map, function BVariable.makePDerVar(isTmp = true), staticAsContinuous = staticAsContinuous); end for;
-    tmp_vars := PointerCyclic.access(pDer_vars_ptr);
+    tmp_vars := Pointer.access(pDer_vars_ptr);
     baseTmpVarCandidates := getBaseTmpVarCandidates(VariablePointers.toList(partialCandidates), tmp_vars, diff_map);
 
     if Flags.isSet(Flags.DEBUG_ADJOINT) then
@@ -1540,7 +1578,7 @@ protected
     unknown_vars  := listAppend(res_vars, tmp_vars);
     all_vars      := unknown_vars;  // add other vars later on
 
-    seed_vars     := PointerCyclic.access(seed_vars_ptr);
+    seed_vars     := Pointer.access(seed_vars_ptr);
     aux_vars      := seed_vars;     // add other auxiliaries later on. TODO: Need to add the SSA vars and the lambda vars from algebraic loops as auxiliaries?
     alias_vars    := {};
     depend_vars   := {};
@@ -1583,20 +1621,21 @@ protected
     VarData varDataJac;
     VariablePointers adjacencyVars;
     Adjacency.Matrix sparsity, fullLocal;
-    list<PointerCyclic<Variable>> res_vars, tmp_vars, seed_vars_d, pDer_vars_d;
+    list<Pointer<Variable>> res_vars, tmp_vars, seed_vars_d, pDer_vars_d;
     BVariable.checkVar func = getTmpFilterFunction(jacType);
-    PointerCyclic<list<PointerCyclic<Variable>>> seed_vars_ptr = PointerCyclic.create({});
-    PointerCyclic<list<PointerCyclic<Variable>>> pDer_vars_ptr = PointerCyclic.create({});
+    Pointer<list<Pointer<Variable>>> seed_vars_ptr = Pointer.create({});
+    Pointer<list<Pointer<Variable>>> pDer_vars_ptr = Pointer.create({});
     UnorderedMap<ComponentRef,ComponentRef> diff_map = UnorderedMap.new<ComponentRef>(ComponentRef.hash, ComponentRef.isEqual);
 
     UnorderedSet<ComponentRef> seed_set = UnorderedSet.new(ComponentRef.hash, ComponentRef.isEqual);
     UnorderedSet<ComponentRef> pder_set = UnorderedSet.new(ComponentRef.hash, ComponentRef.isEqual);
+    list<StrongComponent> sparsity_comps;
   algorithm
     (res_vars, tmp_vars) := List.splitOnTrue(VariablePointers.toList(partialCandidates), func);
     (tmp_vars, _) := List.splitOnTrue(tmp_vars, function BVariable.isContinuous(staticAsContinuous = staticAsContinuous));
 
     VariablePointers.mapPtr(seedCandidates, function makeVarTraverse(name = name, vars_ptr = seed_vars_ptr, map = diff_map, makeVar = BVariable.makeSeedVar, staticAsContinuous = staticAsContinuous));
-    seed_vars_d := PointerCyclic.access(seed_vars_ptr);
+    seed_vars_d := Pointer.access(seed_vars_ptr);
     for v in VariablePointers.toList(seedCandidates) loop
       if BVariable.isContinuous(v, staticAsContinuous) then
         UnorderedSet.add(BVariable.getVarName(v), seed_set);
@@ -1610,7 +1649,7 @@ protected
       UnorderedSet.add(BVariable.getVarName(v), pder_set);
       makeVarTraverse(v, name, pDer_vars_ptr, diff_map, function BVariable.makePDerVar(isTmp = false), staticAsContinuous = staticAsContinuous);
     end for;
-    pDer_vars_d := PointerCyclic.access(pDer_vars_ptr);
+    pDer_vars_d := Pointer.access(pDer_vars_ptr);
 
     varDataJac := BVariable.VAR_DATA_JAC(
       variables     = VariablePointers.fromList({}),
@@ -1630,9 +1669,11 @@ protected
       if jacType == JacobianType.ODE then
         adjacencyVars := VariablePointers.addList(res_vars, adjacencyVars);
       end if;
+      // the inner equations of algebraic loops are needed for their dependencies
+      sparsity_comps := List.flatten(list(withInnerComps(comp) for comp in Util.getOption(strongComponents)));
       fullLocal := Adjacency.Matrix.createFull(adjacencyVars, EquationPointers.fromList(
-        List.flatten(list(StrongComponent.getEquations(comp) for comp in arrayList(Util.getOption(strongComponents))))));
-      sparsity := Adjacency.Matrix.fullToSparsity(fullLocal, arrayList(Util.getOption(strongComponents)), seed_set, pder_set, diff_map);
+        List.flatten(list(StrongComponent.getEquations(comp) for comp in sparsity_comps))));
+      sparsity := Adjacency.Matrix.fullToSparsity(fullLocal, sparsity_comps, seed_set, pder_set, diff_map);
     else
       Error.addMessage(Error.INTERNAL_ERROR,{getInstanceName() + " failed because strong components are missing."});
       fail();
@@ -1675,9 +1716,9 @@ protected
   end getTmpFilterFunction;
 
   function makeVarTraverse
-    input PointerCyclic<Variable> var_ptr;
+    input Pointer<Variable> var_ptr;
     input String name;
-    input PointerCyclic<list<PointerCyclic<Variable>>> vars_ptr;
+    input Pointer<list<Pointer<Variable>>> vars_ptr;
     input UnorderedMap<ComponentRef,ComponentRef> map;
     input Func makeVar;
     input Boolean staticAsContinuous;
@@ -1685,19 +1726,19 @@ protected
     partial function Func
       input output ComponentRef cref;
       input String name;
-      output PointerCyclic<Variable> diff_ptr;
+      output Pointer<Variable> diff_ptr;
     end Func;
   protected
-    Variable var = PointerCyclic.access(var_ptr);
+    Variable var = Pointer.access(var_ptr);
     ComponentRef diff, parent_name, diff_parent_name;
-    PointerCyclic<Variable> diff_ptr, parent, diff_parent;
+    Pointer<Variable> diff_ptr, parent, diff_parent;
   algorithm
     // only create seed or pDer var if it is continuous
     if BVariable.isContinuous(var_ptr, staticAsContinuous) then
       // make the new differentiated variable itself
       (diff, diff_ptr) := makeVar(var.name, name);
       // add $<new>.x variable pointer to the variables
-      PointerCyclic.update(vars_ptr, diff_ptr :: PointerCyclic.access(vars_ptr));
+      Pointer.update(vars_ptr, diff_ptr :: Pointer.access(vars_ptr));
       // add x -> $<new>.x to the map for later lookup
       UnorderedMap.add(var.name, diff, map);
       // Base-cref fallback for iterator-subscripted deps (x[$i1]) to find their seed in Part D.
@@ -1744,7 +1785,7 @@ protected
 
   function makeLinearAlgebraicLoop
     input list<NBVariable.VariablePointer> itVarPtrs;           // unknowns y (order = columns of A)
-    input list<PointerCyclic<NBEquation.Equation>> resEqnPtrs;        // residuals r_i(y)=0, same order as rows of A
+    input list<Pointer<NBEquation.Equation>> resEqnPtrs;        // residuals r_i(y)=0, same order as rows of A
     input Option<NBackendDAE> jac = NONE();                     // optional analytic Jacobian for A
     input Boolean mixed = false;
     input Boolean homotopy = false;
@@ -1753,7 +1794,7 @@ protected
     Integer m1 = listLength(itVarPtrs);
     Integer m2 = listLength(resEqnPtrs);
     list<NBSlice<NBVariable.VariablePointer>> itVars_s;
-    list<NBSlice<PointerCyclic<NBEquation.Equation>>> res_s;
+    list<NBSlice<Pointer<NBEquation.Equation>>> res_s;
     NBTearing.Tearing tearingSet;
   algorithm
     // sanity
@@ -1795,25 +1836,24 @@ protected
      via the InstNode VAR_NODE pointer (same pattern as BVariable.makeAuxVar)."
     input  ComponentRef baseCref "original base cref (no subscripts)";
     input  Integer idx           "SSA subscript index (1 for x_1, 2 for x_2, ...)";
-    output PointerCyclic<Variable> ssaVarPtr;
+    output Pointer<Variable> ssaVarPtr;
     output ComponentRef ssaCref;
   protected
-    PointerCyclic<Variable> origVarPtr;
+    Pointer<Variable> origVarPtr;
     Variable origVar;
     InstNode newNode;
     Type ty;
   algorithm
     origVarPtr := BVariable.getVarPointer(baseCref, sourceInfo());
-    origVar    := PointerCyclic.access(origVarPtr);
+    origVar    := Pointer.access(origVarPtr);
     ty         := ComponentRef.getSubscriptedType(baseCref, false);
 
     // Build a fresh VAR_NODE with the SSA name; the variable pointer is
-    // initially a dummy and becomes cyclic via makeVarPtrCyclic below.
+    // initially a dummy and is linked to the real variable by makeVarPtr below.
     newNode := InstNode.VAR_NODE(
       ComponentRef.firstName(baseCref) + "_" + intString(idx),
-      PointerCyclic.create(NBVariable.DUMMY_VARIABLE));
-    ssaCref := ComponentRef.CREF(newNode, {}, ty,
-      NFComponentRef.Origin.CREF, ComponentRef.EMPTY());
+      PointerWeak.downgrade(Pointer.createImmutable(NBVariable.DUMMY_VARIABLE)));
+    ssaCref := ComponentRef.fromNode(newNode, ty);
 
     // Clear any inherited partner pointers (pDer, seed) so that a fresh pDer
     // variable is created for this SSA temporary rather than reusing the
@@ -1831,7 +1871,7 @@ protected
     );
 
     // Establish the cyclic Variable <-> InstNode pointer link
-    (ssaVarPtr, ssaCref) := BVariable.makeVarPtrCyclic(origVar, ssaCref);
+    (ssaVarPtr, ssaCref) := BVariable.makeVarPtr(origVar, ssaCref);
   end makeSSAVar;
 
   function algorithmToSSA
@@ -1850,7 +1890,7 @@ protected
     output StrongComponent ssaComp;
     output list<tuple<ComponentRef, tuple<ComponentRef, Integer>>> replacements
       "original_var -> (ssa_var, line_of_replacement)";
-    output list<PointerCyclic<Variable>> newVars
+    output list<Pointer<Variable>> newVars
       "newly created SSA variable pointers; caller must register them in the variable system";
   protected
     Equation eqn;
@@ -1858,7 +1898,7 @@ protected
     Statement stmt;
     ComponentRef lhsCref, baseCref, ssaCref;
     Integer cnt, idx, lineIdx;
-    PointerCyclic<Variable> ssaVarPtr;
+    Pointer<Variable> ssaVarPtr;
     Expression lhsExp, rhsExp;
     // Phase 1: how many times is each base cref assigned?
     UnorderedMap<ComponentRef, Integer> assignCount =
@@ -1871,13 +1911,13 @@ protected
       UnorderedMap.new<Expression>(ComponentRef.hash, ComponentRef.isEqual);
     list<Statement> ssaStmts = {};
     list<tuple<ComponentRef, tuple<ComponentRef, Integer>>> replAcc = {};
-    list<PointerCyclic<Variable>> newVarsAcc = {};
-    PointerCyclic<Equation> ssaEqnPtr;
+    list<Pointer<Variable>> newVarsAcc = {};
+    Pointer<Equation> ssaEqnPtr;
   algorithm
     (ssaComp, replacements, newVars) := match comp
 
       case StrongComponent.MULTI_COMPONENT() algorithm
-        eqn := PointerCyclic.access(Slice.getT(comp.eqn));
+        eqn := Pointer.access(Slice.getT(comp.eqn));
         Equation.ALGORITHM(alg = alg) := eqn;
 
         // ── Phase 1: count how many times each base cref appears on the LHS ──
@@ -1956,7 +1996,7 @@ protected
           case Equation.ALGORITHM() algorithm eqn.alg := alg; then eqn;
           else eqn;
         end match;
-        ssaEqnPtr := PointerCyclic.create(eqn);
+        ssaEqnPtr := Pointer.create(eqn);
       then (StrongComponent.MULTI_COMPONENT(
               vars   = listAppend(comp.vars, list(Slice.SLICE(v, {}) for v in listReverse(newVarsAcc))),
               eqn    = Slice.SLICE(ssaEqnPtr, {}),

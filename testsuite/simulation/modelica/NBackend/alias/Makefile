@@ -1,14 +1,18 @@
 TEST = ../../../../rtest -v
 
 TESTFILES = \
+AliasBoundsThree.mos \
 Alias.mos \
 Alias2.mos \
 Alias_test1.mos \
+Alias_test_fixed_start_param.mos \
 Alias_test3.mos \
 Alias_test4.mos \
 Alias_test5.mos \
 ArrayAlias1.mos \
 ArrayAlias2.mos \
+ArrayAliasSizeOne.mos \
+ForEquationAlias.mos \
 Alias_pre.mos \
 AliasCyclic.mos \
 AliasCyclic1.mos \
@@ -32,6 +36,7 @@ DEPENDENCIES = \
 *.mo \
 *.mos \
 Makefile \
+ReferenceFiles \
 
 CLEAN = `ls | grep -w -v -f deps.tmp`
 

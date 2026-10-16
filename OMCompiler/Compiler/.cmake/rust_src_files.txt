@@ -1,7 +1,7 @@
 # Hand-written Rust omc sources copied into each build's working copy (see
 # rust_omc.cmake); mmtorust generates the rest. Paths relative to OpenModelica.rs.
 # Regenerate from a git checkout:
-#   git -C OpenModelica.rs ls-files | grep -vE '^(README|TODO)\.md$|check-unused-deps\.py$|^wasm/build\.sh$|^openmodelica_wasm_bindgen/'
+#   git -C OpenModelica.rs ls-files | grep -vE '^(README|TODO|ONBOARDING)\.md$|^format\.sh$|check-unused-deps\.py$|^wasm/build\.sh$|^openmodelica_wasm_bindgen/'
 # openmodelica_wasm_bindgen is left out on purpose: it is a build tool, compiled
 # from the canonical tree, and nothing in the working copy refers to it.
 #
@@ -43,6 +43,7 @@ metamodelica/src/list/mod.rs
 metamodelica/src/misc.rs
 metamodelica/src/real/mod.rs
 metamodelica/src/real/ryu.rs
+metamodelica/src/serial.rs
 metamodelica/src/source_info.rs
 metamodelica/src/string/hash.rs
 metamodelica/src/string/mod.rs
@@ -54,17 +55,20 @@ metamodelica_derive/Cargo.toml
 metamodelica_derive/src/lib.rs
 mmtorust/Cargo.toml
 mmtorust/src/MM.rs
+mmtorust/src/borrow_params.rs
 mmtorust/src/codegen.rs
 mmtorust/src/const_patterns.rs
-mmtorust/src/cyclic_fix.rs
 mmtorust/src/dep_analysis.rs
 mmtorust/src/external_c_calls.rs
 mmtorust/src/fallibility.rs
 mmtorust/src/fix.rs
 mmtorust/src/hierarchy.rs
 mmtorust/src/main.rs
+mmtorust/src/mutfix.rs
+mmtorust/src/overrides.rs
 mmtorust/src/mc_disjoint.rs
 mmtorust/src/mutable_cycles.rs
+mmtorust/src/rustfmt.rs
 mmtorust/src/scripting_api_qt.rs
 mmtorust/src/typedexp.rs
 mmtorust/src/unused_functions.rs
@@ -134,12 +138,11 @@ openmodelica_codegen_cfunctions/Cargo.toml
 openmodelica_codegen_cpp/Cargo.toml
 openmodelica_codegen_cpp_common/Cargo.toml
 openmodelica_codegen_cpp_ext/Cargo.toml
-openmodelica_codegen_cpp_omsi/Cargo.toml
-openmodelica_codegen_cpp_omsi_ext/Cargo.toml
 openmodelica_codegen_fmu/Cargo.toml
 openmodelica_codegen_fmu_c/Cargo.toml
-openmodelica_codegen_fmu_omsi/Cargo.toml
 openmodelica_codegen_graphml/Cargo.toml
+openmodelica_codegen_util/Cargo.toml
+openmodelica_codegen_util/src/Globals.rs
 openmodelica_codegen_wasm_jit/Cargo.toml
 openmodelica_codegen_wasm_jit/src/CodegenWasmJit.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJit/artifact.rs
@@ -151,6 +154,7 @@ openmodelica_codegen_wasm_jit/src/CodegenWasmJit/eq_fns.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJit/equations.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJit/events.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJit/ext_libs.rs
+openmodelica_codegen_wasm_jit/src/CodegenWasmJit/prebuilt.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJit/flags.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJit/fmu.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJit/fmu_link.rs
@@ -168,6 +172,7 @@ openmodelica_codegen_wasm_jit/src/CodegenWasmJit/nls_jac.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJit/optimization.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJit/prof.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJit/registry.rs
+openmodelica_codegen_wasm_jit/src/CodegenWasmJit/resizable.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJit/run.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJit/session.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJit/simulate_fn.rs
@@ -191,6 +196,7 @@ openmodelica_codegen_wasm_jit/src/CodegenWasmJitFunctions/errors.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJitFunctions/expressions.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJitFunctions/external_calls.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJitFunctions/externals.rs
+openmodelica_codegen_wasm_jit/src/CodegenWasmJitFunctions/flat.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJitFunctions/function.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJitFunctions/generic_calls.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJitFunctions/imports.rs
@@ -208,6 +214,7 @@ openmodelica_codegen_wasm_jit/src/CodegenWasmJitFunctions/signatures.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJitFunctions/sim_access.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJitFunctions/sim_keys.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJitFunctions/sim_systems.rs
+openmodelica_codegen_wasm_jit/src/CodegenWasmJitFunctions/sizes.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJitFunctions/statements.rs
 openmodelica_codegen_wasm_jit/src/CodegenWasmJitFunctions/strings.rs
 openmodelica_codegen_wasm_jit/testmodels/BouncingBall.mo
@@ -337,10 +344,17 @@ openmodelica_fmi_web/Cargo.lock
 openmodelica_fmi_web/Cargo.toml
 openmodelica_fmi_web/build.rs
 openmodelica_fmi_web/src/lib.rs
-openmodelica_hdf5/Cargo.lock
-openmodelica_hdf5/Cargo.toml
-openmodelica_hdf5/build.rs
-openmodelica_hdf5/src/lib.rs
+openmodelica_gendoc/Cargo.toml
+openmodelica_gendoc/src/assets/gendoc.js
+openmodelica_gendoc/src/doc.rs
+openmodelica_gendoc/src/heap.rs
+openmodelica_gendoc/src/html.rs
+openmodelica_gendoc/src/icons.rs
+openmodelica_gendoc/src/index.rs
+openmodelica_gendoc/src/links.rs
+openmodelica_gendoc/src/main.rs
+openmodelica_gendoc/src/packages.rs
+openmodelica_gendoc/src/style.css
 openmodelica_frontend/Cargo.toml
 openmodelica_frontend/src/Globals.rs
 openmodelica_frontend_base/Cargo.toml
@@ -387,11 +401,16 @@ openmodelica_modelica_utilities/Cargo.toml
 openmodelica_modelica_utilities/src/lib.rs
 openmodelica_nbackend/Cargo.toml
 openmodelica_nbackend/src/NBASSCExt.rs
+openmodelica_nf_api/Cargo.toml
+openmodelica_nf_api/src/Globals.rs
 openmodelica_nf_frontend/Cargo.toml
 openmodelica_nf_frontend/build.rs
 openmodelica_nf_frontend/src/FFI.rs
 openmodelica_nf_frontend/src/FFI_wasm.rs
+openmodelica_nf_frontend/src/FFI_wasm_marshal.rs
+openmodelica_nf_frontend/src/Globals.rs
 openmodelica_nf_frontend/src/ffi_catch.cpp
+openmodelica_loader/Cargo.toml
 openmodelica_omgraphics/Cargo.toml
 openmodelica_omgraphics/src/OMGraphics.rs
 openmodelica_program_util/Cargo.toml
@@ -414,6 +433,11 @@ openmodelica_simcode_types/Cargo.toml
 openmodelica_simcode_util/Cargo.toml
 openmodelica_susan/Cargo.toml
 openmodelica_susan/src/main.rs
+openmodelica_susan/src/rust_backend.rs
+openmodelica_susan_index/Cargo.toml
+openmodelica_susan_index/src/extract.rs
+openmodelica_susan_index/src/lib.rs
+openmodelica_susan_index/src/main.rs
 openmodelica_tpl/Cargo.toml
 openmodelica_tpl/src/Tpl.handwritten.rs
 openmodelica_util/Cargo.toml
@@ -421,9 +445,11 @@ openmodelica_util/build.rs
 openmodelica_util/src/Autoconf.rs
 openmodelica_util/src/FMIExt.rs
 openmodelica_util/src/File.rs
+openmodelica_util/src/Flags.handwritten.rs
 openmodelica_util/src/Global.rs
 openmodelica_util/src/Globals.rs
 openmodelica_util/src/IOStreamExt.rs
+openmodelica_util/src/JSONExt.rs
 openmodelica_util/src/Lapack.rs
 openmodelica_util/src/ModelInstanceReference.rs
 openmodelica_util/src/OMSimulatorExt.rs
@@ -442,6 +468,7 @@ openmodelica_util/src/unittests/avl_tree_string_tests.rs
 openmodelica_util/src/unittests/diff_algorithm_tests.rs
 openmodelica_util/src/unittests/flags_util_tests.rs
 openmodelica_util/src/unittests/hash_set_string_tests.rs
+openmodelica_util/src/unittests/json_ext_tests.rs
 openmodelica_util/src/unittests/mod.rs
 openmodelica_util/src/unittests/sb_tests.rs
 openmodelica_util/src/unittests/string_allocator_tests.rs
@@ -452,10 +479,11 @@ openmodelica_util/src/unittests/util_tests.rs
 openmodelica_util_datatypes_basic/Cargo.toml
 openmodelica_util_datatypes_basic/src/GCExt.rs
 openmodelica_util_datatypes_basic/src/Mutable.rs
-openmodelica_util_datatypes_basic/src/MutableCyclic.rs
+openmodelica_util_datatypes_basic/src/MutableWeak.rs
+openmodelica_util_datatypes_basic/src/PointerWeak.rs
 openmodelica_util_datatypes_basic/src/Pointer.rs
-openmodelica_util_datatypes_basic/src/PointerCyclic.rs
 openmodelica_util_datatypes_basic/src/unittests/array_tests.rs
+openmodelica_util_datatypes_basic/src/unittests/container_cycle_drop_tests.rs
 openmodelica_util_datatypes_basic/src/unittests/double_ended_tests.rs
 openmodelica_util_datatypes_basic/src/unittests/list_tests.rs
 openmodelica_util_datatypes_basic/src/unittests/mod.rs
@@ -468,15 +496,16 @@ openmodelica_wasi/src/wasi.rs
 openmodelica_wasi_libc/Cargo.toml
 openmodelica_wasi_libc/build.rs
 openmodelica_wasi_libc/external_c_callbacks.c
-openmodelica_wasi_libc/external_c_stubs.c
 openmodelica_wasi_libc/src/lib.rs
 openmodelica_wasm_jit/Cargo.toml
 openmodelica_wasm_jit/build.rs
 openmodelica_wasm_jit/external_c_stubs.c
 openmodelica_wasm_jit/src/blobs.rs
 openmodelica_wasm_jit/src/dylink.rs
+openmodelica_wasm_jit/src/dylink_wasmer.rs
 openmodelica_wasm_jit/src/dylink_wasmtime.rs
 openmodelica_wasm_jit/src/engine_config.rs
+openmodelica_wasm_jit/src/ext_eval.rs
 openmodelica_wasm_jit/src/host.rs
 openmodelica_wasm_jit/src/isolate.rs
 openmodelica_wasm_jit/src/lib.rs
@@ -489,6 +518,7 @@ openmodelica_wasm_jit/src/sim_runtime_wasmer.rs
 openmodelica_wasm_jit/src/sim_runtime_wasmtime.rs
 openmodelica_wasm_jit/src/wasi_shim.rs
 rust-toolchain.toml
+rustfmt.toml
 susanSources.txt
 wasm/anim/OrbitControls.js
 wasm/anim/anim-core.js
@@ -531,3 +561,4 @@ wasm/simulator/omc-worker.js
 wasm/theme.css
 wasm/units.js
 wasm/ui.js
+wasm/wasm-blobs.js

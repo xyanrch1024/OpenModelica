@@ -5,8 +5,8 @@ use super::*;
 
 /// Flatten a `list<list<SimEqSystem>>` (partitioned equations) to a flat Vec.
 pub(super) fn flatten_eqs_ll(
-    eqs: &List<List<Arc<SimCode::SimEqSystem>>>,
-) -> Vec<Arc<SimCode::SimEqSystem>> {
+    eqs: &List<List<metamodelica::Ref<SimCode::SimEqSystem>>>,
+) -> Vec<metamodelica::Ref<SimCode::SimEqSystem>> {
     let mut out = Vec::new();
     for part in lst(eqs) {
         for e in lst(part) {
@@ -44,7 +44,7 @@ pub(super) fn prof_plan(
         col_end: i.columnNumberEnd,
         read_only: i.isReadOnly,
     };
-    let mut fn_index = HashMap::new();
+    let mut fn_index = HashMap::default();
     let mut functions = Vec::new();
     for (i, f) in lst(&mi.functions).enumerate() {
         use SimCodeFunction::Function::Function as F;
@@ -68,7 +68,7 @@ pub(super) fn prof_plan(
     // 1000 over `SerializeInitXML.modelVariables`' lists, the alias and sensitivity
     // variables included. The report lists `modelData`'s arrays instead, so an id is
     // not a position in it.
-    let mut vr_of: HashMap<String, u32> = HashMap::new();
+    let mut vr_of: HashMap<String, u32> = HashMap::default();
     let mut vr = 1000u32;
     for list in [
         &mi.vars.stateVars, &mi.vars.derivativeVars, &mi.vars.algVars, &mi.vars.discreteAlgVars,
@@ -103,9 +103,9 @@ pub(super) fn prof_plan(
     }
     // Every equation the `_info.json` lists, by index; a system's defines are its
     // unknowns, an assignment's its left-hand side.
-    let mut table: HashMap<i32, (bool, Vec<String>)> = HashMap::new();
+    let mut table: HashMap<i32, (bool, Vec<String>)> = HashMap::default();
     let mut err = None;
-    let mut note = |e: &Arc<SimCode::SimEqSystem>| {
+    let mut note = |e: &metamodelica::Ref<SimCode::SimEqSystem>| {
         use SimCode::SimEqSystem as E;
         let entry = match &**e {
             E::SES_LINEAR { lSystem, .. } => {
@@ -146,7 +146,7 @@ pub(super) fn prof_plan(
     }
     let n = table.keys().max().map_or(1, |m| (*m).max(0) + 1) as usize;
     let mut equations = Vec::with_capacity(n);
-    let mut blocks = HashMap::new();
+    let mut blocks = HashMap::default();
     // Under `all` C's block 0 exists but belongs to no equation.
     let all = level & 2 != 0;
     let mut block_eqs: Vec<u32> = if all { vec![0] } else { Vec::new() };
@@ -165,7 +165,7 @@ pub(super) fn prof_plan(
 }
 
 /// `eqs` with everything [`visit_nested_eqs`] reaches appended.
-pub(super) fn eqs_with_nested(eqs: &[Arc<SimCode::SimEqSystem>]) -> Vec<Arc<SimCode::SimEqSystem>> {
+pub(super) fn eqs_with_nested(eqs: &[metamodelica::Ref<SimCode::SimEqSystem>]) -> Vec<metamodelica::Ref<SimCode::SimEqSystem>> {
     let mut out = Vec::with_capacity(eqs.len());
     for e in eqs {
         visit_nested_eqs(e, &mut |i| out.push(i.clone()));
@@ -180,8 +180,8 @@ pub(super) fn eqs_with_nested(eqs: &[Arc<SimCode::SimEqSystem>]) -> Vec<Arc<SimC
 /// parameter `SimVar`s that have a binding, in declaration order.
 pub(super) fn collect_param_bindings(
     vars: &SimCodeVar::SimVars,
-    computed: &std::collections::HashSet<String>,
-) -> Vec<(Arc<DAE::ComponentRef>, Arc<DAE::Exp>)> {
+    computed: &HashSet<String>,
+) -> Vec<(metamodelica::Ref<DAE::ComponentRef>, metamodelica::Ref<DAE::Exp>)> {
     let mut out = Vec::new();
     for p in lst(&vars.paramVars)
         .chain(lst(&vars.intParamVars))
@@ -218,7 +218,7 @@ fn is_const_exp(e: &DAE::Exp) -> bool {
 /// the `SimVar`s are scalarized (`ts[1]`, `layer[1][1][1][1]`), an array assign names
 /// the whole `ts`. `sim_cref_key` spells one bracket pair per subscript, so strip
 /// every rank, not just the last.
-fn is_computed(key: &str, computed: &std::collections::HashSet<String>) -> bool {
+fn is_computed(key: &str, computed: &HashSet<String>) -> bool {
     let mut key = key;
     loop {
         if computed.contains(key) {
@@ -231,11 +231,14 @@ fn is_computed(key: &str, computed: &std::collections::HashSet<String>) -> bool 
 
 /// Keys of the crefs a `SimEqSystem` list assigns, a system's iteration
 /// variables included.
-pub(super) fn assigned_cref_keys(eqs: &[Arc<SimCode::SimEqSystem>]) -> std::collections::HashSet<String> {
+pub(super) fn assigned_cref_keys(eqs: &[metamodelica::Ref<SimCode::SimEqSystem>]) -> HashSet<String> {
     use SimCode::SimEqSystem as E;
-    let mut set = std::collections::HashSet::new();
+    let mut set = HashSet::default();
     let mut add = |cr: &DAE::ComponentRef| {
         if let Ok(k) = sim_cref_key(cr) {
+            set.insert(k);
+        }
+        if let Some(k) = flat_sim_key(cr) {
             set.insert(k);
         }
     };
@@ -270,7 +273,7 @@ pub(super) fn assigned_cref_keys(eqs: &[Arc<SimCode::SimEqSystem>]) -> std::coll
             }
             E::SES_ALGORITHM { statements, .. } | E::SES_INVERSE_ALGORITHM { statements, .. } => {
                 let defs = openmodelica_frontend_base::Expression::extractUniqueCrefsFromStatmentS(
-                    statements.clone(),
+                    &statements,
                 );
                 if let Ok((defs, _)) = defs {
                     for c in lst(&defs) {
@@ -288,7 +291,7 @@ pub(super) fn assigned_cref_keys(eqs: &[Arc<SimCode::SimEqSystem>]) -> std::coll
 /// the `EVAL_*` stage mask it runs in. Mirrors C's `equationNames_` for
 /// `contextDAEmode`: an equation with no evaluation attributes inherits the preceding
 /// one's mask (C leaves `evalStages` unassigned there), starting from every stage.
-pub(super) fn dae_residual_equations(dae: &SimCode::DaeModeData) -> Vec<(Arc<SimCode::SimEqSystem>, u32)> {
+pub(super) fn dae_residual_equations(dae: &SimCode::DaeModeData) -> Vec<(metamodelica::Ref<SimCode::SimEqSystem>, u32)> {
     use openmodelica_sim_meta::driver::eval_stage as stage;
     let all = stage::DYNAMIC | stage::ALGEBRAIC | stage::ZEROCROSS | stage::DISCRETE;
     let mut stages = all;
@@ -357,8 +360,7 @@ fn eq_attr_of(eq: &SimCode::SimEqSystem) -> Option<&openmodelica_backend_types::
         | E::SES_MIXED { eqAttr, .. }
         | E::SES_WHEN { eqAttr, .. }
         | E::SES_FOR_LOOP { eqAttr, .. }
-        | E::SES_FOR_EQUATION { eqAttr, .. }
-        | E::SES_ALGEBRAIC_SYSTEM { eqAttr, .. } => Some(eqAttr),
+        | E::SES_FOR_EQUATION { eqAttr, .. } => Some(eqAttr),
         E::SES_ALIAS { .. } => None,
     }
 }
@@ -366,7 +368,7 @@ fn eq_attr_of(eq: &SimCode::SimEqSystem) -> Option<&openmodelica_backend_types::
 /// Units of `evaluateDAEResiduals(SimData*, stage)`. C tests `evalStages &
 /// currentEvalStage` against a per-equation assignment; here the mask is a
 /// constant, so the guard is a single `and`/`if`.
-pub(super) fn dae_units(eqs: &[(Arc<SimCode::SimEqSystem>, u32)]) -> Vec<EqUnit<'_>> {
+pub(super) fn dae_units(eqs: &[(metamodelica::Ref<SimCode::SimEqSystem>, u32)]) -> Vec<EqUnit<'_>> {
     eqs.iter().map(|(eq, stages)| EqUnit::Eq(eq, Some(*stages))).collect()
 }
 
@@ -401,14 +403,13 @@ pub(crate) fn eq_kind_name(eq: &SimCode::SimEqSystem) -> &'static str {
         E::SES_FOR_LOOP { .. } => "SES_FOR_LOOP",
         E::SES_FOR_EQUATION { .. } => "SES_FOR_EQUATION",
         E::SES_ALIAS { .. } => "SES_ALIAS",
-        E::SES_ALGEBRAIC_SYSTEM { .. } => "SES_ALGEBRAIC_SYSTEM",
     }
 }
 
 /// Whether any equation, at any nesting depth, is a `SES_LINEAR` C would solve
 /// with `method = 1`.
 pub(super) fn has_method1_linear(sim_code: &SimCode::SimCode) -> bool {
-    fn walk(e: &Arc<SimCode::SimEqSystem>) -> bool {
+    fn walk(e: &metamodelica::Ref<SimCode::SimEqSystem>) -> bool {
         use SimCode::SimEqSystem as E;
         match &**e {
             E::SES_LINEAR { lSystem, alternativeTearing, .. } => {
@@ -446,7 +447,7 @@ pub(super) fn has_method1_linear(sim_code: &SimCode::SimCode) -> bool {
 /// Index `e` by its own index and recurse into nested equations (torn-system
 /// inner constraints, mixed cont/disc parts, if-branches), which an `SES_ALIAS`
 /// may target but which the top-level lists don't reach.
-pub(super) fn index_eq_recursive(e: &Arc<SimCode::SimEqSystem>, idx: &mut HashMap<i32, Arc<SimCode::SimEqSystem>>) {
+pub(super) fn index_eq_recursive(e: &metamodelica::Ref<SimCode::SimEqSystem>, idx: &mut HashMap<i32, metamodelica::Ref<SimCode::SimEqSystem>>) {
     use SimCode::SimEqSystem as E;
     let key = eq_index_of(e);
     if key >= 0 {
@@ -454,7 +455,7 @@ pub(super) fn index_eq_recursive(e: &Arc<SimCode::SimEqSystem>, idx: &mut HashMa
     }
     match &**e {
         E::SES_LINEAR { lSystem, alternativeTearing, .. } => {
-            let mut index_lin = |s: &Arc<SimCode::LinearSystem>, idx: &mut _| {
+            let mut index_lin = |s: &metamodelica::Ref<SimCode::LinearSystem>, idx: &mut _| {
                 for inner in lst(&s.residual) {
                     index_eq_recursive(inner, idx);
                 }
@@ -505,13 +506,13 @@ pub(super) fn index_eq_recursive(e: &Arc<SimCode::SimEqSystem>, idx: &mut HashMa
 /// something a later one uses (`TaskSystem_v2::add_node`). Reads of a dense
 /// linear system's `A`/`b` count as uses too; C's loader only sees a torn system's
 /// inner equations.
-pub(super) fn parmod_info(ode_eqs: &[Arc<SimCode::SimEqSystem>]) -> Result<openmodelica_sim_meta::ParmodInfo> {
+pub(super) fn parmod_info(ode_eqs: &[metamodelica::Ref<SimCode::SimEqSystem>]) -> Result<openmodelica_sim_meta::ParmodInfo> {
     use SimCode::SimEqSystem as E;
     use openmodelica_frontend_base::{ComponentReference, Expression};
-    fn name(cref: &Arc<DAE::ComponentRef>) -> Result<String> {
-        Ok(ComponentReference::crefStr(cref.clone())?.to_string())
+    fn name(cref: &metamodelica::Ref<DAE::ComponentRef>) -> Result<String> {
+        Ok(ComponentReference::crefStr(cref)?.to_string())
     }
-    fn uses(exp: &Arc<DAE::Exp>) -> Result<Vec<String>> {
+    fn uses(exp: &metamodelica::Ref<DAE::Exp>) -> Result<Vec<String>> {
         lst(&Expression::extractUniqueCrefsFromExpDerPreStart(exp.clone(), true)?).map(name).collect()
     }
     fn unsupported(index: i32, what: &str) -> &'static str {
@@ -523,7 +524,7 @@ pub(super) fn parmod_info(ode_eqs: &[Arc<SimCode::SimEqSystem>]) -> Result<openm
             E::SES_SIMPLE_ASSIGN { cref, exp, .. }
             | E::SES_SIMPLE_ASSIGN_CONSTRAINTS { cref, exp, .. }
             | E::SES_FOR_LOOP { cref, exp, .. } => (Some(name(cref)?), exp),
-            E::SES_ARRAY_CALL_ASSIGN { lhs, exp, .. } => (Some(name(&Expression::expCref(lhs.clone())?)?), exp),
+            E::SES_ARRAY_CALL_ASSIGN { lhs, exp, .. } => (Some(name(&Expression::expCref(&lhs)?)?), exp),
             E::SES_RESIDUAL { exp, .. } => (None, exp),
             other => return Err(unsupported(eq_index_of(other), "internal equation type not yet handled")),
         };
@@ -540,16 +541,16 @@ pub(super) fn parmod_info(ode_eqs: &[Arc<SimCode::SimEqSystem>]) -> Result<openm
         }
         Ok(())
     }
-    let sorted = |eqs: &List<Arc<E>>| -> Vec<Arc<E>> {
-        let mut v: Vec<Arc<E>> = lst(eqs).cloned().collect();
+    let sorted = |eqs: &List<metamodelica::Ref<E>>| -> Vec<metamodelica::Ref<E>> {
+        let mut v: Vec<metamodelica::Ref<E>> = lst(eqs).cloned().collect();
         v.sort_by_key(|e| eq_index_of(e));
         v
     };
     let mut nodes: Vec<(i32, HashSet<String>, HashSet<String>)> = Vec::new();
     for eq in ode_eqs {
         let index = eq_index_of(eq);
-        let mut lhs = HashSet::new();
-        let mut rhs = HashSet::new();
+        let mut lhs = HashSet::default();
+        let mut rhs = HashSet::default();
         match &**eq {
             E::SES_RESIDUAL { exp, .. } => rhs.extend(uses(exp)?),
             E::SES_SIMPLE_ASSIGN { cref, exp, .. }
@@ -559,11 +560,11 @@ pub(super) fn parmod_info(ode_eqs: &[Arc<SimCode::SimEqSystem>]) -> Result<openm
                 rhs.extend(uses(exp)?);
             }
             E::SES_ARRAY_CALL_ASSIGN { lhs: l, exp, .. } => {
-                lhs.insert(name(&Expression::expCref(l.clone())?)?);
+                lhs.insert(name(&Expression::expCref(&l)?)?);
                 rhs.extend(uses(exp)?);
             }
             E::SES_ALGORITHM { statements, .. } | E::SES_INVERSE_ALGORITHM { statements, .. } => {
-                let (defs, used) = Expression::extractUniqueCrefsFromStatmentS(statements.clone())?;
+                let (defs, used) = Expression::extractUniqueCrefsFromStatmentS(&statements)?;
                 lhs.extend(lst(&defs).map(name).collect::<Result<Vec<_>>>()?);
                 rhs.extend(lst(&used).map(name).collect::<Result<Vec<_>>>()?);
             }
@@ -632,7 +633,6 @@ pub(super) fn eq_index_of(eq: &SimCode::SimEqSystem) -> i32 {
         | E::SES_INVERSE_ALGORITHM { index, .. }
         | E::SES_MIXED { index, .. }
         | E::SES_WHEN { index, .. }
-        | E::SES_ALGEBRAIC_SYSTEM { index, .. }
         | E::SES_FOR_LOOP { index, .. } => *index,
         // Torn systems carry their index inside the system record, not as a
         // top-level field; an `SES_ALIAS` can point at the whole system.

@@ -441,6 +441,7 @@ constant list<Flags.ConfigFlag> allConfigFlags = {
   Flags.FMU_NATIVE_PLATFORMS,
   Flags.TPL_OUTPUT_DIR,
   Flags.FMU_DIRECTORY,
+  Flags.TPL_INTERFACE_DIR,
   Flags.HAND_GUIDED_TEARING,
   Flags.ACCEPT_MODELON_HGT,
   Flags.HGT_MERGE_BLT_BLOCKS,
@@ -1067,6 +1068,14 @@ algorithm
 
     // A multiple-string value.
     case (_, Flags.STRING_LIST_FLAG(), _) then Flags.STRING_LIST_FLAG(splitCSV(inValue));
+
+    // No value, and an enumeration that spells one of its values "true": the flag
+    // used to be a boolean one, so keep --flag meaning --flag=true.
+    case ("", Flags.ENUM_FLAG(validValues = enums), _)
+      algorithm
+        i := Util.assoc("true", enums);
+      then
+        Flags.ENUM_FLAG(i, enums);
 
     // An enumeration value.
     case (_, Flags.ENUM_FLAG(validValues = enums), _)
@@ -2034,6 +2043,20 @@ function wrapToTerminal
   input String str;
   output String outStr = stringAppendList(StringUtil.wordWrap(str, System.getTerminalWidth(), "\n"));
 end wrapToTerminal;
+
+public function applyNumProcEnvironment
+  "Bound OpenBLAS's thread pool, which it sizes from the environment when it
+   loads and which costs 128 MiB of address space per thread. An OpenMP build
+   (the MSYS2 package used on Windows) ignores OPENBLAS_NUM_THREADS and reads
+   only OMP_NUM_THREADS, so both are set. Called wherever -n is applied rather
+   than from Main.init alone: a setCommandLineOptions is still ahead of whatever
+   first loads the library."
+algorithm
+  if Flags.getConfigInt(Flags.NUM_PROC) == 1 then
+    System.setEnv("OPENBLAS_NUM_THREADS", "1", false);
+    System.setEnv("OMP_NUM_THREADS", "1", false);
+  end if;
+end applyNumProcEnvironment;
 
 annotation(__OpenModelica_Interface="util");
 end FlagsUtil;

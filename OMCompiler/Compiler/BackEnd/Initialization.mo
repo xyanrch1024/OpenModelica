@@ -42,12 +42,12 @@ encapsulated package Initialization
 
 public
 import Absyn;
-import AvlSetCR;
 import BackendDAE;
 import BackendDAEFunc;
 import DAE;
 import HashSet;
 import StringUtil;
+import UnorderedSet;
 import Util;
 
 protected
@@ -113,7 +113,7 @@ protected
   HashSet.HashSet hs "contains all pre variables";
   list<BackendDAE.Equation> removedEqns;
   list<BackendDAE.Var> dumpVars, outAllPrimaryParameters;
-  AvlSetCR.Tree allPrimaryParameters;
+  UnorderedSet<DAE.ComponentRef> allPrimaryParameters;
 algorithm
   try
     //if Flags.isSet(Flags.DUMP_INITIAL_SYSTEM) then
@@ -149,10 +149,8 @@ algorithm
                                          + 2*BackendDAEUtil.daeSize(dae));
     reeqns := BackendEquation.emptyEqnsSized(BackendEquation.getNumberOfEquations(dae.shared.removedEqs));
 
-    allPrimaryParameters := AvlSetCR.EMPTY();
-    for v in outAllPrimaryParameters loop
-      allPrimaryParameters := AvlSetCR.add(allPrimaryParameters, BackendVariable.varCref(v));
-    end for;
+    allPrimaryParameters := UnorderedSet.fromList(list(BackendVariable.varCref(v) for v in outAllPrimaryParameters),
+      ComponentReferenceBasics.hashComponentRef, ComponentReferenceBasics.crefEqual);
     // check for datareconciliation and set the Flag, to set the Qualified Component names as TopLevel Input
     if isSome(inDAE.shared.dataReconciliationData) then
        datarecon := true;
@@ -411,6 +409,9 @@ protected
 algorithm
   outDAE.eqs := List.map(inDAE.eqs, inlineWhenForInitializationSystem);
   (eqnlst, _) := BackendEquation.traverseEquationArray(inDAE.shared.removedEqs, inlineWhenForInitializationEquation, ({}, leftCrs));
+  for syst in inDAE.eqs loop
+    (eqnlst, _) := BackendEquation.traverseEquationArray(syst.removedEqs, inlineWhenForInitializationRemovedEquation, (eqnlst, leftCrs));
+  end for;
   clockEqnsLst := BackendEquation.traverseEquationArray(inDAE.shared.removedEqs, SynchronousFeatures.getBoolClockWhenClauses, {});
   eqnlst := listAppend(clockEqnsLst, eqnlst);
   outDAE.shared := BackendDAEUtil.setSharedRemovedEqns(outDAE.shared, BackendEquation.listEquation(eqnlst));
@@ -467,6 +468,37 @@ algorithm
     else (inEq::accEq, leftCrs);
   end match;
 end inlineWhenForInitializationEquation;
+
+protected function inlineWhenForInitializationRemovedEquation
+  "Collects the active when-bodies of a removed equation of an EqSystem.
+   The rest of it is already evaluated by the simulation system."
+  input BackendDAE.Equation inEq;
+  input tuple<list<BackendDAE.Equation>, HashSet.HashSet> inTpl;
+  output BackendDAE.Equation outEq = inEq;
+  output tuple<list<BackendDAE.Equation>, HashSet.HashSet> outTpl;
+protected
+  list<BackendDAE.Equation> eqns;
+  HashSet.HashSet leftCrs;
+  list<DAE.Statement> stmts;
+algorithm
+  (eqns, leftCrs) := inTpl;
+  () := match inEq
+    case BackendDAE.WHEN_EQUATION() algorithm
+      (leftCrs, eqns) := inlineWhenForInitializationWhenEquation(inEq.whenEquation, inEq.source, inEq.attr, eqns, leftCrs);
+    then ();
+
+    case BackendDAE.ALGORITHM(alg = DAE.ALGORITHM_STMTS(statementLst = stmts)) algorithm
+      stmts := list(s for s guard (match s case DAE.STMT_WHEN() then true; else false; end match) in stmts);
+      (stmts, leftCrs) := inlineWhenForInitializationWhenAlgorithm(stmts, {}, leftCrs);
+      if not listEmpty(stmts) then
+        eqns := BackendDAE.ALGORITHM(0, DAE.ALGORITHM_STMTS(stmts), inEq.source, inEq.expand, BackendDAE.EQ_ATTR_DEFAULT_INITIAL) :: eqns;
+      end if;
+    then ();
+
+    else ();
+  end match;
+  outTpl := (eqns, leftCrs);
+end inlineWhenForInitializationRemovedEquation;
 
 protected function inlineWhenForInitializationWhenEquation "author: lochel"
   input BackendDAE.WhenEquation inWEqn;
@@ -2056,6 +2088,8 @@ algorithm
       true := isVarExplicitSolvable(enhancedRow(inME, indexEq), indexVar);
       var := BackendVariable.getVarAt(inVars, indexVar);
       eqn := BackendEquation.get(inEqns, indexEq);
+      // an algorithm cannot be solved for one of its variables
+      true := BackendEquation.isNotAlgorithm(eqn);
 
       cref := BackendVariable.varCref(var);
       type_ := BackendVariable.varType(var);
@@ -2318,7 +2352,7 @@ protected function collectInitialVarsEqnsSystem
   input output BackendDAE.EquationArray eqns;
   input output BackendDAE.EquationArray reEqns;
   input HashSet.HashSet hs;
-  input AvlSetCR.Tree allPrimaryParams;
+  input UnorderedSet<DAE.ComponentRef> allPrimaryParams;
   input Boolean datareconFlag;
 protected
   array<Integer> stateSetFixCounts;
@@ -2434,9 +2468,9 @@ protected function collectInitialVars "author: lochel
   This function collects all the vars for the initial system.
   TODO: return additional equations for pre-variables"
   input BackendDAE.Var inVar;
-  input tuple<BackendDAE.Variables, BackendDAE.Variables, BackendDAE.EquationArray, array<Integer>, HashSet.HashSet, AvlSetCR.Tree, Boolean> inTpl;
+  input tuple<BackendDAE.Variables, BackendDAE.Variables, BackendDAE.EquationArray, array<Integer>, HashSet.HashSet, UnorderedSet<DAE.ComponentRef>, Boolean> inTpl;
   output BackendDAE.Var outVar;
-  output tuple<BackendDAE.Variables, BackendDAE.Variables, BackendDAE.EquationArray, array<Integer>, HashSet.HashSet, AvlSetCR.Tree, Boolean> outTpl;
+  output tuple<BackendDAE.Variables, BackendDAE.Variables, BackendDAE.EquationArray, array<Integer>, HashSet.HashSet, UnorderedSet<DAE.ComponentRef>, Boolean> outTpl;
 algorithm
   (outVar, outTpl) := matchcontinue (inVar, inTpl)
     local
@@ -2457,7 +2491,7 @@ algorithm
       list<String> stateSetSplit;
       Integer stateSetIdx;
       SourceInfo info;
-      AvlSetCR.Tree allPrimaryParameters;
+      UnorderedSet<DAE.ComponentRef> allPrimaryParameters;
       list<DAE.ComponentRef> parameters;
 
     // state
@@ -2479,7 +2513,7 @@ algorithm
       startExp := BackendVariable.varStartValue(var);
       parameters := Expression.getAllCrefs(startExp);
 
-      if not min(AvlSetCR.hasKey(allPrimaryParameters, p) for p in parameters) then
+      if not min(UnorderedSet.contains(p, allPrimaryParameters) for p in parameters) then
         eqn := BackendDAE.EQUATION(Expression.crefExp(startCR), startExp, DAE.emptyElementSource, BackendDAE.EQ_ATTR_DEFAULT_INITIAL);
         eqns := BackendEquation.add(eqn, eqns);
 
@@ -2687,7 +2721,7 @@ algorithm
       startExp := BackendVariable.varStartValue(var);
       parameters := Expression.getAllCrefs(startExp);
 
-      if not min(AvlSetCR.hasKey(allPrimaryParameters, p) for p in parameters) then
+      if not min(UnorderedSet.contains(p, allPrimaryParameters) for p in parameters) then
         eqn := BackendDAE.EQUATION(Expression.crefExp(startCR), startExp, DAE.emptyElementSource, BackendDAE.EQ_ATTR_DEFAULT_INITIAL);
         eqns := BackendEquation.add(eqn, eqns);
 
@@ -2741,7 +2775,7 @@ algorithm
       startExp := BackendVariable.varStartValue(var);
       parameters := Expression.getAllCrefs(startExp);
 
-      if not min(AvlSetCR.hasKey(allPrimaryParameters, p) for p in parameters) then
+      if not min(UnorderedSet.contains(p, allPrimaryParameters) for p in parameters) then
         eqn := BackendDAE.EQUATION(Expression.crefExp(startCR), startExp, DAE.emptyElementSource, BackendDAE.EQ_ATTR_DEFAULT_INITIAL);
         eqns := BackendEquation.add(eqn, eqns);
 

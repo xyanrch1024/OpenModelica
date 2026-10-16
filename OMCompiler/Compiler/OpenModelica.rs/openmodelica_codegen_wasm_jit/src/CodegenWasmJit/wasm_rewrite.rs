@@ -220,7 +220,7 @@ pub(super) fn drop_redundant_initialize(lib: &[u8]) -> Vec<u8> {
 }
 
 /// The `external` functions (import module `ext`) the model calls.
-fn external_imports(model_wasm: &[u8]) -> Vec<String> {
+pub(super) fn external_imports(model_wasm: &[u8]) -> Vec<String> {
     use wasmparser::Imports;
     let mut out = Vec::new();
     for payload in wasmparser::Parser::new(0).parse_all(model_wasm).flatten() {
@@ -249,23 +249,20 @@ pub(super) fn first_external_import(model_wasm: &[u8]) -> Option<String> {
     external_imports(model_wasm).into_iter().next()
 }
 
-/// Whether the FMU has to carry [`LAPACK_DYLINK`]: the model calls a routine only
-/// it defines. A model whose own `Library` resolved to a `liblapack.wasm` brings
-/// its own, and then that one is linked instead of this 1.3 MB.
+/// Whether the FMU has to carry LAPACK: the model calls a routine only it defines.
+/// A model whose own `Library` resolved to a `liblapack.wasm` brings its own, and
+/// then that one is linked instead.
 pub(super) fn needs_lapack(model_wasm: &[u8], ext_libs: &[ExtLibrary]) -> bool {
-    if LAPACK_DYLINK().is_empty() {
-        return false;
-    }
     let mut wanted: HashSet<String> = external_imports(model_wasm).into_iter().collect();
     if wanted.is_empty() {
         return false;
     }
-    for bytes in ext_libs.iter().map(|l| &l.bytes[..]).chain([LIBC_PIC(), EXTERNAL_C_DYLINK()]) {
+    for bytes in ext_libs.iter().map(|l| &l.bytes[..]) {
         for name in wasm_exports(bytes) {
             wanted.remove(name);
         }
     }
-    wasm_exports(LAPACK_DYLINK()).any(|name| wanted.contains(name))
+    openmodelica_wasm_jit::dylink::libraries_for(wanted).contains(&"liblapack.wasm")
 }
 
 /// The names a wasm module exports.
@@ -309,5 +306,49 @@ pub(super) fn native_externals_table(sigs: &[ExtCallSig], libs: &[String], syste
         out.push_str(&line);
         out.push('\n');
     }
+    out
+}
+
+/// Append a `metadata.code.branch_hint` section hinting every `if` that follows
+/// a `nop` (the codegen's cold-branch marker) as not taken, so the compiler moves
+/// its body out of the hot path. `n_imported` is the number of imported functions.
+pub(super) fn add_branch_hints(module: &[u8], n_imported: u32) -> Vec<u8> {
+    let mut content = Vec::new();
+    let mut n_funcs = 0u32;
+    let mut index = n_imported;
+    for payload in wasmparser::Parser::new(0).parse_all(module).flatten() {
+        let wasmparser::Payload::CodeSectionEntry(body) = payload else { continue };
+        let start = body.range().start;
+        let mut hints = Vec::new();
+        if let Ok(ops) = body.get_operators_reader() {
+            let mut prev_nop = false;
+            for (op, off) in ops.into_iter_with_offsets().flatten() {
+                if prev_nop && matches!(op, wasmparser::Operator::If { .. }) {
+                    hints.push((off - start) as u32);
+                }
+                prev_nop = matches!(op, wasmparser::Operator::Nop);
+            }
+        }
+        if !hints.is_empty() {
+            uleb(index, &mut content);
+            uleb(hints.len() as u32, &mut content);
+            for off in hints {
+                uleb(off, &mut content);
+                content.extend([1, 0]);
+            }
+            n_funcs += 1;
+        }
+        index += 1;
+    }
+    let name = b"metadata.code.branch_hint";
+    let mut section = Vec::new();
+    uleb(name.len() as u32, &mut section);
+    section.extend(name);
+    uleb(n_funcs, &mut section);
+    section.extend(content);
+    let mut out = module.to_vec();
+    out.push(0);
+    uleb(section.len() as u32, &mut out);
+    out.extend(section);
     out
 }

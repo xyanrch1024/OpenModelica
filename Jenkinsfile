@@ -6,11 +6,11 @@ def shouldWeBuildFedora
 def shouldWeEnableMacOSCMakeBuild
 def shouldWeBuildWindows
 def shouldWeRunTests
-def shouldWeRunRustTests
 
 pipeline {
   agent none
   options {
+    skipDefaultCheckout()
     newContainerPerStage()
     // Abort the sibling branches as soon as one of them fails: the build is
     // going to be red anyway and the stages that are still running would keep
@@ -29,8 +29,6 @@ pipeline {
     booleanParam(name: 'BUILD_ENTERPRISE_LINUX', defaultValue: false, description: 'Build with Enterprise Linux')
     booleanParam(name: 'BUILD_FEDORA', defaultValue: false, description: 'Build with Fedora 44')
     booleanParam(name: 'ENABLE_MACOS_CMAKE_BUILD', defaultValue: false, description: 'Enable building omc with CMake on MacOS')
-    booleanParam(name: 'ENABLE_RUST_PARTEST', defaultValue: false, description: 'Enable the extra partest run on the Rust omc with RUST_PARTEST_SIMCODETARGET (the wasm-jit partest always runs)')
-    string(name: 'RUST_PARTEST_SIMCODETARGET', defaultValue: 'C+Rust', description: 'simCodeTarget for the ENABLE_RUST_PARTEST run (empty = compiler default)')
     // Read at queue time, before common.groovy is loaded.
     string(name: 'BUILD_PRIORITY',
            defaultValue: env.CHANGE_ID ? '3' : '5',
@@ -56,6 +54,15 @@ pipeline {
             if (buildNumber > 1) milestone(buildNumber - 1)
             milestone(buildNumber)
           }
+          // common.checkoutSCM(), which is not loaded yet
+          echo "Checking out on ${env.NODE_NAME} in ${env.WORKSPACE}"
+          int attempt = 0
+          retry(2) {
+            if (attempt++ > 0) {
+              sh script: 'git submodule absorbgitdirs && git submodule deinit --all -f', returnStatus: true
+            }
+            checkout(scm).each { k, v -> env.setProperty(k, v) }
+          }
           common = load("${env.workspace}/.CI/common.groovy")
           def buildFlags = common.evaluateBuildFlags()
           isPR = buildFlags.isPR
@@ -65,17 +72,16 @@ pipeline {
           shouldWeEnableMacOSCMakeBuild = buildFlags.shouldWeEnableMacOSCMakeBuild
           shouldWeBuildWindows = buildFlags.shouldWeBuildWindows
           shouldWeRunTests = buildFlags.shouldWeRunTests
-          shouldWeRunRustTests = buildFlags.shouldWeRunRustTests
         }
       }
     }
     stage('setup') {
       parallel {
         // Linux build stages
-        stage('gcc') {
+        stage('noble-clang') {
           agent {
             docker {
-              image 'docker.openmodelica.org/build-deps:ubuntu-22.04'
+              image 'docker.openmodelica.org/build-deps:ubuntu-24.04'
               label 'linux'
               alwaysPull true
               args '''
@@ -89,33 +95,14 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
-            script { common.buildGccOMC() }
-          }
-        }
-        stage('clang') {
-          agent {
-            docker {
-              image 'docker.openmodelica.org/build-deps:ubuntu-22.04'
-              label 'linux'
-              alwaysPull true
-              args '''
-                --mount type=volume,source=omlibrary-cache,target=/cache/omlibrary \
-                -v /var/lib/jenkins/gitcache:/var/lib/jenkins/gitcache
-              '''
-              customWorkspace 'ws/OpenModelica'
-            }
-          }
-          options {
-            retry(count: 2, conditions: [nonresumable()])
-          }
-          steps {
+            script { common.checkoutSCM() }
             script { common.buildClangOMC() }
           }
         }
-        stage('cmake-jammy-gcc') {
+        stage('noble-gcc') {
           agent {
             docker {
-              image 'docker.openmodelica.org/build-deps:ubuntu-22.04'
+              image 'docker.openmodelica.org/build-deps:ubuntu-24.04'
               label 'linux'
               alwaysPull true
               args '''
@@ -129,10 +116,11 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
-            script { common.buildCMakeGccOMC() }
+            script { common.checkoutSCM() }
+            script { common.buildGccOMC() }
           }
         }
-        stage('cmake-alpine-clang') {
+        stage('alpine-clang') {
           agent {
             docker {
               image 'docker.openmodelica.org/build-deps:alpine-3.24'
@@ -153,8 +141,9 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
+            script { common.checkoutSCM() }
             script {
-              common.buildOMC_CMake([
+              common.buildOMC([
                 "-DCMAKE_BUILD_TYPE=Release",
                 "-DOM_USE_CCACHE=OFF",
                 "-DCMAKE_INSTALL_PREFIX=build",
@@ -163,7 +152,7 @@ pipeline {
             }
           }
         }
-        stage('cmake-enterprise-linux-gcc') {
+        stage('enterprise-linux-gcc') {
           agent {
             docker {
               image 'docker.openmodelica.org/build-deps:almalinux-10'
@@ -184,18 +173,21 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
+            script { common.checkoutSCM() }
             script {
-              common.buildOMC_CMake([
-                "-DCMAKE_BUILD_TYPE=Release",
-                "-DOM_USE_CCACHE=OFF",
-                "-DCMAKE_INSTALL_PREFIX=build",
-                "-DCMAKE_C_COMPILER=gcc",
-                "-DCMAKE_CXX_COMPILER=g++"
-              ])
+              common.withSccache {
+                common.buildOMC([
+                  "-DCMAKE_BUILD_TYPE=Release",
+                  "-DOM_COMPILER_CACHE=sccache",
+                  "-DCMAKE_INSTALL_PREFIX=build",
+                  "-DCMAKE_C_COMPILER=gcc",
+                  "-DCMAKE_CXX_COMPILER=g++"
+                ])
+              }
             }
           }
         }
-        stage('cmake-fedora-gcc') {
+        stage('fedora-gcc') {
           agent {
             docker {
               image 'docker.openmodelica.org/build-deps:fedora-44'
@@ -216,19 +208,22 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
+            script { common.checkoutSCM() }
             script {
-              common.buildOMC_CMake([
-                "-DCMAKE_BUILD_TYPE=Release",
-                "-DOM_USE_CCACHE=OFF",
-                "-DCMAKE_INSTALL_PREFIX=build",
-                "-DCMAKE_C_COMPILER=gcc",
-                "-DCMAKE_CXX_COMPILER=g++"])
+              common.withSccache {
+                common.buildOMC([
+                  "-DCMAKE_BUILD_TYPE=Release",
+                  "-DOM_COMPILER_CACHE=sccache",
+                  "-DCMAKE_INSTALL_PREFIX=build",
+                  "-DCMAKE_C_COMPILER=gcc",
+                  "-DCMAKE_CXX_COMPILER=g++"])
+              }
             }
           }
         }
 
         // macOS build stages
-        stage('cmake-macos-arm64-gcc') {
+        stage('macos-arm64-gcc') {
           agent {
             node {
               label 'M1'
@@ -243,24 +238,23 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
+            script { common.checkoutSCM() }
             script {
-              common.buildOMC_CMake([
+              common.buildOMC([
                 "-DCMAKE_BUILD_TYPE=Release",
                 "-DOM_USE_CCACHE=OFF",
                 "-DCMAKE_INSTALL_PREFIX=build",
-                "-DCMAKE_PREFIX_PATH=/opt/local",   // Look in /opt/local first to prefer the macports libraries over others in the system.
+                "-DCMAKE_PREFIX_PATH=/opt/homebrew", // Prefer the Homebrew libraries over others in the system.
                 "-DCMAKE_C_COMPILER=gcc",           // Always specify the compilers explicitly for macOS
                 "-DCMAKE_CXX_COMPILER=g++",
                 "-DCMAKE_Fortran_COMPILER=gfortran",
-                "-DOM_QT_MAJOR_VERSION=5",          // Use Qt5 on old macOS machines
-                "-DOM_OMEDIT_ENABLE_ANIMATION=OFF", // Qt5 has no Qt Quick 3D
                 "-DOM_OMC_ENABLE_COLPACK=OFF"])     // Disable ColPack (missing OpenMP)
             }
           }
         }
 
         // Windows build stages
-        stage('cmake-OMDev-gcc') {
+        stage('OMDev-gcc') {
           agent {
             node {
               label 'windows-no-release'
@@ -275,8 +269,9 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
+            script { common.checkoutSCM() }
             script {
-              common.buildOMC_CMake([
+              common.buildOMC([
                 '-DCMAKE_BUILD_TYPE=Release',
                 '-DCMAKE_INSTALL_PREFIX=build',
                 '-G "MSYS Makefiles"'])
@@ -286,12 +281,12 @@ pipeline {
 
         // The Rust (mmtorust) omc port, GUI off; the GUI is built in parallel
         // with the tests by the 'build-gui-rust' stage. See common.buildRustOMC().
-        stage('cmake-rust-clang') {
+        stage('rust-cmake') {
           agent {
             docker {
               alwaysPull true
               image 'docker.openmodelica.org/build-deps:ubuntu-26.04-rust'
-              label 'linux'
+              label 'linux && !slow'
               args "--mount type=volume,source=rust-cargo-registry,target=/opt/rust/cargo/registry " +
                    "--mount type=volume,source=rust-sccache,target=/cache/sccache " +
                    "--mount type=volume,source=omlibrary-cache,target=/cache/omlibrary " +
@@ -301,6 +296,7 @@ pipeline {
             }
           }
           steps {
+            script { common.checkoutSCM() }
             script {
               common.buildRustOMC()
             }
@@ -311,7 +307,7 @@ pipeline {
         stage('checks') {
           agent {
             docker {
-              image 'docker.openmodelica.org/build-deps:ubuntu-22.04'
+              image 'docker.openmodelica.org/build-deps:ubuntu-24.04'
               label 'linux'
               alwaysPull true
               args '''
@@ -325,6 +321,7 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
+            script { common.checkoutSCM() }
             script { common.checks() }
           }
         }
@@ -332,65 +329,13 @@ pipeline {
     }
     stage('tests + extras') {
       parallel {
-        // partest against the Rust-built omc; dedicated runtest cache. See
-        // common.partestRust(). Opt-in, on RUST_PARTEST_SIMCODETARGET; the
-        // wasm-jit run is stages 23/24.
-        stage('01 testsuite-rust 1/2') {
-          agent {
-            node {
-              label 'linux'
-              customWorkspace 'ws/OpenModelica'
-            }
-          }
-          environment {
-            RUNTESTDB = "/cache/runtest/"
-            LIBRARIES = "/cache/omlibrary"
-          }
-          when {
-            beforeAgent true
-            expression { shouldWeRunRustTests }
-          }
-          steps {
-            script {
-              common.insideTestImage('docker.openmodelica.org/build-deps:ubuntu-26.04-rust',
-                                     common.testCacheMounts('runtest-rust-cache')) {
-                common.partestRust(params.RUST_PARTEST_SIMCODETARGET, 1, 2, false)
-              }
-            }
-          }
-        }
-        stage('02 testsuite-rust 2/2') {
-          agent {
-            node {
-              label 'linux'
-              customWorkspace 'ws/OpenModelica'
-            }
-          }
-          environment {
-            RUNTESTDB = "/cache/runtest/"
-            LIBRARIES = "/cache/omlibrary"
-          }
-          when {
-            beforeAgent true
-            expression { shouldWeRunRustTests }
-          }
-          steps {
-            script {
-              common.insideTestImage('docker.openmodelica.org/build-deps:ubuntu-26.04-rust',
-                                     common.testCacheMounts('runtest-rust-cache')) {
-                common.partestRust(params.RUST_PARTEST_SIMCODETARGET, 2, 2, false)
-              }
-            }
-          }
-        }
-
         // The only shard that runs the coverage-instrumented CMake build: its
         // counters become the coverage report in 'check-and-upload'. The clang
-        // shard below runs the autotools build and records none.
-        stage('04 testsuite-cmake-gcc 1/2') {
+        // shard below runs an uninstrumented build and records none.
+        stage('04 testsuite-gcc 1/2') {
           agent {
             node {
-              label 'linux'
+              label 'linux && !slow'
               customWorkspace 'ws/OpenModelica'
             }
           }
@@ -406,10 +351,11 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
+            script { common.checkoutSCM() }
             script {
-              common.insideTestImage('docker.openmodelica.org/build-deps:ubuntu-22.04',
+              common.insideTestImage('docker.openmodelica.org/build-deps:ubuntu-24.04',
                                      common.testCacheMounts('runtest-gcc-cache')) {
-                common.ctestCMakeStashed('omc-cmake-gcc', 1, 2)
+                common.ctestStashed('omc-gcc', 1, 2)
               }
             }
           }
@@ -418,7 +364,7 @@ pipeline {
         stage('05 testsuite-clang 2/2') {
           agent {
             node {
-              label 'linux'
+              label 'linux && !slow'
               customWorkspace 'ws/OpenModelica'
             }
           }
@@ -434,8 +380,9 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
+            script { common.checkoutSCM() }
             script {
-              common.insideTestImage('docker.openmodelica.org/build-deps:ubuntu-22.04',
+              common.insideTestImage('docker.openmodelica.org/build-deps:ubuntu-24.04',
                                      common.testCacheMounts('runtest-clang-cache')) {
                 common.partestStashed('omc-clang', 2, 2)
               }
@@ -444,7 +391,7 @@ pipeline {
         }
 
         // The WebAssembly/web bundle, embedding the wasm-jit runtime built by
-        // the cmake-rust-clang stage (OM_OMC_WASM forces the Rust port and a
+        // the rust-clang stage (OM_OMC_WASM forces the Rust port and a
         // wasm32 build of just the browser/Node deliverable).
         stage('10 web target') {
           agent {
@@ -468,6 +415,7 @@ pipeline {
             expression { shouldWeRunTests }
           }
           steps {
+            script { common.checkoutSCM() }
             script {
               common.buildRustWeb()
             }
@@ -475,13 +423,13 @@ pipeline {
         }
 
         // The slow Qt web pages (OMShell/OMNotebook/OMEdit-qt), in parallel;
-        // merged by assemble-web.
+        // merged by upload-web.
         stage('10b qt-web target') {
           agent {
             docker {
               alwaysPull true
               image 'docker.openmodelica.org/build-deps:ubuntu-26.04-rust-qt-wasm'
-              label 'linux'
+              label 'linux&&!slow'
               args "--mount type=volume,source=rust-cargo-registry,target=/opt/rust/cargo/registry " +
                    "--mount type=volume,source=rust-sccache,target=/cache/sccache " +
                    "--mount type=volume,source=emscripten-cache,target=/cache/emscripten " +
@@ -496,6 +444,7 @@ pipeline {
             expression { shouldWeRunTests }
           }
           steps {
+            script { common.checkoutSCM() }
             script {
               common.buildRustWebQt()
             }
@@ -521,6 +470,7 @@ pipeline {
             expression { shouldWeRunTests }
           }
           steps {
+            script { common.checkoutSCM() }
             script {
               common.buildRustGUI()
             }
@@ -546,6 +496,7 @@ pipeline {
             expression { shouldWeRunTests }
           }
           steps {
+            script { common.checkoutSCM() }
             script {
               common.ctestRust()
             }
@@ -572,6 +523,7 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
+            script { common.checkoutSCM() }
             script { common.crossBuildFMU() }
           }
         }
@@ -606,6 +558,7 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
+            script { common.checkoutSCM() }
             script { common.compliance() }
           }
         }
@@ -614,7 +567,7 @@ pipeline {
           agent {
             docker {
               alwaysPull true
-              image 'docker.openmodelica.org/build-deps:ubuntu-22.04'
+              image 'docker.openmodelica.org/build-deps:ubuntu-24.04'
               label 'linux'
               args '''
                 --mount type=volume,source=omlibrary-cache,target=/cache/omlibrary \
@@ -632,57 +585,49 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
+            script { common.checkoutSCM() }
             script { common.buildUsersGuide() }
           }
         }
 
-        stage('16 build-gui-clang-qt5') {
+        stage('17 build-gui-clang + omedit-testsuite') {
           agent {
             docker {
-              image 'docker.openmodelica.org/build-deps:ubuntu-22.04'
+              image 'docker.openmodelica.org/build-deps:ubuntu-24.04'
               label 'linux'
               alwaysPull true
-              args "--mount type=volume,source=omlibrary-cache,target=/cache/omlibrary"
+              args "--mount type=volume,source=omlibrary-cache,target=/cache/omlibrary " +
+                   "-v /var/lib/jenkins/gitcache:/var/lib/jenkins/gitcache"
               customWorkspace 'ws/OpenModelica'
             }
+          }
+          environment {
+            // makeLibsAndCache() only reads runtest.db from RUNTESTDB (and
+            // tolerates it being absent); the omlibrary cache is the one that
+            // matters here, so no runtest volume is mounted.
+            RUNTESTDB = "/cache/runtest/"
+            LIBRARIES = "/cache/omlibrary"
           }
           options {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
-            script { common.buildGUIAndStash('omc-clang', 'qt5', 'omedit-testsuite-clang-qt5') }
+            script { common.checkoutSCM() }
+            script { common.buildGUIAndRunOMEditTestsuite() }
           }
         }
 
-        stage('17 build-gui-clang-qt6') {
-          agent {
-            docker {
-              image 'docker.openmodelica.org/build-deps:ubuntu-22.04'
-              label 'linux'
-              alwaysPull true
-              args "--mount type=volume,source=omlibrary-cache,target=/cache/omlibrary"
-              customWorkspace 'ws/OpenModelica'
-            }
-          }
-          options {
-            retry(count: 2, conditions: [nonresumable()])
-          }
-          steps {
-            script { common.buildGUIAndStash('omc-clang', 'qt6', 'omedit-testsuite-clang-qt6') }
-          }
-        }
-
-        // parmod, MetaModelica, the Matlab translator, the icon generator and the
-        // C unit tests. Short runs sharing one image, so one node: split up, the
+        // parmod, the Matlab translator, the icon generator and the C unit tests.
+        // Short runs sharing one image, so one node: split up, the
         // image pull and the git checkout cost more than the tests.
         stage('18 testsuite-misc') {
           agent {
             node {
               // Intel only: ParModelica compiles its OpenCL kernels through the node's ICD,
-              // which on AMD is PoCL. Jammy's PoCL 1.8 (LLVM 14) cannot name a Zen CPU it
-              // does not know and falls back to the target CPU 'generic', which LLVM
-              // rejects; the POCL_LLVM_CPU_NAME override only exists in later PoCL. Lifting
-              // this needs both the build and the tests on a newer image (Ubunut 26.04 or newer).
+              // which on AMD is PoCL. Jammy's PoCL 1.8 (LLVM 14) could not name a Zen CPU it
+              // did not know and fell back to the target CPU 'generic', which LLVM
+              // rejects. Noble's PoCL 5.0 has the POCL_LLVM_CPU_NAME override, but it is
+              // still built against LLVM 14 and has not been tried on the AMD nodes.
               label 'linux-intel-x64'
               customWorkspace 'ws/OpenModelica'
             }
@@ -699,8 +644,9 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
+            script { common.checkoutSCM() }
             script {
-              common.insideTestImage('docker.openmodelica.org/build-deps:ubuntu-22.04',
+              common.insideTestImage('docker.openmodelica.org/build-deps:ubuntu-24.04',
                                      common.testCacheMounts('runtest-clang-icon-generator')) {
                 common.testMisc()
               }
@@ -713,14 +659,15 @@ pipeline {
           }
         }
 
-        // The wasm-jit partest, same setup as stages 01/02. Last in the block
-        // (against the ordering rule above): the fastest of the testsuite runs,
-        // so it loses the least by starting after the others. Unpartitioned - it
-        // is fast enough not to need the split the C targets use.
+        // The wasm-jit partest against the Rust-built omc; dedicated runtest
+        // cache. See common.partestRust(). Last in the block (against the
+        // ordering rule above): the fastest of the testsuite runs, so it loses
+        // the least by starting after the others. Unpartitioned - it is fast
+        // enough not to need the split the C targets use.
         stage('19 testsuite-wasm-jit') {
           agent {
             node {
-              label 'linux'
+              label 'linux && !slow'
               customWorkspace 'ws/OpenModelica'
             }
           }
@@ -736,25 +683,54 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
+            script { common.checkoutSCM() }
             script {
               common.insideTestImage('docker.openmodelica.org/build-deps:ubuntu-26.04-rust',
                                      common.testCacheMounts('runtest-rust-cache')) {
-                common.partestRust('wasm-jit', 1, 1, true)
+                common.partestRust('wasm-jit', 1, 1)
               }
             }
           }
         }
-      }
-    }
-    stage('FMPy + OMEdit testsuite') {
-      parallel {
-        // Merge stages 10 + 10b into the published web zip.
-        stage('assemble-web') {
+
+        // The smoke set (every test in '// suite: smoke', see
+        // testsuite/runWindowsTests.sh), against the install tree
+        // 'OMDev-gcc' stashed as 'omc-windows'. Its own stage, not
+        // part of that build, so a test failure here reads as a testsuite
+        // failure rather than a build failure.
+        stage('20 testsuite-windows') {
+          agent {
+            node {
+              label 'windows-no-release'
+            }
+          }
+          when {
+            beforeAgent true
+            expression { shouldWeBuildWindows }
+          }
+          options {
+            retry(count: 2, conditions: [nonresumable()])
+          }
+          steps {
+            script { common.checkoutSCM() }
+            script {
+              common.testWindowsSmoke()
+            }
+          }
+        }
+
+        // The C omc cross-compiled to Windows (MSVC) from the C sources
+        // 'noble-gcc' translated, and the Windows smoke set run against
+        // it under wine. See common.crossBuildOMCWindows().
+        stage('21 cross-build-omc-msvc') {
           agent {
             docker {
-              image 'docker.openmodelica.org/build-deps:ubuntu-22.04'
-              label 'linux'
               alwaysPull true
+              image 'docker.openmodelica.org/build-deps:ubuntu-26.04-rust-qt-win-x86_64'
+              label 'linux'
+              args "--mount type=volume,source=rust-cargo-registry,target=/opt/rust/cargo/registry " +
+                   "--mount type=volume,source=om-thirdparty-downloads,target=/cache/thirdparty " +
+                   "-v /var/lib/jenkins/gitcache:/var/lib/jenkins/gitcache"
               customWorkspace 'ws/OpenModelica'
             }
           }
@@ -763,71 +739,9 @@ pipeline {
             expression { shouldWeRunTests }
           }
           steps {
-            script { common.assembleWeb() }
-          }
-        }
-        stage('linux-FMPy') {
-          agent {
-            docker {
-              label 'linux'
-              image 'docker.openmodelica.org/fmpy:v0.3.18'
-              customWorkspace 'ws/OpenModelica'
-            }
-          }
-          when {
-            beforeAgent true
-            expression { shouldWeRunTests }
-          }
-          options {
-            skipDefaultCheckout true
-          }
-          steps {
-            script { common.fmpyLinux() }
-          }
-        }
-        stage('clang-qt5-omedit-testsuite') {
-          agent {
-            docker {
-              image 'docker.openmodelica.org/build-deps:ubuntu-22.04'
-              label 'linux'
-              alwaysPull true
-              args "--mount type=volume,source=omlibrary-cache,target=/cache/omlibrary"
-              customWorkspace 'ws/OpenModelica'
-            }
-          }
-          environment {
-            RUNTESTDB = "/cache/runtest/"
-            LIBRARIES = "/cache/omlibrary"
-          }
-          options {
-            retry(count: 2, conditions: [nonresumable()])
-          }
-          steps {
+            script { common.checkoutSCM() }
             script {
-              common.buildAndRunOMEditTestsuite('omedit-testsuite-clang-qt5', 'qt5')
-            }
-          }
-        }
-        stage('clang-qt6-omedit-testsuite') {
-          agent {
-            docker {
-              image 'docker.openmodelica.org/build-deps:ubuntu-22.04'
-              label 'linux'
-              alwaysPull true
-              args "--mount type=volume,source=omlibrary-cache,target=/cache/omlibrary"
-              customWorkspace 'ws/OpenModelica'
-            }
-          }
-          environment {
-            RUNTESTDB = "/cache/runtest/"
-            LIBRARIES = "/cache/omlibrary"
-          }
-          options {
-            retry(count: 2, conditions: [nonresumable()])
-          }
-          steps {
-            script {
-              common.buildAndRunOMEditTestsuite('omedit-testsuite-clang-qt6', 'qt6')
+              common.crossBuildOMCWindows()
             }
           }
         }
@@ -835,9 +749,26 @@ pipeline {
     }
     stage('check-and-upload') {
       parallel {
-        // Turns the coverage counters of the testsuite-cmake-gcc shard into a
-        // report. Unlike its neighbours it is not gated on !isPR: the point is
-        // to get the number on every PR.
+        stage('linux-FMPy') {
+          agent {
+            docker {
+              label 'linux'
+              image 'docker.openmodelica.org/build-deps:ubuntu-24.04'
+              alwaysPull true
+              customWorkspace 'ws/OpenModelica'
+            }
+          }
+          when {
+            beforeAgent true
+            expression { shouldWeRunTests }
+          }
+          steps {
+            script { common.fmpyLinux() }
+          }
+        }
+        // Turns the coverage counters of the testsuite-gcc shard into a
+        // report. Unlike the uploads it is not gated on !isPR: the point is to
+        // get the number on every PR.
         stage('coverage-report') {
           agent {
             node {
@@ -850,6 +781,7 @@ pipeline {
             expression { shouldWeRunTests }
           }
           steps {
+            script { common.checkoutSCM() }
             script {
               // Enters the build image itself: which mounts it needs depends
               // on where the instrumented build ran, which it only learns
@@ -861,9 +793,10 @@ pipeline {
         stage('upload-compliance') {
           agent {
             docker {
-              image 'docker.openmodelica.org/build-deps:ubuntu-22.04'
+              image 'docker.openmodelica.org/build-deps:ubuntu-24.04'
               label 'linux'
               alwaysPull true
+              args "-v /var/lib/jenkins/gitcache:/var/lib/jenkins/gitcache"
               customWorkspace 'ws/OpenModelica'
             }
           }
@@ -875,15 +808,17 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
+            script { common.checkoutSCM() }
             script { common.uploadCompliance() }
           }
         }
         stage('upload-doc') {
           agent {
             docker {
-              image 'docker.openmodelica.org/build-deps:ubuntu-22.04'
+              image 'docker.openmodelica.org/build-deps:ubuntu-24.04'
               label 'linux'
               alwaysPull true
+              args "-v /var/lib/jenkins/gitcache:/var/lib/jenkins/gitcache"
               customWorkspace 'ws/OpenModelica'
             }
           }
@@ -895,23 +830,27 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
+            script { common.checkoutSCM() }
             script { common.uploadDoc() }
           }
         }
         stage('upload-web') {
           agent {
             docker {
-              image 'docker.openmodelica.org/build-deps:ubuntu-22.04'
+              image 'docker.openmodelica.org/build-deps:ubuntu-24.04'
               label 'linux'
               alwaysPull true
+              args "-v /var/lib/jenkins/gitcache:/var/lib/jenkins/gitcache"
               customWorkspace 'ws/OpenModelica'
             }
           }
           when {
             beforeAgent true
-            expression { !isPR }
+            branch 'master'
+            expression { shouldWeRunTests }
           }
           steps {
+            script { common.checkoutSCM() }
             script { common.uploadWeb() }
           }
         }
@@ -935,6 +874,7 @@ pipeline {
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
+            script { common.checkoutSCM() }
             script { common.pushToMaster() }
           }
         }
@@ -951,7 +891,6 @@ pipeline {
             expression { return currentBuild.currentResult == 'SUCCESS' }
           }
           options {
-            skipDefaultCheckout true
             retry(count: 2, conditions: [nonresumable()])
           }
           steps {
@@ -972,5 +911,5 @@ pipeline {
 
 /* Note: If getting "Unexpected end of /proc/mounts line" , flatten the docker image:
  * https://stackoverflow.com/questions/46138549/docker-openmpi-and-unexpected-end-of-proc-mounts-line
- * Or use a newer OS image with fixed hwloc, or disable hwloc in the configure script
+ * Or use a newer OS image with fixed hwloc.
  */

@@ -229,8 +229,17 @@ namespace IAEX
     // Create the grouppcell that will be the root parent.
     Cell *rootcell = factory_->createCell( "cellgroup", 0 );
 
-    if( !node.isNull() )
-      traverseCells( rootcell, node );
+    try
+    {
+      if( !node.isNull() )
+        traverseCells( rootcell, node );
+    }
+    catch( ... )
+    {
+      // rootcell has no parent, nobody else would delete it (and its already added children)
+      delete rootcell;
+      throw;
+    }
 
     return rootcell;
   }
@@ -268,7 +277,15 @@ namespace IAEX
 
     // Create the grouppcell that will be the root parent.
     Cell *rootcell = factory_->createCell( "cellgroup", 0 );
-    xmltraverse( rootcell, node );
+    try
+    {
+      xmltraverse( rootcell, node );
+    }
+    catch( ... )
+    {
+      delete rootcell;
+      throw;
+    }
     return rootcell;
   }
 
@@ -387,18 +404,13 @@ namespace IAEX
 
           // replace all href="...\..." with href=".../..."
           QString pattern("(href[^=]*=[^\"]*\"[^\"\\\\]*)\\\\([^\"]*\")");
-#if (QT_VERSION >= QT_VERSION_CHECK(6, 0, 0))
           QRegularExpression rx(pattern, QRegularExpression::CaseInsensitiveOption);
-#else
-          QRegularExpression rx(pattern);
-          rx.setPatternOptions(QRegularExpression::CaseInsensitiveOption | QRegularExpression::InvertedGreedinessOption);
-#endif
           if (!rx.isValid())
           {
             fprintf(stderr, "Invalid QRegularExpression(%s)\n", rx.pattern().toStdString().c_str());
           }
 
-          text.replace(rx, QStringLiteral("\1/\2"));
+          text.replace(rx, QStringLiteral("\\1/\\2"));
           textcell->setTextHtml(text);
         }
         else if( e.tagName() == XML_RULE )

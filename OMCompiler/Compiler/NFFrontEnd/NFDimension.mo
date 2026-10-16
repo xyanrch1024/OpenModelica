@@ -51,6 +51,7 @@ public
   import Class = NFClass;
   import Expression = NFExpression;
   import NFInstNode.InstNode;
+  import NFInstNode;
   import Type = NFType;
   import ComponentRef = NFComponentRef;
   import NFPrefixes.Variability;
@@ -59,7 +60,8 @@ public
 
   record RAW_DIM
     Absyn.Subscript dim;
-    InstNode scope;
+    NFInstNode.ScopeRef scope "Weakly: the class tree owns the scope this
+      dimension was written in.";
   end RAW_DIM;
 
   record UNTYPED
@@ -302,10 +304,23 @@ public
       case (_, UNKNOWN()) then true;
       case (EXP(), _) then true;
       case (_, EXP()) then true;
-      case (RESIZABLE(), RESIZABLE()) then Expression.isEqual(dim1.exp, dim2.exp);
+      case (RESIZABLE(), RESIZABLE()) then isEqualResizableExp(dim1.exp, dim2.exp);
       else Dimension.size(dim1) == Dimension.size(dim2);
     end match;
   end isEqual;
+
+  function isEqualResizableExp
+    "resizable size expressions can be in different forms (e.g. BINARY and MULTARY)"
+    input Expression exp1;
+    input Expression exp2;
+    output Boolean b = Expression.isEqual(exp1, exp2) or Expression.isEqual(canonicalExp(exp1), canonicalExp(exp2));
+  end isEqualResizableExp;
+
+  function canonicalExp
+    input output Expression exp;
+  algorithm
+    exp := SimplifyExp.simplify(SimplifyExp.combineBinaries(exp));
+  end canonicalExp;
 
   function isEqualKnown
     input Dimension dim1;
@@ -316,7 +331,7 @@ public
       case (UNKNOWN(), _)             then false;
       case (_, UNKNOWN())             then false;
       case (EXP(), EXP())             then Expression.isEqual(dim1.exp, dim2.exp);
-      case (RESIZABLE(), RESIZABLE()) then Expression.isEqual(dim1.exp, dim2.exp);
+      case (RESIZABLE(), RESIZABLE()) then isEqualResizableExp(dim1.exp, dim2.exp);
       case (EXP(), _)                 then false;
       case (_, EXP())                 then false;
       else Dimension.size(dim1) == Dimension.size(dim2);
@@ -343,7 +358,7 @@ public
       case (_, EXP()) guard isSizeOf(dim2, node1, index1) then true;
 
       case (EXP(), EXP()) then Expression.isEqual(dim1.exp, dim2.exp);
-      case (RESIZABLE(), RESIZABLE()) then Expression.isEqual(dim1.exp, dim2.exp);
+      case (RESIZABLE(), RESIZABLE()) then isEqualResizableExp(dim1.exp, dim2.exp);
       case (UNKNOWN(), _) then false;
       case (_, UNKNOWN()) then false;
       else Dimension.size(dim1) == Dimension.size(dim2);
@@ -357,14 +372,14 @@ public
   algorithm
     same := match (dim1, dim2)
       case (RAW_DIM(), RAW_DIM())
-        then InstNode.isSame(dim1.scope, dim2.scope) and
+        then InstNode.isSame(InstNode.borrow(dim1.scope), InstNode.borrow(dim2.scope)) and
              AbsynUtil.subscriptEqual(dim1.dim, dim2.dim);
       case (UNTYPED(), UNTYPED()) then Expression.isEqual(dim1.dimension, dim2.dimension);
       case (INTEGER(), INTEGER()) then dim1.size == dim2.size;
       case (BOOLEAN(), BOOLEAN()) then true;
       case (ENUM(), ENUM()) then Type.isEqual(dim1.enumType, dim2.enumType);
       case (EXP(), EXP()) then Expression.isEqual(dim1.exp, dim2.exp);
-      case (RESIZABLE(), RESIZABLE()) then Expression.isEqual(dim1.exp, dim2.exp);
+      case (RESIZABLE(), RESIZABLE()) then isEqualResizableExp(dim1.exp, dim2.exp);
       case (UNKNOWN(), UNKNOWN()) then true;
       else false;
     end match;
@@ -435,6 +450,8 @@ public
   algorithm
     isZero := match dim
       case INTEGER() then dim.size == 0;
+      // the backend drops resizable arrays of size zero as well
+      case RESIZABLE() then dim.size == 0;
       case ENUM() then Type.enumSize(dim.enumType) == 0;
       else false;
     end match;
@@ -490,7 +507,7 @@ public
     output Integer hash = Util.HASH_SEED;
   algorithm
     for dim in dims loop
-      hash := stringHashDjb2Continue(toString(dim), hash);
+      hash := stringHashDjb2Continue(match dim case RESIZABLE() then Expression.toString(canonicalExp(dim.exp)) + "(R)"; else toString(dim); end match, hash);
     end for;
   end hashList;
 

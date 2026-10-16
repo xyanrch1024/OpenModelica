@@ -56,9 +56,10 @@ target_include_directories(OpenModelicaRuntimeCInterface
     ${CMAKE_CURRENT_SOURCE_DIR}/gc
 )
 
+# The headers need pthreads: threadData_t holds a pthread_mutex_t.
 target_link_libraries(OpenModelicaRuntimeCInterface
   INTERFACE
-    omc::3rd::omcgc
+    OMCPThreads::OMCPThreads
 )
 
 set_target_properties(OpenModelicaRuntimeCInterface PROPERTIES
@@ -88,10 +89,10 @@ endif()
 
 add_library(omc::simrt::runtime ALIAS OpenModelicaRuntimeC)
 
+# meta/ belongs to libOpenModelicaRuntimeMMC only.
 target_link_libraries(OpenModelicaRuntimeC
   PUBLIC
     omc::simrt::runtime::gc
-    omc::simrt::runtime::meta
     omc::simrt::runtime::util
 )
 
@@ -102,7 +103,6 @@ target_link_libraries(OpenModelicaRuntimeC
 target_compile_definitions(OpenModelicaRuntimeC PUBLIC WIN32_LEAN_AND_MEAN)
 
 target_link_libraries(OpenModelicaRuntimeC PUBLIC OMCPThreads::OMCPThreads)
-target_link_libraries(OpenModelicaRuntimeC PUBLIC omc::3rd::omcgc)
 target_link_libraries(OpenModelicaRuntimeC PUBLIC omc::simrt::runtime::headers)
 
 if(MINGW)
@@ -117,7 +117,8 @@ install(TARGETS OpenModelicaRuntimeC
 
 
 # ######################################################################################################################
-# Library: SimulationRuntimeC
+# Library: SimulationRuntimeC (--simCodeTarget=C.old). The subdirectories install
+# their headers either way; the code --simCodeTarget=C generates includes them too.
 
 add_subdirectory(dataReconciliation)
 add_subdirectory(linearization)
@@ -130,56 +131,57 @@ if(OM_OMC_ENABLE_OPTIMIZATION)
 endif()
 add_subdirectory(simulation)
 
-add_library(SimulationRuntimeC SHARED)
-add_library(omc::simrt::simruntime ALIAS SimulationRuntimeC)
+if(OM_OMC_ENABLE_C_OLD_RUNTIME)
+  add_library(SimulationRuntimeC SHARED)
+  add_library(omc::simrt::simruntime ALIAS SimulationRuntimeC)
 
-target_link_libraries(SimulationRuntimeC
-  PUBLIC
-    omc::simrt::simruntime::dataReconciliation
-    omc::simrt::simruntime::linearization
-    omc::simrt::simruntime::math-support
-    omc::simrt::simruntime::simulation
-)
-if(OM_OMC_ENABLE_MOO)
   target_link_libraries(SimulationRuntimeC
     PUBLIC
-      omc::simrt::simruntime::moo
+      omc::simrt::simruntime::dataReconciliation
+      omc::simrt::simruntime::linearization
+      omc::simrt::simruntime::math-support
+      omc::simrt::simruntime::simulation
   )
-endif()
-if(OM_OMC_ENABLE_OPTIMIZATION)
-  target_link_libraries(SimulationRuntimeC
-    PUBLIC
-      omc::simrt::simruntime::optimization
+  if(OM_OMC_ENABLE_MOO)
+    target_link_libraries(SimulationRuntimeC
+      PUBLIC
+        omc::simrt::simruntime::moo
+    )
+  endif()
+  if(OM_OMC_ENABLE_OPTIMIZATION)
+    target_link_libraries(SimulationRuntimeC
+      PUBLIC
+        omc::simrt::simruntime::optimization
+    )
+  endif()
+
+  if(WIN32)
+    target_link_libraries(SimulationRuntimeC PUBLIC wsock32)
+  endif()
+
+  if(MINGW)
+    target_link_options(SimulationRuntimeC PRIVATE  -Wl,--export-all-symbols)
+  elseif(MSVC)
+    set_target_properties(SimulationRuntimeC PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS true)
+    # WINDOWS_EXPORT_ALL_SYMBOLS only scans the target's own objects, so the
+    # static OpenModelicaRuntimeC's symbols would sit
+    # in the DLL unexported. Put those objects in it directly.
+    target_sources(SimulationRuntimeC PRIVATE
+      $<TARGET_OBJECTS:OpenModelicaRuntimeCUtil>
+      $<TARGET_OBJECTS:OpenModelicaRuntimeCGC>)
+  endif(MINGW)
+
+  if(OM_OMC_ENABLE_COLPACK)
+    target_compile_definitions(SimulationRuntimeC PRIVATE OMC_HAVE_COLPACK)
+    target_link_libraries(SimulationRuntimeC PUBLIC omc::3rd::colpack)
+  endif()
+
+  target_include_directories(SimulationRuntimeC
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
   )
+
+  install(TARGETS SimulationRuntimeC)
 endif()
-
-if(WIN32)
-  target_link_libraries(SimulationRuntimeC PUBLIC wsock32)
-endif()
-
-if(MINGW)
-  target_link_options(SimulationRuntimeC PRIVATE  -Wl,--export-all-symbols)
-elseif(MSVC)
-  set_target_properties(SimulationRuntimeC PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS true)
-  # WINDOWS_EXPORT_ALL_SYMBOLS only scans the target's own objects, so the
-  # static OpenModelicaRuntimeC's symbols (boxptr_*, the MMC runtime) would sit
-  # in the DLL unexported. Put those objects in it directly.
-  target_sources(SimulationRuntimeC PRIVATE
-    $<TARGET_OBJECTS:OpenModelicaRuntimeCMeta>
-    $<TARGET_OBJECTS:OpenModelicaRuntimeCUtil>
-    $<TARGET_OBJECTS:OpenModelicaRuntimeCGC>)
-endif(MINGW)
-
-if(OM_OMC_ENABLE_COLPACK)
-  target_compile_definitions(SimulationRuntimeC PRIVATE OMC_HAVE_COLPACK)
-  target_link_libraries(SimulationRuntimeC PUBLIC omc::3rd::colpack)
-endif()
-
-target_include_directories(SimulationRuntimeC
-  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
-install(TARGETS SimulationRuntimeC)
 
 
 # ######################################################################################################################
@@ -193,8 +195,11 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/RuntimeSources.mo.cmake ${CMAKE_CURRE
 # Add C Simulation Runtime unit tests
 # Build with target "ctestsuite-depends"
 # Run test with ctest
-add_subdirectory(
-  ${CMAKE_SOURCE_DIR}/testsuite/CTest/SimulationRuntime/c
-  ${CMAKE_BINARY_DIR}/testsuite/CTest/SimulationRuntime/c
-  EXCLUDE_FROM_ALL
-)
+# They live in testsuite/, so they follow OM_ENABLE_TESTSUITE (see the top-level CMakeLists.txt).
+if(OM_ENABLE_TESTSUITE AND OM_OMC_ENABLE_C_OLD_RUNTIME)
+  add_subdirectory(
+    ${CMAKE_SOURCE_DIR}/testsuite/CTest/SimulationRuntime/c
+    ${CMAKE_BINARY_DIR}/testsuite/CTest/SimulationRuntime/c
+    EXCLUDE_FROM_ALL
+  )
+endif()

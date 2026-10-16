@@ -67,15 +67,12 @@
 #include "util/omc_strdup.h"
 #include "simulation_data.h"
 #include "openmodelica_func.h"
-#include "meta/meta_modelica.h"
 
 #include "linearization/linearize.h"
 #include "options.h"
 #include "simulation_runtime.h"
 #include "simulation_input_xml.h"
-#include "simulation/results/simulation_result_plt.h"
-#include "simulation/results/simulation_result_csv.h"
-#include "simulation/results/simulation_result_mat4.h"
+#include "arrayIndex.h"
 #include "simulation/results/simulation_result_ia.h"
 #include "simulation/results/simulation_result_rust.h"
 #include "simulation/solver/solver_main.h"
@@ -550,12 +547,14 @@ int startNonInteractiveSimulation(int argc, char**argv, DATA* data, threadData_t
 
   if(omc_flag[FLAG_S]) {
     if (omc_flagValue[FLAG_S]) {
+      omc_rc_release((void*) data->simulationInfo->solverMethod);
       data->simulationInfo->solverMethod = GC_strdup(omc_flagValue[FLAG_S]);
       infoStreamPrint(OMC_LOG_SOLVER, 0, "overwrite solver method: %s [from command line]", data->simulationInfo->solverMethod);
     }
   }
   /* if the model is compiled in daeMode then we have to use ida solver */
   if (compiledInDAEMode && std::string("ida") != data->simulationInfo->solverMethod) {
+    omc_rc_release((void*) data->simulationInfo->solverMethod);
     data->simulationInfo->solverMethod = GC_strdup(std::string("ida").c_str());
     infoStreamPrint(OMC_LOG_SIMULATION, 0, "overwrite solver method: %s [DAEmode works only with IDA solver]", data->simulationInfo->solverMethod);
   }
@@ -570,6 +569,7 @@ int startNonInteractiveSimulation(int argc, char**argv, DATA* data, threadData_t
       throwStreamPrint(NULL, "simulation_runtime.c: Error: can not allocate memory.");
     }
     data->modelData->resultFileName = GC_strdup(result_file);
+    omc_rc_release((void*) result_file);
   } else {
     result_file_cstr = string(data->modelData->modelFilePrefix) + string("_res.") + data->simulationInfo->outputFormat;
     data->modelData->resultFileName = GC_strdup(result_file_cstr.c_str());
@@ -723,7 +723,6 @@ int initializeResultData(DATA* simData, threadData_t *threadData, int cpuTime)
   sim_result.cpuTime = cpuTime;
   if (sim_noemit || 0 == strcmp("empty", simData->simulationInfo->outputFormat)) {
     /* Default is set to noemit */
-#ifdef OM_RUST_RESULT_WRITERS
   } else if(0 == strcmp("csv", simData->simulationInfo->outputFormat)
             || 0 == strcmp("mat", simData->simulationInfo->outputFormat)
             || 0 == strcmp("plt", simData->simulationInfo->outputFormat)
@@ -733,26 +732,6 @@ int initializeResultData(DATA* simData, threadData_t *threadData, int cpuTime)
     sim_result.writeParameterData = rust_result_writeParameterData;
     sim_result.free = rust_result_free;
     resultFormatHasCheapAliasesAndParameters = 1;
-#else
-  } else if(0 == strcmp("csv", simData->simulationInfo->outputFormat)) {
-    sim_result.init = omc_csv_init;
-    sim_result.emit = omc_csv_emit;
-    /* sim_result.writeParameterData = omc_csv_writeParameterData; */
-    sim_result.free = omc_csv_free;
-  } else if(0 == strcmp("mat", simData->simulationInfo->outputFormat)) {
-    sim_result.init = mat4_init4;
-    sim_result.emit = mat4_emit4;
-    sim_result.writeParameterData = mat4_writeParameterData4;
-    sim_result.free = mat4_free4;
-    resultFormatHasCheapAliasesAndParameters = 1;
-#if !defined(OMC_MINIMAL_RUNTIME)
-  } else if(0 == strcmp("plt", simData->simulationInfo->outputFormat)) {
-    sim_result.init = plt_init;
-    sim_result.emit = plt_emit;
-    /* sim_result.writeParameterData = plt_writeParameterData; */
-    sim_result.free = plt_free;
-#endif
-#endif
 #if !defined(OMC_MINIMAL_RUNTIME)
   } else if(0 == strcmp("ia", simData->simulationInfo->outputFormat)) {
     sim_result.init = ia_init;
@@ -785,8 +764,8 @@ static int callSolver(DATA* simData, threadData_t *threadData, string init_initM
   mmc_sint_t i;
   enum SOLVER_METHOD solverID = S_UNKNOWN;
   const char* outVars = (outputVariablesAtEnd.size() == 0) ? NULL : outputVariablesAtEnd.c_str();
-  MMC_TRY_INTERNAL(mmc_jumper)
-  MMC_TRY_INTERNAL(globalJumpBuffer)
+  OMC_TRY_INTERNAL(mmc_jumper)
+  OMC_TRY_INTERNAL(globalJumpBuffer)
 
   if (initializeResultData(simData, threadData, cpuTime)) {
     return -1;
@@ -862,8 +841,8 @@ static int callSolver(DATA* simData, threadData_t *threadData, string init_initM
       retVal = solver_main(simData, threadData, init_initMethod.c_str(), init_file.c_str(), init_time, solverID, outVars, argv_0);
   }
 
-  MMC_CATCH_INTERNAL(mmc_jumper)
-  MMC_CATCH_INTERNAL(globalJumpBuffer)
+  OMC_CATCH_INTERNAL(mmc_jumper)
+  OMC_CATCH_INTERNAL(globalJumpBuffer)
 
   deinitializeResultData(simData, threadData);
 
@@ -1110,6 +1089,12 @@ int initRuntimeAndSimulation(int argc, char**argv, DATA *data, threadData_t *thr
 
   rt_tick(SIM_TIMER_INIT_XML);
   read_input_xml(data->modelData, data->simulationInfo, threadData);
+  /* derived sizes of resizable arrays from the start values, then the sizes
+   * again with them (read_input_xml computed them already without) */
+  if (data->callback->updateStructuralParameters) {
+    data->callback->updateStructuralParameters(data, threadData);
+    calculateAllScalarLength(data->modelData);
+  }
   rt_accumulate(SIM_TIMER_INIT_XML);
   data->simulationInfo->minStepSize = 4.0 * DBL_EPSILON * fmax(fabs(data->simulationInfo->startTime),fabs(data->simulationInfo->stopTime));
 
@@ -1243,6 +1228,10 @@ int initRuntimeAndSimulation(int argc, char**argv, DATA *data, threadData_t *thr
   /* set log activation from equationIndex and lv_system */
   setLVSystems(data, threadData);
 
+  /* Resizable systems and Jacobians are sized by structural parameters, which
+   * initializeModel only assigns later. */
+  setAllParamsToStart(data->simulationInfo, data->modelData);
+
   /* initialize static data of mixed/linear/non-linear system solvers */
   initializeMixedSystems(data, threadData);
   initializeLinearSystems(data, threadData);
@@ -1331,7 +1320,7 @@ int _main_initRuntimeAndSimulation(int argc, char**argv, DATA *data, threadData_
 int _main_SimulationRuntime(int argc, char**argv, DATA *data, threadData_t *threadData)
 {
   int retVal = -1;
-  MMC_TRY_INTERNAL(globalJumpBuffer)
+  OMC_TRY_INTERNAL(globalJumpBuffer)
 
   /* sighandler_t oldhandler = different type on all platforms... */
 #ifdef SIGUSR1
@@ -1348,7 +1337,7 @@ int _main_SimulationRuntime(int argc, char**argv, DATA *data, threadData_t *thre
   data->callback->callExternalObjectDestructors(data, threadData);
   deInitializeDataStruc(data);
   fflush(NULL);
-  MMC_CATCH_INTERNAL(globalJumpBuffer)
+  OMC_CATCH_INTERNAL(globalJumpBuffer)
 
 #ifndef NO_INTERACTIVE_DEPENDENCY
   if(sim_communication_port_open)

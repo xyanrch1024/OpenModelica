@@ -140,6 +140,7 @@ uniontype Shared "Data shared for all equation-systems"
     BackendDAEModeData daeModeData          "DAEMode Data";
     Option<DataReconciliationData> dataReconciliationData;
     Option<.DAE.Exp> timeInterval           "from experiment annotation Interval, used for derivative nominal guesswork";
+    list<.DAE.Statement> parameterAsserts   "asserts that the parameter coefficients equations were solved with are nonzero";
     Option<HGTSpec> handGuidedTearing       "hand guided tearing specification, see HandGuidedTearing";
   end SHARED;
 end Shared;
@@ -222,10 +223,13 @@ public
 uniontype Variables
   record VARIABLES
     array<list<CrefIndex>> crefIndices "HashTB, cref->indx";
-    array<list<PrefixIndex>> prefixIndices "HashTB, array or record cref->indices of its elements";
+    array<array<list<PrefixIndex>>> prefixIndices "One slot: HashTB, array or record cref->indices of its
+      elements. Empty until getVar first makes a prefix query.";
     VariableArray varArr "Array of variables";
     Integer bucketSize "bucket size";
     Integer numberOfVars "no. of vars";
+    Boolean hasStartVars "Set once a $START. variable is added, never cleared:
+      false means getVar of a $START. cref cannot succeed.";
   end VARIABLES;
 end Variables;
 

@@ -48,6 +48,7 @@ import Restriction = NFRestriction;
 protected
 
 import Algorithm = NFAlgorithm;
+import Array;
 import Attributes = NFAttributes;
 import AbsynUtil;
 import AvlTreePathFunction;
@@ -134,6 +135,8 @@ function convertVariables
   input output list<DAE.Element> elements;
 protected
   VariableConversionSettings settings;
+  ComponentRef rest, last_rest = ComponentRef.EMPTY();
+  Boolean encrypted, rest_encrypted = false;
 algorithm
   settings := VariableConversionSettings.VARIABLE_CONVERSION_SETTINGS(
     isFunctionParameter = false,
@@ -141,13 +144,26 @@ algorithm
   );
 
   for var in listReverse(variables) loop
-  elements := convertVariable(var, settings) :: elements;
+    // The variables of an instance share its name as their prefix.
+    if ComponentRef.isCref(var.name) then
+      rest := ComponentRef.rest(var.name);
+      if not referenceEq(rest, last_rest) then
+        last_rest := rest;
+        rest_encrypted := Variable.isEncryptedName(rest);
+      end if;
+      encrypted := rest_encrypted or Variable.isEncryptedNode(ComponentRef.node(var.name));
+    else
+      encrypted := false;
+    end if;
+
+    elements := convertVariable(var, settings, encrypted) :: elements;
   end for;
 end convertVariables;
 
 function convertVariable
   input Variable var;
   input VariableConversionSettings settings;
+  input Boolean encrypted;
   output DAE.Element daeVar;
 protected
   Option<DAE.VariableAttributes> var_attr;
@@ -156,7 +172,7 @@ algorithm
   binding_exp := Binding.toDAEExp(var.binding);
   var_attr := convertVarAttributes(var.typeAttributes, var.ty, var.attributes);
   daeVar := makeDAEVar(var.name, var.ty, binding_exp, var.attributes,
-    var.visibility, var_attr, var.comment, settings, var.info, Variable.isEncrypted(var));
+    var.visibility, var_attr, var.comment, settings, var.info, encrypted);
 end convertVariable;
 
 function makeDAEVar
@@ -220,7 +236,7 @@ algorithm
   source := match cref
     case ComponentRef.CREF()
       algorithm
-        source := addComponentLevelTypeToSource(InstNode.parent(cref.node), source);
+        source := addComponentLevelTypeToSource(InstNode.parent(ComponentRef.node(cref)), source);
       then
         addComponentTypeToSource(cref.restCref, source);
 
@@ -546,7 +562,7 @@ protected
 algorithm
   name := match exp
     case Expression.ENUM_LITERAL() then exp.name;
-    case Expression.CREF() then InstNode.name(ComponentRef.node(exp.cref));
+    case Expression.CREF() then ComponentRef.nodeName(exp.cref);
     case Expression.CALL(call = Call.TYPED_ARRAY_CONSTRUCTOR(exp = e)) then getStateSelectName(e);
     else
       algorithm
@@ -585,7 +601,7 @@ protected
 algorithm
   name := match exp
     case Expression.ENUM_LITERAL() then exp.name;
-    case Expression.CREF(cref = ComponentRef.CREF(node = node)) then InstNode.name(node);
+    case Expression.CREF(cref = ComponentRef.CREF()) then ComponentRef.nodeName(exp.cref);
     else
       algorithm
         Error.terminate(getInstanceName() +
@@ -1021,7 +1037,7 @@ algorithm
   ty := InstNode.getType(iterator);
   sub_iters_dae := list(
     (ComponentRef.toDAE(Util.tuple21(si)),
-     listArray(list(Expression.toDAE(e) for e in arrayList(Util.tuple22(si)))))
+     Array.map(Util.tuple22(si), function Expression.toDAE(allowEmpty = false)))
     for si in sub_iters);
 
   forDAE := match for_type
@@ -1178,7 +1194,7 @@ algorithm
     case Class.INSTANCED_CLASS(sections = sections, restriction = Restriction.FUNCTION())
       algorithm
         elems := convertFunctionParams(func.inputs, {});
-        elems := convertFunctionParams(func.outputs, elems);
+        elems := convertFunctionParams(list(InstNode.fromHandle(o) for o in func.outputs), elems);
         elems := convertFunctionParams(func.locals, elems);
 
         def := match sections
@@ -1291,7 +1307,7 @@ algorithm
 
     case Expression.CREF(cref = cref as ComponentRef.CREF())
       algorithm
-        dir := Prefixes.directionToAbsyn(Component.direction(InstNode.component(cref.node)));
+        dir := Prefixes.directionToAbsyn(Component.direction(InstNode.component(ComponentRef.node(cref))));
       then
         DAE.ExtArg.EXTARG(ComponentRef.toDAE(cref), dir, Type.toDAE(exp.ty));
 
@@ -1313,7 +1329,7 @@ algorithm
 
     case ComponentRef.CREF()
       algorithm
-        dir := Prefixes.directionToAbsyn(Component.direction(InstNode.component(cref.node)));
+        dir := Prefixes.directionToAbsyn(Component.direction(InstNode.component(ComponentRef.node(cref))));
       then
         DAE.ExtArg.EXTARG(ComponentRef.toDAE(cref), dir, Type.toDAE(cref.ty));
 

@@ -2,6 +2,7 @@ TEST = ../../../../rtest -v
 
 
 TESTFILES = \
+arrayVariables.mos \
 BR.mos \
 BReqcon.mos \
 BRinitialGuess.mos\
@@ -27,6 +28,7 @@ LV.mos \
 NP.mos \
 noOCP.mos \
 ocpWithInputs.mos \
+OptimizeSimulationOptions.mos \
 OSP.mos \
 pendel.mos \
 reduce1.mos \

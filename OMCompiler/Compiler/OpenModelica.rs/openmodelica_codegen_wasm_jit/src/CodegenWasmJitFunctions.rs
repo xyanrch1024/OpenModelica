@@ -42,7 +42,9 @@
 // `CevalScript` caller resolves them; the rest of the module is idiomatic Rust.
 #![allow(non_snake_case)]
 
-use std::collections::{HashMap, HashSet};
+/// std's maps with foldhash, still seeded per process.
+pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState>;
+pub(crate) type HashSet<K> = std::collections::HashSet<K, foldhash::fast::RandomState>;
 // The record layout is shared with the host, which reads records this code built.
 use openmodelica_wasm_jit::sig::{record_layout, RecordLayout};
 use std::sync::Arc;
@@ -132,11 +134,19 @@ pub(crate) use externals::*;
 mod records;
 pub(crate) use records::*;
 
+// Records held as one wasm local per field, and the `$flat` function variants.
+#[path = "CodegenWasmJitFunctions/flat.rs"]
+mod flat;
+pub(crate) use flat::*;
+
 // Codegen contexts and descriptors: `FnCtx`, `SimCtx`, `Literals`,
 // `ProfPlan`, `NlsJob`, attribute targets, array/scatter/const groups, slots.
 #[path = "CodegenWasmJitFunctions/ctx.rs"]
 mod ctx;
 pub(crate) use ctx::*;
+
+#[path = "CodegenWasmJitFunctions/sizes.rs"]
+pub(crate) mod sizes;
 
 // Compiling one function: body, locals, outputs, heap release.
 #[path = "CodegenWasmJitFunctions/function.rs"]
@@ -192,6 +202,7 @@ use expressions::*;
 #[path = "CodegenWasmJitFunctions/relations.rs"]
 mod relations;
 use relations::*;
+pub(crate) use relations::time_event_trigger;
 
 // Calls: user functions, profiling hooks, spatialDistribution, math events.
 #[path = "CodegenWasmJitFunctions/calls.rs"]
@@ -240,12 +251,12 @@ pub(crate) use generic_calls::{
 #[path = "CodegenWasmJitFunctions/sim_systems.rs"]
 mod sim_systems;
 pub(crate) use sim_systems::{
-    LSS_MAX_DENSITY, LSS_MIN_SIZE, NLSS_MAX_DENSITY, NLSS_MIN_SIZE, IterSlot, NlsResidual, NlsResiduals,
+    LSS_MAX_DENSITY, LSS_MIN_SIZE, NLSS_MAX_DENSITY, NLSS_MIN_SIZE, IterBlock, IterSlot, NlsResidual, NlsResiduals,
     backup_known_outputs, residual_rows, restore_known_outputs,
     compile_linear_system, compile_linear_system_analytic, compile_linear_system_analytic_csc,
     compile_linear_system_symbolic, emit_linz_jac_body, emit_nls_jac_body, emit_nls_jac_csc_body,
     emit_ls_bracket, emit_nls_load_body, emit_nls_residual_body, emit_nls_residual_prologue,
-    emit_nls_residual_epilogue, emit_nls_residual_store, emit_solve_nls_call, lin_jac_coloring,
+    emit_nls_residual_epilogue, emit_nls_residual_store, nls_residuals_all_scalar, emit_solve_nls_call, lin_jac_coloring,
     lin_use_sparse, nls_use_sparse,
     emit_dt_solving, emit_dt_local_constraint, emit_dynamic_tearing, emit_nls_strict_body,
 };

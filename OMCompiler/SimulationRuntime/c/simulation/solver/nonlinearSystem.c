@@ -51,9 +51,6 @@
 #include "../simulation_runtime.h"
 #include "model_help.h"
 
-/* for try and catch simulationJumpBuffer */
-#include "../../meta/meta_modelica.h"
-
 int check_nonlinear_solution(DATA *data, int printFailingSystems, int sysNumber);
 
 extern int init_lambda_steps;
@@ -398,6 +395,9 @@ void initializeNonlinearSystemData(DATA *data, threadData_t *threadData, NONLINE
   struct dataMixedSolver *mixedSolverData;
   JACOBIAN* jacobian;
 
+  if (nonlinsys->updateSize) {
+    nonlinsys->size = nonlinsys->updateSize(data, threadData);
+  }
   size = nonlinsys->size;
   nonlinsys->numberOfFEval = 0;
   nonlinsys->numberOfIterations = 0;
@@ -683,10 +683,13 @@ void freeNonlinearSyst(DATA* data, threadData_t* threadData, NONLINEAR_SYSTEM_DA
   free(nonlinsys->nominal);
   free(nonlinsys->min);
   free(nonlinsys->max);
+  free(nonlinsys->eqn_simcode_indices);
+  nonlinsys->eqn_simcode_indices = NULL;
   nonlinsys->freeStaticNLSData(data, threadData, nonlinsys);
 
   freeValueList(nonlinsys->oldValueList, 1);
   freeNonlinearPattern(nonlinsys->nonlinearPattern);
+  nonlinsys->nonlinearPattern = NULL;
 
   /* Free CSV data */
 #if !defined(OMC_MINIMAL_RUNTIME)
@@ -962,29 +965,24 @@ int updateInnerEquation(RESIDUAL_USERDATA* resUserData, int sysNumber, int discr
 
   /* try */
 #ifndef OMC_EMCC
-  MMC_TRY_INTERNAL(simulationJumpBuffer)
+  OMC_TRY_INTERNAL(simulationJumpBuffer)
 #endif
 
   /* call residual function */
-#if defined(OMC_MINIMAL_RUNTIME) || defined(OMC_FMI_RUNTIME)
-  MemPoolState mem_pool_state = omc_util_get_pool_state();
-#endif
   if (nonlinsys->strictTearingFunctionCall != NULL)
     constraintViolated = nonlinsys->residualFuncConstraints(resUserData, nonlinsys->nlsx, nonlinsys->resValues, (int*)&nonlinsys->size);
   else
     nonlinsys->residualFunc(resUserData, nonlinsys->nlsx, nonlinsys->resValues, (int*)&nonlinsys->size);
-#if defined(OMC_MINIMAL_RUNTIME) || defined(OMC_FMI_RUNTIME)
-  omc_util_restore_pool_state(mem_pool_state);
-#endif
 
   /* replace extrapolated values by current x for discrete step */
   memcpy(nonlinsys->nlsxExtrapolation, nonlinsys->nlsx, nonlinsys->size*(sizeof(double)));
 
-  if (!constraintViolated)
+  if (!constraintViolated && !OMC_ERROR_RAISED())
     success = 1;
   /*catch */
+  if (OMC_ERROR_RAISED()) { OMC_ERROR_CLEAR(); }
 #ifndef OMC_EMCC
-  MMC_CATCH_INTERNAL(simulationJumpBuffer)
+  OMC_CATCH_INTERNAL(simulationJumpBuffer)
 #endif
 
   if (!success && !constraintViolated)
@@ -1059,12 +1057,13 @@ NLS_SOLVER_STATUS solveNLS(DATA *data, threadData_t *threadData, NONLINEAR_SYSTE
     nonlinsys->solverData = solverData->ordinaryData;
     /* try */
     #ifndef OMC_EMCC
-      MMC_TRY_INTERNAL(simulationJumpBuffer)
+      OMC_TRY_INTERNAL(simulationJumpBuffer)
     #endif
     solver_status = solveHybrd(data, threadData, nonlinsys);
     /*catch */
+      if (OMC_ERROR_RAISED()) { OMC_ERROR_CLEAR(); solver_status = NLS_FAILED; }
     #ifndef OMC_EMCC
-      MMC_CATCH_INTERNAL(simulationJumpBuffer)
+      OMC_CATCH_INTERNAL(simulationJumpBuffer)
     #endif
     nonlinsys->solverData = solverData;
     break;
@@ -1073,12 +1072,13 @@ NLS_SOLVER_STATUS solveNLS(DATA *data, threadData_t *threadData, NONLINEAR_SYSTE
     nonlinsys->solverData = solverData->ordinaryData;
     /* try */
     #ifndef OMC_EMCC
-      MMC_TRY_INTERNAL(simulationJumpBuffer)
+      OMC_TRY_INTERNAL(simulationJumpBuffer)
     #endif
     solver_status = nlsKinsolSolve(data, threadData, nonlinsys);
     /*catch */
+      if (OMC_ERROR_RAISED()) { OMC_ERROR_CLEAR(); solver_status = NLS_FAILED; }
     #ifndef OMC_EMCC
-      MMC_CATCH_INTERNAL(simulationJumpBuffer)
+      OMC_CATCH_INTERNAL(simulationJumpBuffer)
     #endif
     nonlinsys->solverData = solverData;
     break;
@@ -1087,12 +1087,13 @@ NLS_SOLVER_STATUS solveNLS(DATA *data, threadData_t *threadData, NONLINEAR_SYSTE
     nonlinsys->solverData = solverData->ordinaryData;
     /* try */
     #ifndef OMC_EMCC
-      MMC_TRY_INTERNAL(simulationJumpBuffer)
+      OMC_TRY_INTERNAL(simulationJumpBuffer)
     #endif
     solver_status = B_nlsKinsolSolve(data, threadData, nonlinsys);
     /*catch */
+      if (OMC_ERROR_RAISED()) { OMC_ERROR_CLEAR(); solver_status = NLS_FAILED; }
     #ifndef OMC_EMCC
-      MMC_CATCH_INTERNAL(simulationJumpBuffer)
+      OMC_CATCH_INTERNAL(simulationJumpBuffer)
     #endif
     nonlinsys->solverData = solverData;
     break;
@@ -1101,12 +1102,13 @@ NLS_SOLVER_STATUS solveNLS(DATA *data, threadData_t *threadData, NONLINEAR_SYSTE
     nonlinsys->solverData = solverData->ordinaryData;
     /* try */
     #ifndef OMC_EMCC
-      MMC_TRY_INTERNAL(simulationJumpBuffer)
+      OMC_TRY_INTERNAL(simulationJumpBuffer)
     #endif
     solver_status = solveNewton(data, threadData, nonlinsys);
     /*catch */
+      if (OMC_ERROR_RAISED()) { OMC_ERROR_CLEAR(); solver_status = NLS_FAILED; }
     #ifndef OMC_EMCC
-      MMC_CATCH_INTERNAL(simulationJumpBuffer)
+      OMC_CATCH_INTERNAL(simulationJumpBuffer)
     #endif
     /* check if solution process was successful, if not use alternative tearing set if available (dynamic tearing)*/
     if (solver_status != NLS_SOLVED && casualTearingSet){
@@ -1130,7 +1132,7 @@ NLS_SOLVER_STATUS solveNLS(DATA *data, threadData_t *threadData, NONLINEAR_SYSTE
 
     /* try */
     #ifndef OMC_EMCC
-      MMC_TRY_INTERNAL(simulationJumpBuffer)
+      OMC_TRY_INTERNAL(simulationJumpBuffer)
     #endif
     solver_status = solveHomotopy(data, threadData, nonlinsys);
 
@@ -1155,8 +1157,9 @@ NLS_SOLVER_STATUS solveNLS(DATA *data, threadData_t *threadData, NONLINEAR_SYSTE
     }
 
     /*catch */
+      if (OMC_ERROR_RAISED()) { OMC_ERROR_CLEAR(); solver_status = NLS_FAILED; }
     #ifndef OMC_EMCC
-      MMC_CATCH_INTERNAL(simulationJumpBuffer)
+      OMC_CATCH_INTERNAL(simulationJumpBuffer)
     #endif
     nonlinsys->solverData = mixedSolverData;
     break;
@@ -1279,6 +1282,12 @@ int solve_nonlinear_system(DATA *data, threadData_t *threadData, int sysNumber)
   {
     nonlinsys->getIterationVars(data, nonlinsys->nlsx);
     memcpy(nonlinsys->nlsx, nonlinsys->nlsxOld, nonlinsys->size*(sizeof(double)));
+    /* hand guided tearing: a non-discrete call (e.g. of a nested block) starts from
+     * the extrapolation, which this branch leaves unwritten (zero), i.e. at a bound */
+    if (nonlinsys->hgtBounds)
+    {
+      memcpy(nonlinsys->nlsxExtrapolation, nonlinsys->nlsxOld, nonlinsys->size*(sizeof(double)));
+    }
   }
   /* hand guided tearing: start within the bounds of the iteration variables */
   if (nonlinsys->hgtBounds)
@@ -1304,7 +1313,7 @@ int solve_nonlinear_system(DATA *data, threadData_t *threadData, int sysNumber)
 
   /* try */
 #ifndef OMC_EMCC
-  MMC_TRY_INTERNAL(simulationJumpBuffer)
+  OMC_TRY_INTERNAL(simulationJumpBuffer)
 #endif
 
   /* Improve start values with newton diagnostics method */
@@ -1316,8 +1325,9 @@ int solve_nonlinear_system(DATA *data, threadData_t *threadData, int sysNumber)
   }
 
   /*catch */
+  if (OMC_ERROR_RAISED()) { OMC_ERROR_CLEAR(); }
 #ifndef OMC_EMCC
-  MMC_CATCH_INTERNAL(simulationJumpBuffer)
+  OMC_CATCH_INTERNAL(simulationJumpBuffer)
 #endif
 
 #endif
@@ -1325,7 +1335,7 @@ int solve_nonlinear_system(DATA *data, threadData_t *threadData, int sysNumber)
 
   /* try */
 #ifndef OMC_EMCC
-  MMC_TRY_INTERNAL(simulationJumpBuffer)
+  OMC_TRY_INTERNAL(simulationJumpBuffer)
 #endif
 
   // TODO: refactor this logic
@@ -1464,8 +1474,9 @@ int solve_nonlinear_system(DATA *data, threadData_t *threadData, int sysNumber)
   threadData->currentErrorStage = saveJumpState;
 
   /*catch */
+  if (OMC_ERROR_RAISED()) { OMC_ERROR_CLEAR(); }
 #ifndef OMC_EMCC
-  MMC_CATCH_INTERNAL(simulationJumpBuffer)
+  OMC_CATCH_INTERNAL(simulationJumpBuffer)
 #endif
 
   messageClose(OMC_LOG_NLS_EXTRAPOLATE);

@@ -39,6 +39,7 @@ encapsulated package NFBuiltinCall
   import Call = NFCall;
   import Expression = NFExpression;
   import NFInstNode.InstNode;
+  import NFInstNode;
   import NFPrefixes.{Variability, Purity};
   import Type = NFType;
   import Subscript = NFSubscript;
@@ -46,7 +47,6 @@ encapsulated package NFBuiltinCall
   import Global;
 
 protected
-  import Config;
   import Ceval = NFCeval;
   import ComponentRef = NFComponentRef;
   import Dimension = NFDimension;
@@ -129,7 +129,6 @@ public
       case "DynamicSelect" then typeDynamicSelectCall("DynamicSelect", call, context, info);
       case "edge" then typeEdgeCall(call, context, info);
       case "fill" then typeFillCall(call, context, info);
-      case "getInstanceName" then typeGetInstanceName(call, context, info);
       //case "initialState" then typeInitialStateCall(call, context, info);
       case "initial" then typeDiscreteCall(call, context, info);
       case "inStream" then typeActualInStreamCall("inStream", call, context, info);
@@ -409,7 +408,7 @@ protected
     MatchedFunction matchedFunc;
     list<MatchedFunction> matchedFunctions, exactMatches;
   algorithm
-    Type.COMPLEX(cls=recopnode) := overloadedType;
+    recopnode := Type.complexNode(overloadedType);
 
     try
       fn_ref := Function.lookupFunctionSimple("'String'", recopnode, context);
@@ -657,6 +656,7 @@ protected
     list<TypedArg> args;
     TypedArg arg;
     InstNode fn_node;
+    ComponentRef fn_ref;
   algorithm
     // edge may not be used in a function context.
     if InstContext.inFunction(context) then
@@ -664,7 +664,8 @@ protected
       fail();
     end if;
 
-    argtycall as Call.ARG_TYPED_CALL(ComponentRef.CREF(node = fn_node), args, _) := Call.typeNormalCall(call, context, info);
+    argtycall as Call.ARG_TYPED_CALL(fn_ref as ComponentRef.CREF(), args, _) := Call.typeNormalCall(call, context, info);
+    fn_node := ComponentRef.node(fn_ref);
     argtycall := Call.matchTypedNormalCall(argtycall, context, info);
     ty := Call.typeOf(argtycall);
     purity := Call.purity(argtycall);
@@ -797,10 +798,6 @@ protected
     Integer n;
     InstContext.Type arg_context = InstContext.set(context, NFInstContext.SUBEXPRESSION);
   algorithm
-    if not Config.languageStandardAtLeast(Config.LanguageStandard.experimental) then
-      Error.addSourceMessageAndFail(Error.EXPERIMENTAL_REQUIRED, {"promote"}, info);
-    end if;
-
     Call.UNTYPED_CALL(ref = fn_ref, arguments = args, named_args = named_args) := call;
     assertNoNamedParams("promote", named_args, info);
 
@@ -965,7 +962,9 @@ protected
                  ComponentRef.toString(fnRef), "(", ", ", ")", true)}, info);
         end if;
 
-        if arg_pur == Purity.PURE and not Structural.isExpressionNotFixed(arg) then
+        // a resizable size stays symbolic
+        if arg_pur == Purity.PURE and not Structural.isExpressionNotFixed(arg) and
+           not Expression.contains(arg, Expression.isResizableCref) then
           Structural.markExp(arg);
           arg := if InstContext.inInstanceAPI(context) then Ceval.tryEvalExp(arg) else Ceval.tryEvalExpResizable(arg);
           arg_ty := Expression.typeOf(arg);
@@ -1407,6 +1406,11 @@ protected
         {ComponentRef.toString(fn_ref)}, info);
     end if;
 
+    if InstContext.inNonexpandable(context) then
+      Error.addSourceMessageAndFail(Error.IN_NON_EVALUABLE_IF_OR_FOR,
+        {ComponentRef.toString(fn_ref)}, info);
+    end if;
+
     args := typeConnectionsArgs(args, arg_context, info, fn_ref);
     {fn} := Function.typeRefCache(fn_ref);
     ty := Type.NORETCALL();
@@ -1490,6 +1494,11 @@ protected
         {ComponentRef.toString(fn_ref)}, info);
     end if;
 
+    if InstContext.inNonexpandable(context) then
+      Error.addSourceMessageAndFail(Error.IN_NON_EVALUABLE_IF_OR_FOR,
+        {ComponentRef.toString(fn_ref)}, info);
+    end if;
+
     arg1 :: args := args;
 
     arg1 := typeConnectionsArg(arg1, arg_context, info, fn_ref, 1);
@@ -1545,6 +1554,11 @@ protected
 
     if InstContext.inFunction(context) then
       Error.addSourceMessageAndFail(Error.EXP_INVALID_IN_FUNCTION,
+        {ComponentRef.toString(fn_ref)}, info);
+    end if;
+
+    if InstContext.inNonexpandable(context) then
+      Error.addSourceMessageAndFail(Error.IN_NON_EVALUABLE_IF_OR_FOR,
         {ComponentRef.toString(fn_ref)}, info);
     end if;
 
@@ -1635,6 +1649,11 @@ protected
 
     if InstContext.inFunction(context) then
       Error.addSourceMessageAndFail(Error.EXP_INVALID_IN_FUNCTION,
+        {ComponentRef.toString(fn_ref)}, info);
+    end if;
+
+    if InstContext.inNonexpandable(context) then
+      Error.addSourceMessageAndFail(Error.IN_NON_EVALUABLE_IF_OR_FOR,
         {ComponentRef.toString(fn_ref)}, info);
     end if;
 
@@ -1767,9 +1786,10 @@ protected
         algorithm
           (valid_cref, isConnector) := match arg.cref
             // check form A.R
-            case ComponentRef.CREF(node = node, origin = NFComponentRef.Origin.CREF,
+            case ComponentRef.CREF(origin = NFComponentRef.Origin.CREF,
                 restCref = ComponentRef.CREF(ty = ty2, origin = NFComponentRef.Origin.CREF))
               algorithm
+                node := ComponentRef.node(arg.cref);
                 ty2 := match ty2
                   case Type.ARRAY()
                     guard listLength(ComponentRef.subscriptsAllFlat(arg.cref)) == listLength(ty2.dimensions)
@@ -1779,8 +1799,9 @@ protected
               then (Class.isOverdetermined(InstNode.getClass(node)), Type.isConnector(ty2));
 
             // adrpo #5821, allow for R only instead of A.R and issue a warning
-            case ComponentRef.CREF(node = node, ty = ty2)
+            case ComponentRef.CREF(ty = ty2)
               algorithm
+                node := ComponentRef.node(arg.cref);
                 ty2 := match ty2
                   case Type.ARRAY()
                     guard listLength(ComponentRef.subscriptsAllFlat(arg.cref)) == listLength(ty2.dimensions)
@@ -1883,25 +1904,6 @@ protected
       fail();
     end if;
   end typeNthRootCall;
-
-  function typeGetInstanceName
-    input Call call;
-    input InstContext.Type context;
-    input SourceInfo info;
-    output Expression result;
-    output Type ty = Type.STRING();
-    output Variability var = Variability.CONSTANT;
-    output Purity purity = Purity.PURE;
-  protected
-    InstNode scope;
-  algorithm
-    Call.UNTYPED_CALL(call_scope = scope) := call;
-    Call.typeMatchNormalCall(call, context, info);
-    // getInstanceName is normally derived from the prefix during the flattening,
-    // but sometimes the call is constant evaluated instead (e.g. when it's used
-    // in a package). So we create an expression here that contains the scope.
-    result := Expression.INSTANCE_NAME(scope);
-  end typeGetInstanceName;
 
   function typeClockCall
     input Call call;
@@ -2102,8 +2104,10 @@ protected
           end if;
 
           // The argument of actualStream/inStream must have subscripts that can be evaluated.
+          // with resizable arrays the subscripts can be iterators over resizable ranges
           for sub in ComponentRef.subscriptsAllFlat(arg.cref) loop
-            if Subscript.variability(sub) > Variability.PARAMETER then
+            if Subscript.variability(sub) > Variability.PARAMETER and not (Subscript.variability(sub) == Variability.NON_STRUCTURAL_PARAMETER
+               and Flags.getConfigBool(Flags.RESIZABLE_ARRAYS)) then
               Error.addSourceMessageAndFail(Error.CONNECTOR_NON_PARAMETER_SUBSCRIPT,
                 {ComponentRef.toString(arg.cref), Subscript.toString(sub)}, info);
             end if;
@@ -2272,9 +2276,17 @@ protected
     output Purity purity;
   protected
     Call ty_call;
+    String context_str;
   algorithm
     if InstContext.inSubexpression(context) or InstContext.inAlgorithm(context) then
       Error.addSourceMessage(Error.SPATIAL_DISTRIBUTION_CONTEXT, {}, info);
+      fail();
+    end if;
+
+    if InstContext.inIf(context) or InstContext.inWhen(context) then
+      context_str := if InstContext.inIf(context) then "an if-equation" else "a when-equation";
+      Error.addSourceMessage(Error.ELEMENT_IS_NOT_ALLOWED_IN_CONTEXT,
+        {"spatialDistribution", context_str}, info);
       fail();
     end if;
 

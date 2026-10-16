@@ -41,7 +41,10 @@
 #include "MainWindow.h"
 #include "OMC/OMCProxy.h"
 #include "Modeling/LibraryTreeWidget.h"
+#include "Modeling/Model.h"
+#include "Modeling/ModelWidgetContainer.h"
 #include "Util/Helper.h"
+#include "Util/Style.h"
 #include "Util/Utilities.h"
 #include "Editors/HTMLEditor.h"
 #include "Options/OptionsDialog.h"
@@ -56,11 +59,14 @@
 // QtWebEngine stubs come in via DocumentationWidget.h on wasm.
 #else
 #include <QWebEnginePage>
+#include <QWebEngineScript>
+#include <QWebEngineScriptCollection>
 #include <QWebEngineSettings>
 #endif
 #include <QWidgetAction>
 #include <QButtonGroup>
 #include <QInputDialog>
+#include <QMessageBox>
 
 /*!
  * \class DocumentationWidget
@@ -672,11 +678,7 @@ void DocumentationWidget::writeDocumentationFile(QString documentation)
   /* Create a local file with the html we want to view as otherwise JavaScript does not run properly. */
   if (mDocumentationFile.open(QIODevice::WriteOnly)) {
     QTextStream out(&mDocumentationFile);
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     out.setEncoding(QStringConverter::Utf8);
-#else
-    out.setCodec(Helper::utf8.toUtf8().constData());
-#endif
     out << documentation;
     mDocumentationFile.close();
   }
@@ -774,13 +776,8 @@ void DocumentationWidget::updateActionsHelper()
   mpStyleComboBox->blockSignals(state);
   state = mpFontComboBox->blockSignals(true);
   QString fontName = queryCommandValue("fontName");
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
   // Remove quotes around the font name.
   fontName = StringHandler::removeFirstLastQuotes(fontName);
-#else // #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-  // Remove single quote around the font name.
-  fontName = StringHandler::removeFirstLastSingleQuotes(fontName);
-#endif // #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
   currentIndex = mpFontComboBox->findText(fontName, Qt::MatchExactly);
   if (currentIndex > -1) {
     mpFontComboBox->setCurrentIndex(currentIndex);
@@ -949,35 +946,6 @@ void DocumentationWidget::editInfoHeaderDocumentation()
 }
 
 /*!
- * \brief buildDocumentationAnnotationString
- * Helper: builds a Documentation(...) annotation string from the three doc fields.
- * Empty fields are omitted from the output.
- * \param info
- * \param revisions
- * \param infoHeader
- * \return
- */
-QString buildDocumentationAnnotationString(const QString &info, const QString &revisions, const QString &infoHeader)
-{
-  const struct { const char *key; const QString &value; } fields[] = {
-  {"info", info},
-  {"revisions", revisions},
-  {"__OpenModelica_infoHeader", infoHeader},
-};
-
-  QStringList parts;
-  for (const auto &field : fields) {
-    if (!field.value.isEmpty()) {
-      parts.append(QString("%1=\"%2\"")
-                   .arg(field.key)
-                   .arg(StringHandler::escapeStringQuotes(field.value)));
-    }
-  }
-
-  return QString("annotate=Documentation(%1)").arg(parts.join(","));
-}
-
-/*!
  * \brief DocumentationWidget::saveDocumentation
  * Saves the documentaiton annotation. If pLibraryTreeItem is 0 then the documentation of the editing class is shown after save.\n
  * Otherwise the documentation of pLibraryTreeItem is shown.
@@ -1001,21 +969,33 @@ void DocumentationWidget::saveDocumentation(LibraryTreeItem *pNextLibraryTreeIte
     updateHTMLSourceEditor();
   }
 
-  const QList<QString> documentation = MainWindow::instance()->getOMCProxy()->getDocumentationAnnotationInClass(pLibraryTreeItem);
-  const QString currentText = mpHTMLSourceEditor->getPlainTextEdit()->toPlainText();
-  const QString oldAnnotation = buildDocumentationAnnotationString(documentation[0], documentation[1], documentation[2]);
-  const QString newAnnotation  = buildDocumentationAnnotationString(
-                                   mEditType == EditType::Info        ? currentText : documentation[0],
-                                   mEditType == EditType::Revisions   ? currentText : documentation[1],
-                                   mEditType == EditType::InfoHeader  ? currentText : documentation[2]);
-
-  // if we have ModelWidget for class then put the change on undo stack.
-  if (pLibraryTreeItem->getModelWidget()) {
-    UpdateClassAnnotationCommand *pUpdateClassExperimentAnnotationCommand;
-    pUpdateClassExperimentAnnotationCommand = new UpdateClassAnnotationCommand(pLibraryTreeItem, oldAnnotation, newAnnotation);
-    pLibraryTreeItem->getModelWidget()->getUndoStack()->push(pUpdateClassExperimentAnnotationCommand);
-    pLibraryTreeItem->getModelWidget()->updateModelText();
+  ModelWidget *pModelWidget = pLibraryTreeItem->getModelWidget();
+  if (!pModelWidget || !pModelWidget->getModelInstance()) {
+    QMessageBox::warning(this, QString("%1 - %2").arg(Helper::applicationName, tr("Warning")),
+                         tr("The model instance for %1 is not available; the documentation changes were not saved.")
+                         .arg(pLibraryTreeItem->getNameStructure()), QMessageBox::Ok);
+    return;
   }
+  ModelInstance::Model *pModelInstance = pModelWidget->getModelInstance();
+  const ModelInstance::DocumentationAnnotation *pDocumentationAnnotation = pModelInstance->getAnnotation()->getDocumentationAnnotation();
+
+  const QString currentText = mpHTMLSourceEditor->getPlainTextEdit()->toPlainText();
+  const ModelInstance::DocumentationAnnotation emptyDocumentation;
+  const ModelInstance::DocumentationAnnotation &documentation = pDocumentationAnnotation
+                                                                ? *pDocumentationAnnotation : emptyDocumentation;
+  const QString oldAnnotation = QString("annotate=%1").arg(documentation.toString());
+  const QString newAnnotation = QString("annotate=%1").arg(documentation.toString(
+                                                             mEditType == EditType::Info ? currentText : documentation.getInfo(),
+                                                             mEditType == EditType::Revisions ? currentText : documentation.getRevisions(),
+                                                             mEditType == EditType::InfoHeader ? currentText : documentation.getInfoHeader()));
+  // Put the change on the undo stack.
+  pModelWidget->getUndoStack()->push(new UpdateClassAnnotationCommand(pLibraryTreeItem, oldAnnotation, newAnnotation));
+  // Keep the loaded model-instance annotation in sync with the undoable OMC update.
+  pModelInstance->getOrCreateAnnotation()->getOrCreateDocumentationAnnotation()->setDocumentation(
+        mEditType == EditType::Info ? currentText : documentation.getInfo(),
+        mEditType == EditType::Revisions ? currentText : documentation.getRevisions(),
+        mEditType == EditType::InfoHeader ? currentText : documentation.getInfoHeader());
+  pModelWidget->updateModelText();
   // ticket:5190 - Save the class when documentation save button is hit
   MainWindow::instance()->getLibraryWidget()->saveLibraryTreeItem(pLibraryTreeItem);
   mEditType = EditType::None;
@@ -1060,9 +1040,7 @@ void DocumentationWidget::toggleEditor(int tabIndex)
       if (mpHTMLSourceEditor->getPlainTextEdit()->document()->isModified()) {
         writeDocumentationFile(mpHTMLSourceEditor->getPlainTextEdit()->toPlainText());
         mpHTMLEditor->setUrl(QUrl::fromLocalFile(mDocumentationFile.fileName()));
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
         updateActions();
-#endif // #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
       }
       mpHTMLSourceEditor->hide();
       mpHTMLEditorWidget->show();
@@ -1078,7 +1056,6 @@ void DocumentationWidget::toggleEditor(int tabIndex)
  */
 void DocumentationWidget::updateActions()
 {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
   if (!mpHTMLEditor->page()->hasSelection()) {
     mpStyleComboBox->setEnabled(false);
     mpFontComboBox->setEnabled(false);
@@ -1139,9 +1116,6 @@ void DocumentationWidget::updateActions()
     mpUnLinkAction->setEnabled(true);
     updateActionsHelper();
   }
-#else // #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-  updateActionsHelper();
-#endif // #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 }
 
 /*!
@@ -1400,7 +1374,47 @@ DocumentationViewer::DocumentationViewer(DocumentationWidget *pDocumentationWidg
   setPage(mpDocumentationPage);
   settings()->setFontFamily(QWebEngineSettings::StandardFont, Helper::systemFontInfo.family());
   settings()->setAttribute(QWebEngineSettings::LocalStorageEnabled, true);
+#if !defined(__EMSCRIPTEN__) && !defined(OM_OMEDIT_NO_WEBENGINE)
+  // Documentation is loaded from a local file and may reference remote scripts such as MathJax. See issue #17291.
+  if (!mIsContentEditable) {
+    settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, true);
+  }
+#endif
   settings()->setDefaultTextEncoding(Helper::utf8.toUtf8().constData());
+#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0) && !defined(__EMSCRIPTEN__) && !defined(OM_OMEDIT_NO_WEBENGINE)
+  /* The application palette and stylesheet do not reach the web content. Let
+   * Chromium render the documentation dark; the document itself is untouched.
+   * The editor keeps the light canvas, so the colors its tools write are the
+   * colors the user sees.
+   */
+  if (!mIsContentEditable && Style::isDarkMode()) {
+    settings()->setAttribute(QWebEngineSettings::ForceDarkMode, true);
+    page()->setBackgroundColor(Style::documentationPageBackgroundColor());
+    /* Chromium darkens a white page to almost black. Give the page the colors
+     * of the dark palette; Chromium leaves colors that are already dark alone.
+     * The rule goes first so the colors of the document win over it.
+     */
+    QWebEngineScript script;
+    script.setName("omeditDarkMode");
+    script.setInjectionPoint(QWebEngineScript::DocumentCreation);
+    script.setWorldId(QWebEngineScript::ApplicationWorld);
+    script.setSourceCode(QString("(function() {"
+                                 "  function addStyle() {"
+                                 "    var style = document.createElement('style');"
+                                 "    style.textContent = ':root { background-color: %1; color: %2; }';"
+                                 "    var parent = document.head || document.documentElement;"
+                                 "    parent.insertBefore(style, parent.firstChild);"
+                                 "  }"
+                                 "  if (document.documentElement) {"
+                                 "    addStyle();"
+                                 "  } else {"
+                                 "    document.addEventListener('DOMContentLoaded', addStyle);"
+                                 "  }"
+                                 "})();")
+                         .arg(Style::documentationPageBackgroundColor().name(), Style::documentationPageTextColor().name()));
+    page()->scripts().insert(script);
+  }
+#endif // #if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0) && !defined(__EMSCRIPTEN__) && !defined(OM_OMEDIT_NO_WEBENGINE)
   // set DocumentationViewer web page policy
   // Set the contenteditable="true" in pageLoaded()
   /* Qt WebEngine doesn't support DelegateAllLinks, linkClicked
@@ -1623,20 +1637,12 @@ void DocumentationViewer::keyPressEvent(QKeyEvent *event)
  */
 void DocumentationViewer::wheelEvent(QWheelEvent *event)
 {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 6, 0)
   if (event->angleDelta().y() != 0 && event->modifiers().testFlag(Qt::ControlModifier)) {
-#else // QT_VERSION_CHECK
-  if (event->orientation() == Qt::Vertical && event->modifiers().testFlag(Qt::ControlModifier)) {
-#endif // QT_VERSION_CHECK
     qreal zf = zoomFactor();
     /* ticket:4349 Take smaller steps for zooming.
      * Also set the minimum zoom to readable size.
      */
-#if QT_VERSION >= QT_VERSION_CHECK(5, 6, 0)
   if (event->angleDelta().y() > 0) {
-#else // QT_VERSION_CHECK
-  if (event->delta() > 0) {
-#endif // QT_VERSION_CHECK
       zf += 0.1;
       zf = zf > 5 ? 5 : zf;
     } else {

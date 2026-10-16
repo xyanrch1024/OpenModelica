@@ -40,7 +40,7 @@ pub(super) fn compile_stmt(ctx: &mut FnCtx, stmt: &DAE::Statement) -> Result<()>
         }
         S::STMT_RETURN { .. } => {
             release_heap_locals(ctx)?;
-            push_outputs(ctx);
+            push_outputs(ctx)?;
             ctx.emit(we::Instruction::Return);
             Ok(())
         }
@@ -92,12 +92,12 @@ pub(super) fn compile_stmt(ctx: &mut FnCtx, stmt: &DAE::Statement) -> Result<()>
 /// for when-equations ([`FnCtx::sim_when`]).
 fn compile_stmt_when(
     ctx: &mut FnCtx,
-    conditions: &List<Arc<DAE::ComponentRef>>,
-    stmts: &List<Arc<DAE::Statement>>,
-    else_when: &Option<Arc<DAE::Statement>>,
+    conditions: &List<metamodelica::Ref<DAE::ComponentRef>>,
+    stmts: &List<metamodelica::Ref<DAE::Statement>>,
+    else_when: &Option<metamodelica::Ref<DAE::Statement>>,
 ) -> Result<()> {
     use we::Instruction as I;
-    let conds: Vec<&Arc<DAE::ComponentRef>> = (&**conditions).into_iter().collect();
+    let conds: Vec<&metamodelica::Ref<DAE::ComponentRef>> = (&**conditions).into_iter().collect();
     if conds.is_empty() {
         ctx.emit(I::I32Const(0));
     } else {
@@ -115,7 +115,9 @@ fn compile_stmt_when(
         }
     }
     ctx.emit(I::If(we::BlockType::Empty));
+    let outer = ctx.set_when_body(true);
     compile_stmts(ctx, stmts)?;
+    ctx.set_when_body(outer);
     if let Some(ew) = else_when {
         ctx.emit(I::Else);
         let DAE::Statement::STMT_WHEN { conditions, statementLst, elseWhen, .. } = &**ew else {
@@ -180,7 +182,7 @@ fn compile_else(ctx: &mut FnCtx, e: &DAE::Else) -> Result<()> {
 fn compile_loop_body(
     ctx: &mut FnCtx,
     break_level: u32,
-    body: &List<Arc<DAE::Statement>>,
+    body: &List<metamodelica::Ref<DAE::Statement>>,
 ) -> Result<()> {
     ctx.emit(we::Instruction::Block(we::BlockType::Empty));
     let continue_level = ctx.ctrl_depth;
@@ -214,7 +216,7 @@ pub(super) fn compile_for(
     ctx: &mut FnCtx,
     iter: &ArcStr,
     range: &DAE::Exp,
-    body: &List<Arc<DAE::Statement>>,
+    body: &List<metamodelica::Ref<DAE::Statement>>,
     ty: &DAE::Type,
 ) -> Result<()> {
     if let DAE::Exp::RANGE { .. } = range
@@ -230,7 +232,7 @@ fn compile_for_counting_range(
     ctx: &mut FnCtx,
     iter: &ArcStr,
     range: &DAE::Exp,
-    body: &List<Arc<DAE::Statement>>,
+    body: &List<metamodelica::Ref<DAE::Statement>>,
     sty: SigTy,
 ) -> Result<()> {
     let DAE::Exp::RANGE { start, step, stop, .. } = range else {
@@ -290,7 +292,7 @@ pub(super) fn compile_for_array(
     ctx: &mut FnCtx,
     iter: &ArcStr,
     range: &DAE::Exp,
-    body: &List<Arc<DAE::Statement>>,
+    body: &List<metamodelica::Ref<DAE::Statement>>,
 ) -> Result<()> {
     let SigTy::Array { elem, rank } = exp_sigty(range)? else {
         return Err("CodegenWasmJit: for-loop over non-array, non-range expression not supported");

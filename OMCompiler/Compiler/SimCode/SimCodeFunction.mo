@@ -182,6 +182,8 @@ public uniontype RecordDeclaration
     String ctor_name "A unique name for the new constor. e.g. R_1_3() if it needs the 1st an 3rd members as inputs";
     String name "The record's name";
     list<Variable> variables "The members with the ones that need outisde binding marked. e.g 1st and 3rd elements will have bind_from_outside=true ";
+    Absyn.Path defPath "definition path";
+    Boolean usedExternally;
   end RECORD_DECL_ADD_CONSTRCTOR;
 
   record RECORD_DECL_DEF
@@ -321,6 +323,7 @@ public uniontype Context
   generate different code depending on the context it is generated in."
   record SIMULATION_CONTEXT
     Boolean genDiscrete;
+    Boolean whenBody "evaluated only at the event that activates the when";
   end SIMULATION_CONTEXT;
 
   record FUNCTION_CONTEXT
@@ -352,14 +355,11 @@ public uniontype Context
 
   record DAE_MODE_CONTEXT
   end DAE_MODE_CONTEXT;
-
-  record OMSI_CONTEXT
-    Option<HashTableCrefSimVar.HashTable> hashTable "used to get local SimVars and corresponding value references";
-  end OMSI_CONTEXT;
 end Context;
 
-public constant Context contextSimulationNonDiscrete  = SIMULATION_CONTEXT(false);
-public constant Context contextSimulationDiscrete     = SIMULATION_CONTEXT(true);
+public constant Context contextSimulationNonDiscrete  = SIMULATION_CONTEXT(false, false);
+public constant Context contextSimulationDiscrete     = SIMULATION_CONTEXT(true, false);
+public constant Context contextSimulationWhenBody     = SIMULATION_CONTEXT(true, true);
 public constant Context contextFunction               = FUNCTION_CONTEXT("", false);
 public constant Context contextJacobian               = JACOBIAN_CONTEXT("", NONE());
 public constant Context contextAlgloopJacobian        = ALGLOOP_CONTEXT(false,true);
@@ -371,7 +371,6 @@ public constant Context contextZeroCross              = ZEROCROSSINGS_CONTEXT();
 public constant Context contextOptimization           = OPTIMIZATION_CONTEXT();
 public constant Context contextFMI                    = FMI_CONTEXT();
 public constant Context contextDAEmode                = DAE_MODE_CONTEXT();
-public constant Context contextOMSI                   = OMSI_CONTEXT(NONE());
 
 constant list<DAE.Exp> listExpLength1 = {DAE.ICONST(0)} "For CodegenC.tpl";
 constant list<Variable> boxedRecordOutVars = VARIABLE(DAE.CREF_IDENT("",DAE.T_COMPLEX_DEFAULT_RECORD,{}),DAE.T_COMPLEX_DEFAULT_RECORD,NONE(),{},DAE.NON_PARALLEL(),DAE.VARIABLE(), false)::{} "For CodegenC.tpl";

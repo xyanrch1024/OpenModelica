@@ -72,16 +72,13 @@ Install the following programs:
 - [Git](https://git-scm.com/downloads) (should already be installed)
 - [Java SE Development Kit](https://www.oracle.com/java/technologies/downloads/) (for javac)
 - [CMake](https://cmake.org/download/) (>= v3.21)
-- [rustup](https://rustup.rs) (optional if you disable it; see
-  [1.4 Rust toolchain](#14-rust-toolchain) for which toolchain to pick and how to
-  disable)
+- [rustup](https://rustup.rs) (see [1.4 Rust toolchain](#14-rust-toolchain) for
+  which toolchain to pick)
 
 ### 1.4 Rust toolchain
 
-The C simulation runtime writes result files through the Rust `libomc_result`
-(`OM_RUST_RESULT_WRITERS`) and the GUI clients read them back through it
-(`OM_RUST_RESULT_READERS`). If disabled the C runtime falls back to the C
-readers and writers, which cannot handle `.arrow`.
+Result files are read and written through the Rust `libomc_result`, and
+`--simCodeTarget=C` links the Rust simulation runtime.
 
 The crates use the 2024 edition, so `cargo`/`rustc` 1.85 or newer. Install
 [rustup](https://rustup.rs) from Windows (not through pacman), with
@@ -108,17 +105,8 @@ rustup override set stable-x86_64-pc-windows-gnu
 cargo -vV   # the host: line must end in -gnu here, -msvc for MSVC
 ```
 
-To build without Rust readers and writer at all:
-
-```bash
-cmake -S . -B build_cmake -Wno-dev -G "MSYS Makefiles" \
-  -DOM_RUST_RESULT_READERS=OFF -DOM_RUST_RESULT_WRITERS=OFF
-```
-
-Two larger components are off by default: `-DOM_ENABLE_RUST_SIM_RUNTIME=ON` (the
-runtime `--simCodeTarget=C+Rust` links, stable is enough) and
-`-DOM_OMC_ENABLE_RUST=ON` (the compiler as the Rust port, needs the pinned
-nightly in [Compiler/OpenModelica.rs/README.md](Compiler/OpenModelica.rs/README.md)).
+`-DOM_OMC_ENABLE_RUST=ON` (the compiler as the Rust port, off by default) needs
+the pinned nightly in [Compiler/OpenModelica.rs/README.md](Compiler/OpenModelica.rs/README.md).
 
 ### 1.5 Environment Variables
 
@@ -192,7 +180,7 @@ Windows.
 
 You can compile the OpenModelica compiler (`omc`) and the C and C++ simulation runtimes
 with the Microsoft Visual C++ compiler (MSVC). Some parts are not built with MSVC yet:
-ModelicaExternalC, the OMSI runtimes, ParModelica and PRIMME support. Compiling and
+ModelicaExternalC, ParModelica and PRIMME support. Compiling and
 simulating models with such a build may still need some work.
 
 The MSVC build that CI exercises is a cross-compile from Linux with clang-cl, including the
@@ -201,7 +189,7 @@ GUI clients built against Qt's MSVC kit. See
 The native build described here does not cover the GUI clients.
 
 This build does not use MSYS2. The dependencies (`libcurl`, `libiconv`, `gettext`,
-`pthreads`, `Lapack`, `Boost`, ...) come from the Microsoft
+`pthreads`, `Lapack`, ...) come from the Microsoft
 [vcpkg](https://github.com/microsoft/vcpkg) package manager, and all commands are run in a
 Developer PowerShell for Visual Studio. If you use Rust, select the
 `stable-x86_64-pc-windows-msvc` toolchain (see [1.4 Rust toolchain](#14-rust-toolchain)).
@@ -258,20 +246,10 @@ contents. It tells vcpkg which packages to install in
     "gettext",
     "lapack",
     "pthread",
-    "dirent",
-    "boost-program-options",
-    "boost-filesystem",
-    "boost-ublas",
-    "boost-lambda",
-    "boost-asio",
-    "boost-circular-buffer"
+    "dirent"
   ]
 }
 ```
-
-The Boost packages are for the C++ simulation runtime. Instead of getting Boost from vcpkg,
-`-DOM_FETCH_BOOST=ON` downloads and builds it as part of OpenModelica; that option is meant
-for cross builds and has not been tested with a native MSVC build.
 
 > [!NOTE]
 > This file might eventually become part of the OpenModelica repository. Until the MSVC

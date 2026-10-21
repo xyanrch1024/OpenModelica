@@ -1,0 +1,36 @@
+// name:      HGTIf1
+// keywords:  tearing, hand guided tearing
+// status:    correct
+//
+// The steady-state branch of an if-equation selected by a parameter, written in
+// the OCT style with __Modelon annotations and hold = false, is torn by hand.
+//
+
+loadFile("HGT.mo"); getErrorString();
+setCommandLineOptions("--handGuidedTearing --acceptModelonHGT -d=hgtDump"); getErrorString();
+r := simulate(HGT.SteadyStateSwitch, stopTime = 0); getErrorString();
+val(x, 0); val(y, 0);
+
+// Result:
+// true
+// ""
+// true
+// ""
+// Hand guided tearing:
+//   pair: residual equation $hgt1 (level 1, hold = false), iteration variable x (level 1, hold = false)
+//   pair: residual equation $hgt2 (level 1, hold = false), iteration variable y (level 1, hold = false)
+// Hand guided tearing matching (initialization system):
+//   block of 2 equations: residual equations {$hgt2, $hgt1}, iteration variables {x, y}
+// Hand guided tearing matching (simulation system):
+//   block of 2 equations: residual equations {$hgt1, $hgt2}, iteration variables {y, x}
+// record SimulationResult
+//     resultFile = "HGT.SteadyStateSwitch_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.SteadyStateSwitch', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// 1.5874010519681996
+// 1.2599210498948732
+// endResult

@@ -2062,12 +2062,8 @@ algorithm
         Equation.CONNECT(e1, e2, eq.scope, eq.source) :: equations;
 
     case Equation.IF()
-      algorithm
-        HandGuidedTearing.enterNested(eq, settings.hgt);
-        eql := flattenIfEquation(eq, prefix, equations, settings);
-        HandGuidedTearing.leaveNested(settings.hgt);
-      then
-        eql;
+      // the branches decide on hand guided tearing, see flattenIfEquation
+      then flattenIfEquation(eq, prefix, equations, settings);
 
     case Equation.WHEN()
       algorithm
@@ -2151,6 +2147,19 @@ algorithm
     else ();
   end match;
 end checkEqualityEquation;
+
+function flattenIfBranch
+  "Flattens the equations of a branch that stays in an if-equation, where hand
+   guided tearing annotations are not supported."
+  input list<Equation> eql;
+  input Prefix prefix;
+  input FlattenSettings settings;
+  output list<Equation> outEql;
+algorithm
+  HandGuidedTearing.enterNestedEquations(eql, settings.hgt);
+  outEql := flattenEquations(eql, prefix, settings);
+  HandGuidedTearing.leaveNested(settings.hgt);
+end flattenIfBranch;
 
 function flattenIfEquation
   input Equation eq;
@@ -2238,7 +2247,14 @@ algorithm
             // The condition is true and the branch will thus always be selected
             // if reached, so we can discard the remaining branches.
             branches := {};
-            eql := flattenEquations(eql, prefix, settings);
+
+            if listEmpty(bl) then
+              // The equations replace the if-equation, so their hand guided
+              // tearing annotations apply (e.g. a branch selected by a parameter).
+              eql := flattenEquations(eql, prefix, settings);
+            else
+              eql := flattenIfBranch(eql, prefix, settings);
+            end if;
 
             if listEmpty(bl) then
               // If we haven't collected any other branches yet, replace the if-equation with this branch.
@@ -2250,7 +2266,7 @@ algorithm
           elseif not Expression.isFalse(cond) then
             // Only add the branch to the list of branches if the condition is not
             // literal false, otherwise just drop it since it will never trigger.
-            eql := flattenEquations(eql, prefix, settings);
+            eql := flattenIfBranch(eql, prefix, settings);
             bl := Equation.makeBranch(cond, listReverseInPlace(eql), var) :: bl;
           end if;
         then

@@ -431,11 +431,22 @@ public
      Hand guided tearing annotations are not supported in such equations yet."
     input Equation eq;
     input Collector collector;
+  algorithm
+    enterNestedEquations({eq}, collector);
+  end enterNested;
+
+  function enterNestedEquations
+    "Called before equations are flattened that end up in a for-, if- or
+     when-equation, e.g. the branches of an if-equation that is not resolved."
+    input list<Equation> eqs;
+    input Collector collector;
   protected
     Pointer<Option<SourceInfo>> found_info = Pointer.create(NONE());
   algorithm
     if Pointer.access(collector.nested) == 0 then
-      Equation.apply(eq, function findAnnotation(collector = collector, foundInfo = found_info));
+      for eq in eqs loop
+        Equation.apply(eq, function findAnnotation(collector = collector, foundInfo = found_info));
+      end for;
 
       if isSome(Pointer.access(found_info)) then
         Pointer.update(collector.found, true);
@@ -449,7 +460,7 @@ public
     end if;
 
     Pointer.update(collector.nested, Pointer.access(collector.nested) + 1);
-  end enterNested;
+  end enterNestedEquations;
 
   function leaveNested
     input Collector collector;
@@ -682,13 +693,14 @@ protected
   end optAttrString;
 
   function hasHold
+    "True if any item may be held: a hold attribute that is not literally false."
     input Spec spec;
     output Boolean hold = false;
   protected
     IterationVariable var;
   algorithm
     for r in spec.residuals loop
-      if isSome(r.hold) then
+      if isHeld(r.hold) then
         hold := true;
         return;
       end if;
@@ -696,7 +708,7 @@ protected
       if isSome(r.iterationVariable) then
         SOME(var) := r.iterationVariable;
 
-        if isSome(var.hold) then
+        if isHeld(var.hold) then
           hold := true;
           return;
         end if;
@@ -704,12 +716,23 @@ protected
     end for;
 
     for v in spec.iterationVariables loop
-      if isSome(v.hold) then
+      if isHeld(v.hold) then
         hold := true;
         return;
       end if;
     end for;
   end hasHold;
+
+  function isHeld
+    input Option<Expression> hold;
+    output Boolean held;
+  algorithm
+    held := match hold
+      case SOME(Expression.BOOLEAN(value = false)) then false;
+      case SOME(_) then true;
+      else false;
+    end match;
+  end isHeld;
 
   function checkUniqueEquation
     input ResidualEquation residual;

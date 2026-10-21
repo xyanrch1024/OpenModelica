@@ -763,6 +763,7 @@ HGTError3.mo \
 HGTError4.mo \
 HGTError5.mo \
 HGTError6.mo \
+HGTIf1.mo \
 HGTLevel1.mo \
 HGTModelon1.mo \
 HGTNotSupported1.mo \

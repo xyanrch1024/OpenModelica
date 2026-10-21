@@ -71,7 +71,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 
 - `enabled`、`level`、`hold` 必须是参数表达式。`enabled` 和 `level` 在前端求值，并把用到的参数标记为结构参数。
 - `start`、`min`、`max`、`nominal` 保留为表达式。level 1 上它们只能依赖参数（错误 8006），level ≥ 2 允许依赖连续变量（OCT 的 R7）。但后端目前**只支持依赖参数的 min/max**，见 §4.7。
-- `hold` 会解析、存储，但未实现，给警告 8009 后忽略。
+- `hold` 会解析、存储，但未实现，给警告 8009 后忽略；字面量 `hold = false` 等同于默认值，不报警告。
 - 加了 `--acceptModelonHGT` 后，`__Modelon(...)` 也会读取，但只读其中的 `name`、`ResidualEquation`、`IterationVariable`、`tearingPairs`，其他内容静默忽略。
 - `merge_blt_blocks` 和 `allow_multiple_residuals_in_hgt_blocks` 在 OCT 里是编译选项，OMC 也只做成选项（见下表），**不是**注解字段。写在注解里会得到警告 8000（未知字段）。
 
@@ -132,7 +132,8 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 | 类 | `flattenClass`，`INSTANCED_CLASS` 分支，经 `collectHGTClass` | `collectClass`：只读 `tearingPairs`，配对先存进 `collector.pairs` |
 | 变量 | `flattenSimpleComponent`（注释里有注解时） | `collectVariable`：读 `IterationVariable` |
 | 方程 | `flattenEquations`，`EQUALITY` 分支（先用 `hasAnnotation` 快速判断） | `collectEquation`：读 `name` 和 `ResidualEquation`，返回打了标签的 source |
-| for、if、when | 在 `enterNested` 和 `leaveNested` 之间 | 嵌套内的注解不收集，最外层报一次警告 8007 |
+| for、when | 在 `enterNested` 和 `leaveNested` 之间 | 嵌套内的注解不收集，最外层报一次警告 8007 |
+| if | `flattenIfEquation` 按分支处理 | 条件被求值为真、分支直接替代整个 if 方程时（例如由参数选中的稳态分支），注解照常收集；仍保留在 if 方程里的分支经 `flattenIfBranch`（`enterNestedEquations`）跳过并报警告 8007 |
 | 展平结束 | `flatModel.handGuidedTearing := HandGuidedTearing.finish(settings.hgt)` | 见 §3.5 |
 
 **前缀**
@@ -168,7 +169,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 | `parseHold` | 解析 hold（目前只存储） |
 | `checkFields`、`lookupFields` | 遇到未知字段报警告 8000 |
 
-不支持的情况都是给警告、丢弃该项，然后继续：非标量 Real 的方程或变量（8007），for/if/when 内的注解（8007）。
+不支持的情况都是给警告、丢弃该项，然后继续：非标量 Real 的方程或变量（8007），for/when 内以及仍保留下来的 if 分支内的注解（8007）。
 
 ### 3.5 `finish` 与 `checkEquations`
 
@@ -178,7 +179,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 2. 解析系统级配对：引用的方程名必须已注册（否则错误 8004）；`checkUniqueEquation` 保证一个方程最多只有一个 HGT 规范（8005）。
 3. 残差按名字排序。
 4. `checkUniqueVariable`：一个变量在配对和未配对中合起来只能出现一次（8005）。
-5. 有 hold 时给警告 8009。
+5. 有 hold 且不是字面量 `false` 时给警告 8009（`isHeld`）。
 6. 打开 `-d=hgtDump` 时，用 `Spec.toString` 打印规范，以 `Hand guided tearing:` 开头。
 7. 规范为空时返回 NONE()。
 
@@ -494,6 +495,7 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | HGTError6 | `level = 0`（8001），未知字段（8000） |
 | HGTLevel1 | level 由参数给出（变成结构参数）；level 2 上允许依赖连续变量 |
 | HGTModelon1 | `--acceptModelonHGT`、hold 警告、忽略其他 `__Modelon` 内容 |
+| HGTIf1 | 由参数选中的 if 分支中的注解（`__Modelon`、`hold = false` 不报警告）；保留下来的 if 分支中的注解被忽略（8007） |
 | HGTNotSupported1 | 数组、for 循环（8007）；基类中的 `tearingPairs` 不继承 |
 | HGTSystemPair1 | 跨组件的系统级配对，分写在两个注解子句中（合并）；数组组件 `ba[2].res` |
 | HGTUnpaired1 | 子模型中的未配对项，名字带前缀 |
@@ -513,6 +515,7 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | HGTNetwork1 | 泵网络：组件级和系统级配对、设计目标、界；`m_set = 8` 时越界解被拒绝 |
 | HGTPlant1 | 热工水力例子：`__Modelon` 语法、两个块、自动补全、`enabled = false`、各属性 |
 | HGTAlgebra1 | 纯代数：多根选根、反问题、带界的未配对变量、自动补撕裂变量 |
+| HGTIf1 | OCT 风格的稳态开关：参数 `isSteadyState` 选中带 HGT 注解的稳态分支 |
 
 运行（需要先装好 omc）：
 
@@ -537,7 +540,7 @@ cd testsuite/flattening/modelica/scodeinst && ../../../rtest -v HGT*.mo
 
 - 只保证稳态模型；有状态时只给警告 8017。
 - 新后端不支持。
-- for/if/when 内的注解、数组方程和数组变量都不支持。
+- for/when 内的注解、运行时才能决定的 if 分支内的注解、数组方程和数组变量都不支持（由参数选中的 if 分支支持）。
 - `tearingPairs` 不从基类继承。
 - 只能合并同一个 EqSystem 内的块。
 - 嵌套层要求组件中都是标量方程；HpcOm 和 OMSI 不支持嵌套层。

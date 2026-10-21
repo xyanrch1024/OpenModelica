@@ -148,4 +148,17 @@ package HGT "Hand guided tearing (OCT compatible) test models, steady state"
     y2 + exp(y2) = 2 + y3 - y1 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = y2, level = 2)));
     a = 4 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = y1, level = 1)));
   end ThreeLevels;
+  model SteadyStateSwitch "OCT style: a parameter selects the dynamic or the steady-state equations"
+    parameter Boolean isSteadyState = true;
+    Real x(start = 1);
+    Real y(start = 1);
+  equation
+    if not isSteadyState then
+      der(x) = -x + y * y;
+      der(y) = x * x - 2 * y;
+    else
+      0 = -x + y * y annotation(__Modelon(ResidualEquation(iterationVariable(hold = false) = x, hold = false)));
+      0 = x * x - 2 * y annotation(__Modelon(ResidualEquation(iterationVariable(hold = false) = y, hold = false)));
+    end if;
+  end SteadyStateSwitch;
 end HGT;

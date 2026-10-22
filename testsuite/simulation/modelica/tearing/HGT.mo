@@ -161,4 +161,13 @@ package HGT "Hand guided tearing (OCT compatible) test models, steady state"
       0 = x * x - 2 * y annotation(__Modelon(ResidualEquation(iterationVariable(hold = false) = y, hold = false)));
     end if;
   end SteadyStateSwitch;
+
+  model InitialPair "a pair on an initial equation only applies to the initialization system"
+    Real x(start = 1, fixed = false);
+    parameter Real p = 2;
+  initial equation
+    x * x = p annotation(__OpenModelica_HGT(name = initialBalance, ResidualEquation(iterationVariable = x)));
+  equation
+    der(x) = -x;
+  end InitialPair;
 end HGT;

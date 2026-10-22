@@ -150,6 +150,7 @@ uniontype HGTSpec "The hand guided tearing specification collected by the fronte
   record HGT_SPEC
     list<.DAE.HGTResidual> residuals "paired and unpaired residual equations";
     list<.DAE.HGTIterationVariable> iterationVariables "unpaired iteration variables";
+    list<String> initialResiduals "names of the residual equations that are initial equations";
   end HGT_SPEC;
 end HGTSpec;
 

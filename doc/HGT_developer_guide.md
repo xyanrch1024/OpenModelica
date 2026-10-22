@@ -164,7 +164,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 | `parsePair` | 解析 `Pair(...)`；`residualEquation = 名字` 通过 `Dump.printComponentRefStr` 取文本 |
 | `parsePairedIterationVariable`、`parseUnpairedIterationVariable` | 解析两种迭代变量写法；配对里的变量继承所在记录的 level |
 | `resolveIterationVariable` | 实例化变量引用，检查它是标量 Real 的连续变量（错误 8002） |
-| `parseRealAttribute` | 解析 start/min/max/nominal：Integer 转成 Real，level 1 上不许依赖连续变量（8006） |
+| `parseRealAttribute` | 解析 start/min/max/nominal：Integer 转成 Real，level 1 上不许依赖连续变量（8006）；编译期能求值的 nominal 必须为正（`checkPositive`，8001），否则缩放时会除以 0 |
 | `evalBoolean`、`evalLevel`、`evalParameterExp` | 求值 `enabled` 和 `level`（level ≥ 1），用 `Structural.markExp` 把相关参数标为结构参数 |
 | `parseHold` | 解析 hold（目前只存储） |
 | `checkFields`、`lookupFields` | 遇到未知字段报警告 8000 |
@@ -193,13 +193,14 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 
 ### 4.1 数据进入后端
 
-- `BackendDAE.Shared.SHARED` 最后新增字段 `Option<HGTSpec> handGuidedTearing`，其中 `HGTSpec.HGT_SPEC(residuals, iterationVariables)` 直接复用 DAE 的记录。
+- `BackendDAE.Shared.SHARED` 最后新增字段 `Option<HGTSpec> handGuidedTearing`，其中 `HGTSpec.HGT_SPEC(residuals, iterationVariables, initialResiduals)` 的前两项直接复用 DAE 的记录，`initialResiduals` 是写在 initial equation 里的残差方程名。
 - `BackendDAECreate.lower` 在 `lower2` 之后调用 `HandGuidedTearing.lower(elems, varlst, eqns, ieqns)`；`lower2` 遇到 `DAE.HAND_GUIDED_TEARING` 直接跳过。
 - 初始化系统在 `Initialization.mo` 中用 `BackendDAEUtil.setSharedHandGuidedTearing` 复制这个规范。
-- `HandGuidedTearing.lower` 做三件事：
+- `HandGuidedTearing.lower` 做四件事：
   1. `findSpec` 找到规范元素（会递归进 `DAE.COMP`）。
   2. 对所有迭代变量（配对的和未配对的）调用 `lowerVariable`：设为不可替换（`setVarUnreplaceable`），有 start 或 nominal 就写进变量属性。
   3. 对带 nominal 的残差方程调用 `scaleResidual`，把 `lhs = rhs` 改写成 `0 = (lhs - rhs)/nominal`。这对 `eqns` 和 `ieqns` 都做。
+  4. 记下 `ieqns` 中带标签的方程名，存进 `initialResiduals`。仿真 DAE 在后优化之前就清空了 `shared.initialEqs`（`Initialization.removeInitializationStuff`），所以只能在这里记。
 - 识别 HGT 方程只靠 §3.3 的标签：
   - `equationName` 从方程 source 的注释中读出 `__OpenModelica_HGTEquation`；
   - `isTaggedEquation`、`anyTaggedEquation` 在它的基础上实现；
@@ -229,8 +230,11 @@ HGT 方程必须原样保留到撕裂阶段，迭代变量也不能被消掉。�
 **入口** `hgtMatching`：
 
 - HGT 不活跃时直接返回。
-- 只对仿真系统（`isSimulationDAE`）调用 `checkPresence`：
-  - 统计所有系统的 `orderedEqs` 加上 `shared.initialEqs` 中各标签出现的次数，不是 1 次就报错误 8011；
+- 对仿真系统（`isSimulationDAE`）先调用 `simulationSpec`，去掉只属于初始化系统的项，并写回仿真 DAE 的 `shared`（Tearing 读的就是它）：
+  - `initialResiduals` 中的残差方程，连同与它配对的迭代变量；
+  - 某个 level 上的未配对残差全是初始方程时，这个 level 的未配对迭代变量。
+- 然后只对仿真系统调用 `checkPresence`：
+  - 统计所有系统的 `orderedEqs` 中各标签出现的次数，不是 1 次就报错误 8011；
   - 迭代变量不在任何系统里，报错误 8012；
   - 模型有状态变量时，给警告 8017（只保证稳态）。
 - 然后对每个 EqSystem 调用 `matchSystem`。
@@ -493,6 +497,8 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | HGTError4 | level 1 上的 max 依赖连续变量（8006） |
 | HGTError5 | 同一变量既配对又未配对（8005） |
 | HGTError6 | `level = 0`（8001），未知字段（8000） |
+| HGTError7 | 残差的 `nominal = 0`（8001） |
+| HGTError8 | 迭代变量的 nominal 由值为负的参数给出（8001） |
 | HGTLevel1 | level 由参数给出（变成结构参数）；level 2 上允许依赖连续变量 |
 | HGTModelon1 | `--acceptModelonHGT`、hold 警告、忽略其他 `__Modelon` 内容 |
 | HGTIf1 | 由参数选中的 if 分支中的注解（`__Modelon`、`hold = false` 不报警告）；保留下来的 if 分支中的注解被忽略（8007） |
@@ -516,6 +522,7 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | HGTPlant1 | 热工水力例子：`__Modelon` 语法、两个块、自动补全、`enabled = false`、各属性 |
 | HGTAlgebra1 | 纯代数：多根选根、反问题、带界的未配对变量、自动补撕裂变量 |
 | HGTIf1 | OCT 风格的稳态开关：参数 `isSteadyState` 选中带 HGT 注解的稳态分支 |
+| HGTInit1 | initial equation 上的配对只用于初始化系统，仿真系统中没有这个配对 |
 
 运行（需要先装好 omc）：
 

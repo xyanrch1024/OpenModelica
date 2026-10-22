@@ -1005,12 +1005,42 @@ protected
           if Type.isInteger(ty) then
             exp := Expression.typeCast(exp, Type.REAL());
           end if;
+
+          // A nominal scales a residual or an iteration variable, so it must be
+          // positive; checked here whenever it can be evaluated.
+          if attrName == "nominal" and var <= Variability.PARAMETER then
+            checkPositive(exp, aexp, attrName, info);
+          end if;
         then
           SOME(flattenFn(exp));
 
       else NONE();
     end match;
   end parseRealAttribute;
+
+  function checkPositive
+    input Expression exp;
+    input Absyn.Exp aexp;
+    input String attrName;
+    input SourceInfo info;
+  protected
+    Boolean positive;
+    Real r;
+    Integer i;
+  algorithm
+    positive := match Ceval.tryEvalExp(exp)
+      case Expression.REAL(value = r) then r > 0.0;
+      case Expression.INTEGER(value = i) then i > 0;
+      // Not known at compile time.
+      else true;
+    end match;
+
+    if not positive then
+      Error.addSourceMessage(Error.HGT_INVALID_VALUE,
+        {Dump.printExpStr(aexp), attrName, "it must be positive"}, info);
+      fail();
+    end if;
+  end checkPositive;
 
   function parseHold
     "Parses the optional hold field, which must be a Boolean parameter expression."

@@ -123,6 +123,11 @@ algorithm
     eqns := list(scaleResidual(e, nominal_map) for e in eqns);
     initialEqns := list(scaleResidual(e, nominal_map) for e in initialEqns);
   end if;
+
+  // The initial equations are gone from the simulation DAE when hgtMatching
+  // runs, remember which residual equations they were.
+  s.initialResiduals := list(Util.getOption(n) for n guard isSome(n) in list(equationName(e) for e in initialEqns));
+  spec := SOME(s);
 end lower;
 
 function iterationVariableBounds
@@ -225,11 +230,35 @@ algorithm
   SOME(spec) := inDAE.shared.handGuidedTearing;
 
   if BackendDAEUtil.isSimulationDAE(inDAE.shared) then
-    checkPresence(inDAE, spec);
+    spec := simulationSpec(spec);
+    outDAE.shared := BackendDAEUtil.setSharedHandGuidedTearing(outDAE.shared, SOME(spec));
+    checkPresence(outDAE, spec);
   end if;
 
-  outDAE := BackendDAEUtil.mapEqSystem(inDAE, function matchSystem(spec = spec));
+  outDAE := BackendDAEUtil.mapEqSystem(outDAE, function matchSystem(spec = spec));
 end hgtMatching;
+
+function simulationSpec
+  "Removes the items that only apply to the initialization system from the
+   specification: the residual equations that are initial equations, their
+   iteration variables, and the unpaired iteration variables of the levels whose
+   unpaired residual equations are all initial equations."
+  input output BackendDAE.HGTSpec spec;
+protected
+  list<Integer> init_levels, sim_levels;
+algorithm
+  if listEmpty(spec.initialResiduals) then
+    return;
+  end if;
+
+  init_levels := list(r.level for r guard isNone(r.iterationVariable) and
+    listMember(r.name, spec.initialResiduals) in spec.residuals);
+  spec.residuals := list(r for r guard not listMember(r.name, spec.initialResiduals) in spec.residuals);
+  sim_levels := list(r.level for r guard isNone(r.iterationVariable) in spec.residuals);
+  spec.iterationVariables := list(v for v guard not (listMember(v.level, init_levels) and
+    not listMember(v.level, sim_levels)) in spec.iterationVariables);
+  spec.initialResiduals := {};
+end simulationSpec;
 
 // ============================================================================
 // Tearing support
@@ -383,7 +412,7 @@ function findSpec
 algorithm
   for e in elements loop
     spec := match e
-      case DAE.HAND_GUIDED_TEARING() then SOME(BackendDAE.HGT_SPEC(e.residuals, e.iterationVariables));
+      case DAE.HAND_GUIDED_TEARING() then SOME(BackendDAE.HGT_SPEC(e.residuals, e.iterationVariables, {}));
       case DAE.COMP() then findSpec(e.dAElist);
       else NONE();
     end match;
@@ -515,9 +544,6 @@ algorithm
     countTags(syst.orderedEqs, counts);
     has_states := has_states or List.any(BackendVariable.varList(syst.orderedVars), BackendVariable.isStateVar);
   end for;
-
-  // Residual equations can also be initial equations.
-  countTags(dae.shared.initialEqs, counts);
 
   for r in spec.residuals loop
     count := UnorderedMap.getOrDefault(r.name, counts, 0);

@@ -225,6 +225,8 @@ HGT 方程必须原样保留到撕裂阶段，迭代变量也不能被消掉。�
 
 ### 4.3 `hgtMatching` 模块
 
+> §4.3–§4.5 的逐段讲解、例子和读代码顺序见 [HGT_matching_and_tearing.md](HGT_matching_and_tearing.md)。
+
 **注册**（`BackendDAEUtil.mo`）：放在 `allPostOptimizationModules` 和 `allInitOptimizationModules` 里，紧挨在 `tearingSystem` 之前。打开 `--handGuidedTearing` 时，`getPostOptModules` 和 `getInitOptModules` 会自动启用它，不需要用户再加 `--postOptModules+=`。`causalizeDAE` 只会重新匹配状态为 `NO_MATCHING` 的系统，所以这里写入的匹配能一直保留到 `tearingSystem`。
 
 **入口** `hgtMatching`：

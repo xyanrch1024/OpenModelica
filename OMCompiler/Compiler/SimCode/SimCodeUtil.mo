@@ -3873,7 +3873,7 @@ protected
   BackendDAE.StrongComponent comp;
   list<SimCode.SimEqSystem> simequations;
   DoubleEnded.MutableList<SimCode.SimEqSystem> equations;
-  BackendDAE.Constraints cons;
+  BackendDAE.Constraints constraints;
 algorithm
   if listEmpty(innerEquations) then
     equations_ := isimequations;
@@ -3894,7 +3894,7 @@ algorithm
     end if;
 
     // get Eqn
-    (eqnindx, vars, cons) := BackendDAEUtil.getEqnAndVarsFromInnerEquation(eq);
+    (eqnindx, vars, constraints) := BackendDAEUtil.getEqnAndVarsFromInnerEquation(eq);
     nVars := nVars + listLength(vars);
     eqn := BackendEquation.get(eqns, eqnindx);
     if not homotopySupport then
@@ -3903,13 +3903,13 @@ algorithm
     // generate comp
     comp := createTornSystemInnerEqns1(eqn, eqnindx, vars);
 
-    if dynamicTearingSet or listEmpty(cons) then
-      (simequations, _, ouniqueEqIndex, otempvars) := createEquationsWork(genDiscrete, false, genDiscrete, skipDiscInAlgorithm, isyst, ishared, comp, ouniqueEqIndex, otempvars, cons);
+    if dynamicTearingSet or listEmpty(constraints) then
+      (simequations, _, ouniqueEqIndex, otempvars) := createEquationsWork(genDiscrete, false, genDiscrete, skipDiscInAlgorithm, isyst, ishared, comp, ouniqueEqIndex, otempvars, constraints);
     else
       // Constraints of the main tearing set (hand guided tearing): check them
       // after the equation is solved.
       (simequations, _, ouniqueEqIndex, otempvars) := createEquationsWork(genDiscrete, false, genDiscrete, skipDiscInAlgorithm, isyst, ishared, comp, ouniqueEqIndex, otempvars, {});
-      asserts := list(constraintAssert(c, eqn, vars, isyst) for c in cons);
+      asserts := list(constraintAssert(c, eqn, vars, isyst) for c in constraints);
       DoubleEnded.push_list_back(equations, simequations);
       simequations := {SimCode.SES_ALGORITHM(ouniqueEqIndex, asserts, BackendDAE.EQ_ATTR_DEFAULT_UNKNOWN)};
       ouniqueEqIndex := ouniqueEqIndex + 1;

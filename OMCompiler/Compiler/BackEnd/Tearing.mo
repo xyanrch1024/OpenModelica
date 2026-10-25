@@ -5980,7 +5980,14 @@ protected function hgtOnlyGroupVars
   input Integer row;
   input BackendDAE.AdjacencyMatrix m;
   input list<Integer> groupVars;
-  output Boolean b = List.all(m[row], function listMember(lst = groupVars));
+  output Boolean b = true;
+algorithm
+  for v in m[row] loop
+    if not listMember(v, groupVars) then
+      b := false;
+      return;
+    end if;
+  end for;
 end hgtOnlyGroupVars;
 
 protected function hgtNestedGroups

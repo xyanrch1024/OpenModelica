@@ -2035,7 +2035,7 @@ algorithm
 
         if HandGuidedTearing.hasAnnotation(eq.source) then
           eq.source := HandGuidedTearing.collectEquation(eq.source,
-            Type.isReal(ty) and Type.isScalar(ty), eq.scope, prefixString(prefix),
+            Type.isReal(ty) and Type.isScalar(ty), Equation.scope(eq), prefixString(prefix),
             function flattenExp(prefix = prefix, info = info), settings.hgt);
         end if;
       then

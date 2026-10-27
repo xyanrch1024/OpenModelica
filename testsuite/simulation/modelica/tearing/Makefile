@@ -9,6 +9,7 @@ HGTInit1.mos \
 HGTLevel1.mos \
 HGTLevel2.mos \
 HGTNetwork1.mos \
+HGTOnly1.mos \
 HGTPair1.mos \
 HGTParallel1.mos \
 HGTPair2.mos \

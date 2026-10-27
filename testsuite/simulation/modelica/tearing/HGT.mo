@@ -170,4 +170,27 @@ package HGT "Hand guided tearing (OCT compatible) test models, steady state"
   equation
     der(x) = -x;
   end InitialPair;
+
+  model OnlySolvable "--hgtOnly: the other equations can be solved with the given iteration variable"
+    Real x(start = 1), y, z;
+  equation
+    y = exp(x);
+    z = y ^ 2 + x;
+    z - 10 = 0 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = x)));
+  end OnlySolvable;
+
+  model OnlyStuck "--hgtOnly: z + sin(z) = y can not be solved for z, no iteration variable is added"
+    Real x(start = 1), y, z(start = 1);
+  equation
+    y = exp(x);
+    z + sin(z) = y;
+    z * x = 2 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = x)));
+  end OnlyStuck;
+
+  model OnlyUnmatched "--hgtOnly: the pair takes b, the only variable of b^3 + b = 2, so no residual equation is added"
+    Real a(start = 1), b(start = 1);
+  equation
+    b ^ 3 + b = 2;
+    a * a + b = 5 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = b)));
+  end OnlyUnmatched;
 end HGT;

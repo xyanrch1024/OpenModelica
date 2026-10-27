@@ -56,6 +56,7 @@ import Array;
 import AvlTreePathFunction;
 import BackendDAEUtil;
 import BackendDAETransform;
+import BackendDump;
 import BackendEquation;
 import BackendVariable;
 import ComponentReference;
@@ -734,6 +735,19 @@ algorithm
 
   if listLength(free_rows) <> listLength(free_vars) then
     Error.addInternalError(getInstanceName() + ": the system is not square", sourceInfo());
+    fail();
+  end if;
+
+  if not listEmpty(free_rows) and Flags.getConfigBool(Flags.HGT_ONLY) then
+    Error.addMessage(Error.HGT_NOT_SOLVABLE, {
+      stringDelimitList(list(Util.getOptionOrDefault(equationName(BackendEquation.get(syst.orderedEqs, Util.tuple22(p))), "")
+        for p in pairs), ", ") + (if listEmpty(pairs) or listEmpty(unpaired_eqns) then "" else ", ") +
+      stringDelimitList(list(Util.getOptionOrDefault(equationName(BackendEquation.get(syst.orderedEqs, Util.tuple21(u))), "")
+        for u in unpaired_eqns), ", "),
+      "no matching exists for the equations {" + stringDelimitList(list(BackendDump.equationString(
+        BackendEquation.get(syst.orderedEqs, map_row_eqn[row])) for row in free_rows), "; ") +
+      "} and the variables {" + stringDelimitList(list(crefString(BackendVariable.varCref(
+        BackendVariable.getVarAt(syst.orderedVars, var))) for var in free_vars), ", ") + "}"});
     fail();
   end if;
 

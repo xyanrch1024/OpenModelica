@@ -5895,6 +5895,15 @@ algorithm
     if listEmpty(unassigned) then
       finished := true;
     else
+      if Flags.getConfigBool(Flags.HGT_ONLY) then
+        Error.addMessage(Error.HGT_NOT_SOLVABLE, {hgtResidualNames(outer_res, eindex, isyst),
+          "the equations {" + stringDelimitList(list(BackendDump.equationString(
+            BackendEquation.get(eqns, map_row_eqn[r])) for r guard arrayGet(ass2, r) < 0 in 1:size), "; ") +
+          "} can not be solved for the variables {" + stringDelimitList(list(ComponentReferenceBasics.printComponentRefStr(
+            BackendVariable.varCref(listGet(var_lst, v))) for v in unassigned), ", ") + "}"});
+        fail();
+      end if;
+
       candidates := list(v for v guard not is_group_var[v] in unassigned);
 
       if listEmpty(candidates) then

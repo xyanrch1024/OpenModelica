@@ -1,0 +1,76 @@
+// name:      HGTOnly1
+// keywords:  tearing, hand guided tearing
+// status:    correct
+//
+// --hgtOnly tears the hand guided tearing blocks only with the given items: a
+// block that needs an additional iteration variable or residual equation is an
+// error. Without --hgtOnly the same models are torn automatically.
+//
+
+loadFile("HGT.mo"); getErrorString();
+setCommandLineOptions("--handGuidedTearing --hgtOnly"); getErrorString();
+r := simulate(HGT.OnlySolvable, stopTime = 0); getErrorString();
+val(x, 0);
+r := simulate(HGT.OnlyStuck, stopTime = 0); getErrorString();
+r := simulate(HGT.OnlyUnmatched, stopTime = 0); getErrorString();
+
+setCommandLineOptions("--hgtOnly=false"); getErrorString();
+r := simulate(HGT.OnlyStuck, stopTime = 0); getErrorString();
+val(x, 0);
+r := simulate(HGT.OnlyUnmatched, stopTime = 0); getErrorString();
+val(a, 0);
+
+// Result:
+// true
+// ""
+// true
+// ""
+// record SimulationResult
+//     resultFile = "HGT.OnlySolvable_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.OnlySolvable', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// 1.0933964848075355
+// record SimulationResult
+//     resultFile = "",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.OnlyStuck', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "Failed to build model: HGT.OnlyStuck"
+// end SimulationResult;
+// "Error: The hand guided tearing block with the residual equations {$hgt1} can not be solved with the given iteration variables: the equations {z + sin(z) = y} can not be solved for the variables {z}. --hgtOnly does not allow additional iteration variables or residual equations.
+// [BackEnd/Tearing.mo:0:0-0:0:writable] Error: Internal error Tearing.tearingSystem failed
+// Error: post-optimization module tearingSystem (initialization) failed.
+// Error: No system for the symbolic initialization was generated
+// "
+// record SimulationResult
+//     resultFile = "",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.OnlyUnmatched', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "Failed to build model: HGT.OnlyUnmatched"
+// end SimulationResult;
+// "Error: The hand guided tearing block with the residual equations {$hgt1} can not be solved with the given iteration variables: no matching exists for the equations {b ^ 3.0 + b = 2.0} and the variables {a}. --hgtOnly does not allow additional iteration variables or residual equations.
+// Error: post-optimization module hgtMatching (initialization) failed.
+// Error: No system for the symbolic initialization was generated
+// "
+// true
+// ""
+// record SimulationResult
+//     resultFile = "HGT.OnlyStuck_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.OnlyStuck', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// 1.0480018508648195
+// record SimulationResult
+//     resultFile = "HGT.OnlyUnmatched_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.OnlyUnmatched', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// 2.0
+// endResult

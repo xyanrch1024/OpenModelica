@@ -166,6 +166,7 @@ for var in spec.iterationVariables:
 6. **兜底**：仍未匹配的行和变量（`free_rows`、`free_vars`）按顺序一对一配上，记作 `auto_rows`。
    - 这些配对同样是占位。Tearing 中它们会变成自动选出的残差和迭代变量，也就是 OCT 说的 "the automatic algorithm will kick in"。
    - 剩余的行数和变量数不等时，说明系统不是方阵，报内部错误。
+   - 开了 `--hgtOnly` 时不做兜底：只要有剩余项就报 8018，列出匹配不上的方程和变量。
 
 #### ④ 强制合并（addRing）
 
@@ -258,7 +259,7 @@ while not finished:
   否则      → 从不属于内层块的未知变量中选一个，补作迭代变量（selectAdditionalTearingVar），重来
 ```
 
-`selectAdditionalTearingVar` 选在未分配方程中出现次数最多的连续变量，离散变量不会被选。如果剩下的都是内层块的变量，说明内层块的输入算不出来，报 8020。
+`selectAdditionalTearingVar` 选在未分配方程中出现次数最多的连续变量，离散变量不会被选。开了 `--hgtOnly` 时不补变量，直接报 8018，列出解不出的方程和变量。如果剩下的都是内层块的变量，说明内层块的输入算不出来，报 8020。
 
 每补一个迭代变量就**从头**再因果化一遍。补的变量通常很少，而且从头做逻辑最简单，不容易出错。
 
@@ -427,6 +428,7 @@ omc HGTPair1.mos
 | `HGTSystem1` | 未配对项，`bindUnpaired` |
 | `HGTLevel1`、`HGTLevel2` | 两层、三层嵌套 |
 | `HGTPlant1`、`HGTAlgebra1` | 自动补全（`auto_rows`、`selectAdditionalTearingVar`） |
+| `HGTOnly1` | `--hgtOnly`：不自动补全，解不出就报 8018 |
 | `HGTSolve1` | casual 可解性与伪根约束 |
 | `HGTInit1` | 只在初始化系统生效的配对 |
 

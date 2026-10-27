@@ -1230,6 +1230,8 @@ public constant ErrorTypes.Message HGT_RESIDUAL_INDEPENDENT = ErrorTypes.MESSAGE
   "The hand guided tearing residual equation '%s' does not depend on its iteration variable %s.");
 public constant ErrorTypes.Message HGT_ONLY_STEADY_STATE = ErrorTypes.MESSAGE(8017, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),
   "Hand guided tearing is only supported for steady-state models, using it for a model with states is untested and has undefined behavior.");
+public constant ErrorTypes.Message HGT_NOT_SOLVABLE = ErrorTypes.MESSAGE(8018, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+  "The hand guided tearing block with the residual equations {%s} can not be solved with the given iteration variables: %s. --hgtOnly does not allow additional iteration variables or residual equations.");
 public constant ErrorTypes.Message HGT_MIN_MAX_NOT_SUPPORTED = ErrorTypes.MESSAGE(8019, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),
   "The %s attribute of the hand guided tearing iteration variable %s depends on variables (%s). Such adaptive bounds are not supported yet and are ignored.");
 public constant ErrorTypes.Message HGT_TEARING_FAILED = ErrorTypes.MESSAGE(8020, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),

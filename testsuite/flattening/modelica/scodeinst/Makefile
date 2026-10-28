@@ -766,6 +766,7 @@ HGTError6.mo \
 HGTError7.mo \
 HGTError8.mo \
 HGTError9.mo \
+HGTFor1.mo \
 HGTIf1.mo \
 HGTLevel1.mo \
 HGTModelon1.mo \

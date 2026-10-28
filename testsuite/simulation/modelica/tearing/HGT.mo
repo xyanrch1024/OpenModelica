@@ -185,4 +185,35 @@ package HGT "Hand guided tearing (OCT compatible) test models, steady state"
     b ^ 3 + b = 2;
     a * a + b = 5 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = b)));
   end OnlyUnmatched;
+
+  model ForPipe "pipe of n segments in a for-loop: segment i is the residual equation of the pressure behind it"
+    parameter Integer n = 4;
+    parameter Real k[n] = {2, 3, 4, 5};
+    parameter Real p_in = 10, p_out = 1;
+    Real p[n + 1];
+    Real m(start = 1);
+  equation
+    p[1] = p_in;
+    p[n + 1] = p_out;
+    for i in 1:n - 1 loop
+      m = k[i] * sqrt(p[i] - p[i + 1]) annotation(__OpenModelica_HGT(name = seg,
+        ResidualEquation(iterationVariable(start = p_in - 2 * i) = p[i + 1])));
+    end for;
+    m = k[n] * sqrt(p[n] - p[n + 1]) annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = m)));
+  end ForPipe;
+
+  model ForPipeScalar "ForPipe written out"
+    parameter Integer n = 4;
+    parameter Real k[n] = {2, 3, 4, 5};
+    parameter Real p_in = 10, p_out = 1;
+    Real p[n + 1];
+    Real m(start = 1);
+  equation
+    p[1] = p_in;
+    p[n + 1] = p_out;
+    m = k[1] * sqrt(p[1] - p[2]) annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable(start = 8) = p[2])));
+    m = k[2] * sqrt(p[2] - p[3]) annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable(start = 6) = p[3])));
+    m = k[3] * sqrt(p[3] - p[4]) annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable(start = 4) = p[4])));
+    m = k[4] * sqrt(p[4] - p[5]) annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = m)));
+  end ForPipeScalar;
 end HGT;

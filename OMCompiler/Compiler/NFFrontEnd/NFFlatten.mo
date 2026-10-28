@@ -2043,15 +2043,15 @@ algorithm
 
     case Equation.FOR()
       algorithm
-        HandGuidedTearing.enterNested(eq, settings.hgt);
-
+        // An unrolled loop is a list of equations, each with its own hand guided
+        // tearing items (see unrollForLoop), a loop that stays a loop can't have any.
         if settings.scalarize then
           eql := unrollForLoop(eq, prefix, equations, settings);
         else
+          HandGuidedTearing.enterNested(eq, settings.hgt);
           eql := splitForLoop(eq, prefix, equations, settings);
+          HandGuidedTearing.leaveNested(settings.hgt);
         end if;
-
-        HandGuidedTearing.leaveNested(settings.hgt);
       then eql;
 
     case Equation.CONNECT()
@@ -2341,7 +2341,9 @@ algorithm
   while RangeIterator.hasNext(range_iter) loop
     (range_iter, val) := RangeIterator.next(range_iter);
     unrolled_body := Equation.replaceIteratorList(body, iter, val);
+    HandGuidedTearing.enterIteration(InstNode.name(iter), val, settings.hgt);
     unrolled_body := flattenEquations(unrolled_body, prefix, settings);
+    HandGuidedTearing.leaveIteration(settings.hgt);
     equations := listAppend(unrolled_body, equations);
   end while;
 end unrollForLoop;

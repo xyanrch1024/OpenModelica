@@ -45,6 +45,6 @@ end HGTIf1;
 //     z = y;
 //   end if;
 // end HGTIf1;
-// [flattening/modelica/scodeinst/HGTIf1.mo:24:5-24:82:writable] Warning: The hand guided tearing annotation is ignored: annotations in for-, if- and when-equations are not supported yet.
+// [flattening/modelica/scodeinst/HGTIf1.mo:24:5-24:82:writable] Warning: The hand guided tearing annotation is ignored: annotations in when-equations, in if-equations that are not resolved and in for-loops that are not unrolled are not supported.
 //
 // endResult

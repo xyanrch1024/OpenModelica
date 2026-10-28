@@ -220,6 +220,8 @@ public
       Pointer<list<ResidualEquation>> pairs "Pairs from tearingPairs, the equations are checked by finish.";
       Pointer<list<IterationVariable>> iterationVariables "Unpaired iteration variables, collected to report them as errors.";
       Pointer<Integer> nameIndex "Used to name residual equations that have no name.";
+      Pointer<list<tuple<String, Expression>>> iterators "The values of the enclosing for-loop iterators, innermost first.";
+      UnorderedMap<String, String> loopNames "The generated names of unnamed equations in for-loops, by prefix and position.";
     end COLLECTOR;
 
     function new
@@ -234,7 +236,9 @@ public
         UnorderedMap.new<ResidualEquation>(stringHashDjb2, stringEq),
         Pointer.create({}),
         Pointer.create({}),
-        Pointer.create(0));
+        Pointer.create(0),
+        Pointer.create({}),
+        UnorderedMap.new<String>(stringHashDjb2, stringEq));
     end new;
   end Collector;
 
@@ -271,6 +275,7 @@ public
     Option<ResidualEquation> residual;
     String name;
     SourceInfo info = ElementSource.getInfo(source);
+    list<tuple<String, Expression>> iterators;
   algorithm
     mods := getHGTMods(ElementSource.getComments(source), collector);
 
@@ -308,11 +313,23 @@ public
       return;
     end if;
 
+    iterators := Pointer.access(collector.iterators);
+
     if isSome(opt_name) then
       name := prefixName(prefix, Util.getOption(opt_name));
     else
-      Pointer.update(collector.nameIndex, Pointer.access(collector.nameIndex) + 1);
-      name := prefixName(prefix, "$hgt" + intString(Pointer.access(collector.nameIndex)));
+      name := generateName(prefix, iterators, info, collector);
+    end if;
+
+    // In a for-loop each iteration is an equation of its own: the name gets the
+    // iterator values as subscripts and the annotation is evaluated with them.
+    if not listEmpty(iterators) then
+      name := name + "[" + stringDelimitList(list(Expression.toString(Util.tuple22(it))
+        for it in listReverse(iterators)), ",") + "]";
+
+      if isSome(res_mod) then
+        res_mod := SOME(substituteIterators(Util.getOption(res_mod), iterators));
+      end if;
     end if;
 
     if UnorderedMap.contains(name, collector.equationNames) then
@@ -426,9 +443,26 @@ public
     end for;
   end collectClass;
 
+  function enterIteration
+    "Called before the body of a for-loop is flattened for one value of its
+     iterator, when the loop is unrolled."
+    input String iterator;
+    input Expression value;
+    input Collector collector;
+  algorithm
+    Pointer.update(collector.iterators, (iterator, value) :: Pointer.access(collector.iterators));
+  end enterIteration;
+
+  function leaveIteration
+    input Collector collector;
+  algorithm
+    Pointer.update(collector.iterators, listRest(Pointer.access(collector.iterators)));
+  end leaveIteration;
+
   function enterNested
-    "Called before the body of a for-, if- or when-equation is flattened.
-     Hand guided tearing annotations are not supported in such equations yet."
+    "Called before the body of an if- or when-equation (or a for-loop that is not
+     unrolled) is flattened. Hand guided tearing annotations are not supported in
+     such equations."
     input Equation eq;
     input Collector collector;
   algorithm
@@ -453,7 +487,7 @@ public
 
         if collector.enabled then
           Error.addSourceMessage(Error.HGT_NOT_SUPPORTED,
-            {"annotations in for-, if- and when-equations are not supported yet"},
+            {"annotations in when-equations, in if-equations that are not resolved and in for-loops that are not unrolled are not supported"},
             Util.getOption(Pointer.access(found_info)));
         end if;
       end if;
@@ -661,6 +695,84 @@ protected
     input Option<Integer> count;
     output Integer outCount = Util.getOptionOrDefault(count, 0) + 1;
   end incrementCount;
+
+  function generateName
+    "Returns the name of a residual equation that has none. An equation in a
+     for-loop gets the same name in each iteration, the caller adds the iterator
+     values as subscripts."
+    input String prefix;
+    input list<tuple<String, Expression>> iterators;
+    input SourceInfo info;
+    input Collector collector;
+    output String name;
+  protected
+    String key = "";
+    Option<String> opt_name;
+  algorithm
+    if not listEmpty(iterators) then
+      key := prefix + "@" + info.fileName + ":" + intString(info.lineNumberStart) + ":" + intString(info.columnNumberStart);
+      opt_name := UnorderedMap.get(key, collector.loopNames);
+
+      if isSome(opt_name) then
+        SOME(name) := opt_name;
+        return;
+      end if;
+    end if;
+
+    Pointer.update(collector.nameIndex, Pointer.access(collector.nameIndex) + 1);
+    name := prefixName(prefix, "$hgt" + intString(Pointer.access(collector.nameIndex)));
+
+    if not listEmpty(iterators) then
+      UnorderedMap.add(key, name, collector.loopNames);
+    end if;
+  end generateName;
+
+  function substituteIterators
+    "Replaces the for-loop iterators in the expressions of an annotation by
+     their current values."
+    input output SCode.Mod mod;
+    input list<tuple<String, Expression>> iterators;
+  algorithm
+    mod := match mod
+      case SCode.MOD()
+        algorithm
+          mod.binding := Util.applyOption(mod.binding, function substituteIteratorsExp(iterators = iterators));
+          mod.subModLst := list(SCode.NAMEMOD(sm.ident, substituteIterators(sm.mod, iterators)) for sm in mod.subModLst);
+        then
+          mod;
+
+      else mod;
+    end match;
+  end substituteIterators;
+
+  function substituteIteratorsExp
+    input output Absyn.Exp exp;
+    input list<tuple<String, Expression>> iterators;
+  algorithm
+    (exp, _) := AbsynUtil.traverseExp(exp, substituteIterator, iterators);
+  end substituteIteratorsExp;
+
+  function substituteIterator
+    input output Absyn.Exp exp;
+    input output list<tuple<String, Expression>> iterators;
+  protected
+    String id;
+  algorithm
+    id := match exp
+      case Absyn.CREF(componentRef = Absyn.CREF_IDENT(name = id, subscripts = {})) then id;
+      else "";
+    end match;
+
+    // The innermost iterator of a name shadows the outer ones.
+    if not stringEmpty(id) then
+      for it in iterators loop
+        if Util.tuple21(it) == id then
+          exp := Expression.toAbsyn(Util.tuple22(it));
+          break;
+        end if;
+      end for;
+    end if;
+  end substituteIterator;
 
   function makeEquationTag
     input String name;
@@ -972,8 +1084,10 @@ protected
     (exp, ty, var) := Typing.typeExp(exp, CONTEXT, info);
     exp := flattenFn(exp);
 
+    // Subscripts must be known to identify the variable, e.g. p[i + 1] in a
+    // for-loop with the iterator replaced by its value.
     name := match exp
-      case Expression.CREF() then exp.cref;
+      case Expression.CREF() then ComponentRef.evaluateSubscripts(exp.cref);
       else
         algorithm
           Error.addSourceMessage(Error.HGT_INVALID_ITERATION_VARIABLE,

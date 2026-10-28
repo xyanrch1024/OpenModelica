@@ -165,10 +165,11 @@ public
       input ResidualEquation residual;
       output DAE.HGTResidual daeResidual;
     algorithm
+      // Only explicit pairs get here, see checkOnlyPairs.
       daeResidual := DAE.HGT_RESIDUAL(residual.name, residual.level,
         Util.applyOption(residual.nominal, function Expression.toDAE(allowEmpty = false)),
         Util.applyOption(residual.hold, function Expression.toDAE(allowEmpty = false)),
-        Util.applyOption(residual.iterationVariable, IterationVariable.toDAE),
+        IterationVariable.toDAE(Util.getOption(residual.iterationVariable)),
         residual.info);
     end toDAE;
 
@@ -182,8 +183,7 @@ public
   uniontype Spec
     "The hand guided tearing specification of a model."
     record SPEC
-      list<ResidualEquation> residuals "Paired and unpaired residual equations.";
-      list<IterationVariable> iterationVariables "Unpaired iteration variables, always empty since only explicit pairs are supported.";
+      list<ResidualEquation> residuals "The tearing pairs: every residual equation has its iteration variable.";
     end SPEC;
 
     function toString
@@ -196,10 +196,6 @@ public
         strl := ("  " + ResidualEquation.toString(r)) :: strl;
       end for;
 
-      for v in spec.iterationVariables loop
-        strl := ("  unpaired iteration variable " + IterationVariable.toString(v)) :: strl;
-      end for;
-
       str := "Hand guided tearing:\n" + stringDelimitList(listReverse(strl), "\n") + "\n";
     end toString;
 
@@ -207,9 +203,7 @@ public
       input Spec spec;
       output DAE.Element element;
     algorithm
-      element := DAE.HAND_GUIDED_TEARING(
-        list(ResidualEquation.toDAE(r) for r in spec.residuals),
-        list(IterationVariable.toDAE(v) for v in spec.iterationVariables));
+      element := DAE.HAND_GUIDED_TEARING(list(ResidualEquation.toDAE(r) for r in spec.residuals));
     end toDAE;
   end Spec;
 
@@ -655,12 +649,12 @@ public
 
     checkOnlyPairs(residuals, vars);
 
-    if listEmpty(residuals) and listEmpty(vars) then
+    if listEmpty(residuals) then
       spec := NONE();
       return;
     end if;
 
-    s := SPEC(residuals, vars);
+    s := SPEC(residuals);
 
     if hasHold(s) then
       Error.addMessage(Error.HGT_HOLD_NOT_SUPPORTED, {});
@@ -1052,13 +1046,6 @@ protected
           hold := true;
           return;
         end if;
-      end if;
-    end for;
-
-    for v in spec.iterationVariables loop
-      if isHeld(v.hold) then
-        hold := true;
-        return;
       end if;
     end for;
   end hasHold;

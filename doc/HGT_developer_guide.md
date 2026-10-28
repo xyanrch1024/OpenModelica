@@ -101,16 +101,16 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 | 类型 | 内容 |
 |---|---|
 | `IterationVariable.ITERATION_VARIABLE` | `name : ComponentRef`、`level`、`start/min/max/nominal/hold : Option<Expression>`、`info` |
-| `ResidualEquation.RESIDUAL_EQUATION` | `name : String`、`level`、`nominal`、`hold`、`iterationVariable : Option<IterationVariable>`（SOME 表示配对）、`info` |
-| `Spec.SPEC` | `residuals`（都是配对）、`iterationVariables`（未配对的迭代变量，因为不支持未配对项，总是空） |
+| `ResidualEquation.RESIDUAL_EQUATION` | `name : String`、`level`、`nominal`、`hold`、`iterationVariable : Option<IterationVariable>`（解析时可能为空，`checkOnlyPairs` 之后一定是 SOME）、`info` |
+| `Spec.SPEC` | `residuals`：所有配对，每条残差方程都带它的迭代变量 |
 | `Collector.COLLECTOR` | 展平过程中的累积状态：`enabled`、`acceptModelon`、`found`、嵌套深度 `nested`、已注册的方程名 `equationNames`、组件级残差 `residuals`、待解析的系统级配对 `pairs`、未配对变量 `iterationVariables`（只为了报错而收集）、自动命名计数器 `nameIndex` |
 
 常量：`ANNOTATION_NAME = "__OpenModelica_HGT"`、`MODELON_ANNOTATION_NAME = "__Modelon"`、`EQUATION_TAG = "__OpenModelica_HGTEquation"`。
 
 **DAE 层**（`FrontEnd/DAE.mo`）：结构与上面对应，但用 DAE 的类型。
 
-- `DAE.Element.HAND_GUIDED_TEARING(residuals, iterationVariables)`
-- `HGTResidual.HGT_RESIDUAL(name, level, nominal, hold, iterationVariable, info)`
+- `DAE.Element.HAND_GUIDED_TEARING(residuals)`
+- `HGTResidual.HGT_RESIDUAL(name, level, nominal, hold, iterationVariable, info)`，其中 `iterationVariable` 是必填的 `HGTIterationVariable`（只支持显式配对）
 - `HGTIterationVariable.HGT_ITERATION_VARIABLE(name, level, start, min, max, nominal, hold, info)`
 
 `DAEUtil` 的遍历函数和拆分函数会跳过这个元素。
@@ -200,7 +200,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 
 ### 4.1 数据进入后端
 
-- `BackendDAE.Shared.SHARED` 最后新增字段 `Option<HGTSpec> handGuidedTearing`，其中 `HGTSpec.HGT_SPEC(residuals, iterationVariables, initialResiduals)` 的前两项直接复用 DAE 的记录，`initialResiduals` 是写在 initial equation 里的残差方程名。
+- `BackendDAE.Shared.SHARED` 最后新增字段 `Option<HGTSpec> handGuidedTearing`，其中 `HGTSpec.HGT_SPEC(residuals, initialResiduals)` 的 `residuals` 直接复用 DAE 的记录，`initialResiduals` 是写在 initial equation 里的残差方程名。
 - `BackendDAECreate.lower` 在 `lower2` 之后调用 `HandGuidedTearing.lower(elems, varlst, eqns, ieqns)`；`lower2` 遇到 `DAE.HAND_GUIDED_TEARING` 直接跳过。
 - 初始化系统在 `Initialization.mo` 中用 `BackendDAEUtil.setSharedHandGuidedTearing` 复制这个规范。
 - `HandGuidedTearing.lower` 做四件事：

@@ -369,7 +369,7 @@ Nested blocks: 1          ← 外层
 
 ## 9. 读代码的顺序
 
-1. **`HandGuidedTearing.lower`**：先弄清规范 `HGT_SPEC` 里有什么（residuals、iterationVariables、initialResiduals），以及 `equationName` 怎么从方程上读出标签。
+1. **`HandGuidedTearing.lower`**：先弄清规范 `HGT_SPEC` 里有什么（residuals、initialResiduals；每个 residual 都带着它的迭代变量），以及 `equationName` 怎么从方程上读出标签。
 2. **`hgtMatching`**：十几行，看清楚仿真系统和初始化系统的区别。
 3. **`matchSystem`**：按 §5.2 的六段读。脑子里只放 `ass1`/`ass2` 两个数组，这个函数从头到尾就是在改它们。辅助函数可以先当黑盒：
    - `augment`：Kuhn 增广路径；

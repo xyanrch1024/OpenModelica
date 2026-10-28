@@ -390,8 +390,7 @@ public uniontype Element
   record HAND_GUIDED_TEARING "The hand guided tearing specification of the model,
     collected by NFHandGuidedTearing. The residual equations are identified by
     the name in their __OpenModelica_HGTEquation source annotation."
-    list<HGTResidual> residuals "Paired and unpaired residual equations.";
-    list<HGTIterationVariable> iterationVariables "Unpaired iteration variables, always empty since only explicit pairs are supported.";
+    list<HGTResidual> residuals "The tearing pairs, each a residual equation with its iteration variable.";
   end HAND_GUIDED_TEARING;
 
   record FLAT_SM "Flat state machine section"
@@ -430,7 +429,7 @@ public uniontype HGTResidual "A hand guided tearing residual equation."
     Integer level;
     Option<Exp> nominal "NONE() means 1.";
     Option<Exp> hold;
-    Option<HGTIterationVariable> iterationVariable "SOME() for a tearing pair.";
+    HGTIterationVariable iterationVariable "Only explicit pairs are supported.";
     SourceInfo info;
   end HGT_RESIDUAL;
 end HGTResidual;

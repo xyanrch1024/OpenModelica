@@ -347,7 +347,6 @@ protected
   UnorderedMap<String, Integer> var_pos;
   Option<String> name;
   Option<Integer> pos;
-  DAE.HGTIterationVariable v;
   Integer i;
 algorithm
   if not isActive(shared) then
@@ -363,10 +362,7 @@ algorithm
   SOME(spec) := shared.handGuidedTearing;
   pair_vars := UnorderedMap.new<String>(stringHashDjb2, stringEq);
   for r in spec.residuals loop
-    if isSome(r.iterationVariable) then
-      SOME(v) := r.iterationVariable;
-      UnorderedMap.add(r.name, crefString(v.name), pair_vars);
-    end if;
+    UnorderedMap.add(r.name, crefString(r.iterationVariable.name), pair_vars);
   end for;
 
   var_pos := UnorderedMap.new<Integer>(stringHashDjb2, stringEq);
@@ -404,7 +400,7 @@ function findSpec
 algorithm
   for e in elements loop
     spec := match e
-      case DAE.HAND_GUIDED_TEARING() then SOME(BackendDAE.HGT_SPEC(e.residuals, e.iterationVariables, {}));
+      case DAE.HAND_GUIDED_TEARING() then SOME(BackendDAE.HGT_SPEC(e.residuals, {}));
       case DAE.COMP() then findSpec(e.dAElist);
       else NONE();
     end match;
@@ -416,16 +412,9 @@ algorithm
 end findSpec;
 
 function allIterationVariables
-  "Returns the iteration variables of the pairs (the frontend only accepts
-   explicit pairs, so there are no unpaired ones)."
+  "Returns the iteration variables of the pairs."
   input BackendDAE.HGTSpec spec;
-  output list<DAE.HGTIterationVariable> vars = spec.iterationVariables;
-algorithm
-  for r in spec.residuals loop
-    if isSome(r.iterationVariable) then
-      vars := Util.getOption(r.iterationVariable) :: vars;
-    end if;
-  end for;
+  output list<DAE.HGTIterationVariable> vars = list(r.iterationVariable for r in spec.residuals);
 end allIterationVariables;
 
 function crefString
@@ -616,11 +605,9 @@ algorithm
   eqn_index := UnorderedMap.new<Integer>(stringHashDjb2, stringEq);
   indexTags(syst.orderedEqs, eqn_index);
 
-  // The frontend only accepts explicit pairs, every residual equation has its
-  // iteration variable.
   for res in spec.residuals loop
     oe := UnorderedMap.get(res.name, eqn_index);
-    SOME(hgt_var) := res.iterationVariable;
+    hgt_var := res.iterationVariable;
     ov := varIndex(hgt_var.name, syst.orderedVars);
 
     if isSome(oe) and isSome(ov) then

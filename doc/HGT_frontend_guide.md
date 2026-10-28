@@ -114,21 +114,20 @@ uniontype ResidualEquation
     Integer level;
     Option<Expression> nominal;   // NONE() = 1
     Option<Expression> hold;
-    Option<IterationVariable> iterationVariable;   // SOME() = 配对
+    Option<IterationVariable> iterationVariable;   // 解析时可能为空，finish 之后一定是 SOME()
     SourceInfo info;
   end RESIDUAL_EQUATION;
 end ResidualEquation;
 
 uniontype Spec
   record SPEC
-    list<ResidualEquation> residuals;          // 都是配对：iterationVariable 总是 SOME()
-    list<IterationVariable> iterationVariables; // 未配对的迭代变量，总是空
+    list<ResidualEquation> residuals;          // 所有配对：iterationVariable 总是 SOME()
   end SPEC;
 end Spec;
 ```
 
 几点说明：
-- **配对的迭代变量挂在残差方程上**，不进 `iterationVariables`。后端用 `allIterationVariables` 把两处合起来。
+- **迭代变量挂在残差方程上**：规范里只有配对，没有单独的迭代变量列表。后端用 `allIterationVariables` 从配对里取出所有迭代变量。转换成 DAE 时（`ResidualEquation.toDAE`），`iterationVariable` 变成必填字段，后端不用再解包 `Option`。
 - 方程用**名字**标识（字符串），变量用 `ComponentRef` 标识。原因是方程本身没有名字，只能靠标签；变量有正式的引用。
 - `level`、`enabled` 在前端就**求值成常量**；`start`、`min`、`max`、`nominal`、`hold` 保留为表达式，只做了展平，也就是补上前缀。
 - 每个类型都有 `toString`，供 `-d=hgtDump` 使用；也都有 `toDAE`，转换成 `DAE.HGT_RESIDUAL` / `DAE.HGT_ITERATION_VARIABLE`，字段一一对应。
@@ -147,7 +146,7 @@ end Spec;
 | `residuals` | 残差方程：名字 → `ResidualEquation` |
 | `pairs` | `tearingPairs` 中的配对，每个是"按变量元素展开的配对列表 + 变量的维数"。它们引用的方程可能还没展平，所以先存下来，在 `finish` 里检查 |
 | `arrayEquations` | 起了名字的数组方程：名字 → (各元素的名字, 维数)，`finish` 用它展开引用整条数组方程的 `Pair` |
-| `iterationVariables` | 未配对的迭代变量，只为了在 `finish` 中报错而收集 |
+| `iterationVariables` | 未配对的迭代变量，只为了在 `finish` 中报错而收集，不会进入 `Spec` |
 | `nameIndex` | 自动命名 `$hgtN` 用的计数器 |
 | `iterators` | 展开 for 循环时当前的 `(迭代变量名, 值)` 栈，最内层在前（§7.2） |
 | `loopNames` | for 循环中没写名字的方程的自动名字，按前缀和源码位置记录，让所有迭代共用一个名字 |
@@ -394,7 +393,7 @@ if isSome(flatModel.handGuidedTearing) then
 end if;
 ```
 
-于是 DAE 元素列表里多了一个 `DAE.HAND_GUIDED_TEARING(residuals, iterationVariables)`，记录定义在 `FrontEnd/DAE.mo`。表达式也在这里通过 `Expression.toDAE` 转换成 `DAE.Exp`。旧后端的 `HandGuidedTearing.lower` 从这里读取规范；`BackendDAECreate.lower2` 遇到这个元素会跳过。
+于是 DAE 元素列表里多了一个 `DAE.HAND_GUIDED_TEARING(residuals)`，记录定义在 `FrontEnd/DAE.mo`。表达式也在这里通过 `Expression.toDAE` 转换成 `DAE.Exp`。旧后端的 `HandGuidedTearing.lower` 从这里读取规范；`BackendDAECreate.lower2` 遇到这个元素会跳过。
 
 新后端（`--newBackend`）直接使用 `FlatModel`，目前没有读取 `FlatModel.handGuidedTearing`，见 [NewBackend_architecture.md](NewBackend_architecture.md) §9。
 

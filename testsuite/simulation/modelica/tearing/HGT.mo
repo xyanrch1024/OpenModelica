@@ -216,4 +216,35 @@ package HGT "Hand guided tearing (OCT compatible) test models, steady state"
     m = k[3] * sqrt(p[3] - p[4]) annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable(start = 4) = p[4])));
     m = k[4] * sqrt(p[4] - p[5]) annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = m)));
   end ForPipeScalar;
+
+  model ArrayPipe "the segment equations as one array equation, paired element-wise with p[2:4]"
+    parameter Real k[3] = {2, 3, 4}, c = 5, p_in = 10, p_out = 1;
+    Real p[4], m[3](each start = 1);
+  equation
+    p[1] = p_in;
+    m[1:2] = m[2:3];
+    m[3] = c * (p[4] - p_out);
+    m = k .* sqrt(p[1:3] - p[2:4]) annotation(__OpenModelica_HGT(name = seg,
+      ResidualEquation(iterationVariable(start = {8, 6, 4}) = p[2:4])));
+  end ArrayPipe;
+
+  model ArrayPipeLoop "ArrayPipe with the segment equations in a for-loop"
+    parameter Real k[3] = {2, 3, 4}, c = 5, p_in = 10, p_out = 1;
+    Real p[4], m[3](each start = 1);
+  equation
+    p[1] = p_in;
+    m[1:2] = m[2:3];
+    m[3] = c * (p[4] - p_out);
+    for i in 1:3 loop
+      m[i] = k[i] * sqrt(p[i] - p[i + 1]) annotation(__OpenModelica_HGT(name = seg,
+        ResidualEquation(iterationVariable(start = 10 - 2 * i) = p[i + 1])));
+    end for;
+  end ArrayPipeLoop;
+
+  model MatrixPair "a matrix equation paired element-wise, each element only depends on its own variable"
+    parameter Real c[2, 3] = {{2, 3, 4}, {5, 6, 7}};
+    Real x[2, 3](each start = 1);
+  equation
+    x .^ 2 = c annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable(nominal = c) = x)));
+  end MatrixPair;
 end HGT;

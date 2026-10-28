@@ -757,6 +757,7 @@ FunctionUnitialized7.mo \
 FunctionUnitialized8.mo \
 HGTComponentPair1.mo \
 HGTDisabled1.mo \
+HGTArray1.mo \
 HGTError1.mo \
 HGTError2.mo \
 HGTError3.mo \
@@ -765,6 +766,9 @@ HGTError5.mo \
 HGTError6.mo \
 HGTError7.mo \
 HGTError8.mo \
+HGTError10.mo \
+HGTError11.mo \
+HGTError12.mo \
 HGTError9.mo \
 HGTFor1.mo \
 HGTIf1.mo \

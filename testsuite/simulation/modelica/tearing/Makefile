@@ -2,6 +2,7 @@ TEST = ../../../rtest -v
 
 TESTFILES = \
 HGTAlgebra1.mos \
+HGTArray1.mos \
 HGTBounds1.mos \
 HGTError1.mos \
 HGTFor1.mos \

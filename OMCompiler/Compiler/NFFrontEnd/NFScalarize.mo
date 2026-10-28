@@ -61,6 +61,7 @@ import DAE;
 import Statement = NFStatement;
 import Algorithm = NFAlgorithm;
 import ExpandExp = NFExpandExp;
+import HandGuidedTearing = NFHandGuidedTearing;
 import NFInstNode.InstNode;
   import NFInstNode;
 import SCode;
@@ -336,13 +337,19 @@ algorithm
       ExpressionIterator lhs_iter, rhs_iter;
       Expression lhs, rhs;
       Type ty;
-      DAE.ElementSource src;
-      Boolean scalarize;
+      DAE.ElementSource src, elem_src;
+      Boolean scalarize, hgt;
+      list<list<Integer>> elem_subs = {};
+      list<Integer> sub;
 
     case Equation.EQUALITY(lhs = lhs, rhs = rhs, ty = ty, source = src)
         guard Type.isArray(ty)
       algorithm
-        if forceScalarize or eq.scalarizeMode == NFEquation.ScalarizeMode.SCALARIZE then
+        // The elements of a hand guided tearing equation are tagged with their
+        // own names, so it is always scalarized.
+        hgt := isSome(HandGuidedTearing.getEquationTag(src));
+
+        if forceScalarize or hgt or eq.scalarizeMode == NFEquation.ScalarizeMode.SCALARIZE then
           scalarize := true;
         elseif eq.scalarizeMode == NFEquation.ScalarizeMode.DONT_SCALARIZE then
           scalarize := false;
@@ -355,6 +362,11 @@ algorithm
         if scalarize then
           lhs_iter := ExpressionIterator.fromExp(lhs);
           rhs_iter := ExpressionIterator.fromExp(rhs);
+
+          if hgt then
+            elem_subs := HandGuidedTearing.elementSubscripts(list(Dimension.size(d) for d in Type.arrayDims(ty)));
+          end if;
+
           ty := Type.arrayElementType(ty);
 
           while ExpressionIterator.hasNext(lhs_iter) loop
@@ -365,7 +377,14 @@ algorithm
 
             (lhs_iter, lhs) := ExpressionIterator.next(lhs_iter);
             (rhs_iter, rhs) := ExpressionIterator.next(rhs_iter);
-            equations := Equation.makeEquality(lhs, rhs, ty, src, InstNode.fromCell(eq.scope)) :: equations;
+            elem_src := src;
+
+            if hgt then
+              sub :: elem_subs := elem_subs;
+              elem_src := HandGuidedTearing.indexEquationTag(src, sub);
+            end if;
+
+            equations := Equation.makeEquality(lhs, rhs, ty, elem_src, InstNode.fromCell(eq.scope)) :: equations;
           end while;
         else
           equations := eq :: equations;

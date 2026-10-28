@@ -1,10 +1,10 @@
 // name: HGTModelon1
 // keywords: hand guided tearing
 // status: correct
-// cflags: --handGuidedTearing --acceptModelonHGT -d=hgtDump
+// cflags: --handGuidedTearing -d=hgtDump
 //
-// With --acceptModelonHGT the hand guided tearing part of __Modelon is read,
-// other __Modelon annotations are ignored.
+// The hand guided tearing annotations of OCT (__Modelon) are not read: like
+// other vendors' annotations they are ignored, without any message.
 //
 
 model HGTModelon1
@@ -23,9 +23,6 @@ equation
 end HGTModelon1;
 
 // Result:
-// Hand guided tearing:
-//   pair: residual equation LongEq (level 1, hold = testHold1), iteration variable x (level 1, hold = testHold2)
-//   pair: residual equation LongEq2 (level 1, hold = testHold2), iteration variable T (level 1, hold = testHold1)
 // class HGTModelon1
 //   Real x(start = 1.0);
 //   Real T(start = 400.0);
@@ -35,6 +32,4 @@ end HGTModelon1;
 //   0.0 = 120.0 * x - 75.0 * 0.12 * exp(12581.0 * (T - 298.0) / (298.0 * T)) * (1.0 - x);
 //   0.0 = 11.0 * (T - 300.0) - x * (873.0 - T);
 // end HGTModelon1;
-// Warning: The hold attribute of hand guided tearing is not supported yet and is ignored.
-//
 // endResult

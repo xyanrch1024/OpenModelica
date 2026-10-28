@@ -1468,35 +1468,31 @@ end translateComment;
 protected function mergeHGTTearingPairs
   "A class can have several annotation clauses that each contain hand guided
    tearing pairs, e.g. annotation(__OpenModelica_HGT(tearingPairs(Pair(...))))
-   (this is how the OCT User's Guide writes them). Merging the clauses would
+   (OCT models are written like this). Merging the clauses would
    only keep the last tearingPairs, so this function replaces the tearingPairs
    in the merged annotation with the pairs of all the clauses."
   input list<Absyn.Annotation> annotations "All the annotation clauses.";
   input output Absyn.Annotation merged "The merged annotation.";
 protected
-  list<list<Absyn.ElementArg>> pairs;
-  Integer count;
+  list<list<Absyn.ElementArg>> pairs = {};
+  Integer count = 0;
+  constant String name = "__OpenModelica_HGT";
 algorithm
-  for name in {"__OpenModelica_HGT", "__Modelon"} loop
-    pairs := {};
-    count := 0;
-
-    // Collect the arguments of all tearingPairs in the given vendor annotation.
-    for ann in annotations loop
-      for arg in getModificationArgs(ann.elementArgs, name) loop
-        if isNamedModification(arg, "tearingPairs") then
-          count := count + 1;
-          pairs := getModificationArgs({arg}, "tearingPairs") :: pairs;
-        end if;
-      end for;
+  // Collect the arguments of all tearingPairs in the annotation.
+  for ann in annotations loop
+    for arg in getModificationArgs(ann.elementArgs, name) loop
+      if isNamedModification(arg, "tearingPairs") then
+        count := count + 1;
+        pairs := getModificationArgs({arg}, "tearingPairs") :: pairs;
+      end if;
     end for;
-
-    // Only needed if there's more than one tearingPairs.
-    if count > 1 then
-      merged := Absyn.ANNOTATION(list(replaceTearingPairs(arg, name, List.flatten(listReverse(pairs)))
-        for arg in merged.elementArgs));
-    end if;
   end for;
+
+  // Only needed if there's more than one tearingPairs.
+  if count > 1 then
+    merged := Absyn.ANNOTATION(list(replaceTearingPairs(arg, name, List.flatten(listReverse(pairs)))
+      for arg in merged.elementArgs));
+  end if;
 end mergeHGTTearingPairs;
 
 protected function isNamedModification
@@ -1821,7 +1817,6 @@ protected function isHGTAnnotationPath
 algorithm
   res := match path
     case Absyn.IDENT(name = "__OpenModelica_HGT") then true;
-    case Absyn.IDENT(name = "__Modelon") then true;
     else false;
   end match;
 end isHGTAnnotationPath;

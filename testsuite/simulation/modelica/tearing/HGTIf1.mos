@@ -3,11 +3,11 @@
 // status:    correct
 //
 // The steady-state branch of an if-equation selected by a parameter, written in
-// the OCT style with __Modelon annotations and hold = false, is torn by hand.
+// the OCT style with hold = false, is torn by hand.
 //
 
 loadFile("HGT.mo"); getErrorString();
-setCommandLineOptions("--handGuidedTearing --acceptModelonHGT -d=hgtDump"); getErrorString();
+setCommandLineOptions("--handGuidedTearing -d=hgtDump"); getErrorString();
 r := simulate(HGT.SteadyStateSwitch, stopTime = 0); getErrorString();
 val(x, 0); val(y, 0);
 

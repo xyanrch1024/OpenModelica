@@ -36,8 +36,8 @@
 encapsulated package NFHandGuidedTearing
   "Collects the hand guided tearing (HGT) specification of a model while it is
    flattened. The __OpenModelica_HGT annotations correspond one to one to the
-   hand guided tearing annotations of OCT (__Modelon), which are also read with
-   --acceptModelonHGT:
+   hand guided tearing annotations of OCT (__Modelon). __Modelon annotations are
+   not read, like other vendors' annotations:
 
      x = y + 1 annotation(__OpenModelica_HGT(name = res));
      x = y + 1 annotation(__OpenModelica_HGT(ResidualEquation(
@@ -84,7 +84,6 @@ protected
 
 public
   constant String ANNOTATION_NAME = "__OpenModelica_HGT";
-  constant String MODELON_ANNOTATION_NAME = "__Modelon";
   constant String EQUATION_TAG = "__OpenModelica_HGTEquation";
 
   type ArrayEquation = tuple<list<String>, list<Integer>>
@@ -211,7 +210,6 @@ public
     "Collects the specification while a model is flattened."
     record COLLECTOR
       Boolean enabled "--handGuidedTearing";
-      Boolean acceptModelon "--acceptModelonHGT";
       Pointer<Boolean> found "Whether any hand guided tearing annotation was found.";
       Pointer<Integer> nested "> 0 while flattening the body of for-, if- and when-equations.";
       UnorderedMap<String, SourceInfo> equationNames "All named equations.";
@@ -232,7 +230,6 @@ public
     algorithm
       collector := COLLECTOR(
         Flags.getConfigBool(Flags.HAND_GUIDED_TEARING),
-        Flags.getConfigBool(Flags.ACCEPT_MODELON_HGT),
         Pointer.create(false),
         Pointer.create(0),
         UnorderedMap.new<SourceInfo>(stringHashDjb2, stringEq),
@@ -274,9 +271,8 @@ public
     input FlattenExpFn flattenFn;
     input Collector collector;
   protected
-    list<tuple<SCode.Mod, Boolean>> mods;
-    SCode.Mod mod;
-    Boolean is_omc, is_array;
+    list<SCode.Mod> mods;
+    Boolean is_array;
     Option<String> opt_name = NONE();
     Option<SCode.Mod> res_mod = NONE();
     String name;
@@ -285,7 +281,7 @@ public
     list<Integer> dims;
     list<String> elem_names, names;
   algorithm
-    mods := getHGTMods(ElementSource.getComments(source), collector);
+    mods := getHGTMods(ElementSource.getComments(source));
 
     if listEmpty(mods) then
       return;
@@ -299,9 +295,8 @@ public
       return;
     end if;
 
-    for m in mods loop
-      (mod, is_omc) := m;
-      checkFields(mod, {"name", "ResidualEquation"}, "of an equation", is_omc);
+    for mod in mods loop
+      checkFields(mod, {"name", "ResidualEquation"}, "of an equation");
 
       if isSome(SCodeUtil.getModifierBinding(lookupField(mod, "name"))) then
         opt_name := SOME(getEquationName(lookupField(mod, "name")));
@@ -430,12 +425,10 @@ public
     input SourceInfo info;
     input Collector collector;
   protected
-    list<tuple<SCode.Mod, Boolean>> mods;
-    SCode.Mod mod;
-    Boolean is_omc;
+    list<SCode.Mod> mods;
     Option<IterationVariable> var;
   algorithm
-    mods := getHGTMods({comment}, collector);
+    mods := getHGTMods({comment});
 
     if listEmpty(mods) then
       return;
@@ -447,9 +440,8 @@ public
       return;
     end if;
 
-    for m in mods loop
-      (mod, is_omc) := m;
-      checkFields(mod, {"IterationVariable"}, "of a variable declaration", is_omc);
+    for mod in mods loop
+      checkFields(mod, {"IterationVariable"}, "of a variable declaration");
 
       if hasField(mod, "IterationVariable") then
         if not Type.isReal(Type.arrayElementType(ty)) then
@@ -486,13 +478,11 @@ public
     input FlattenExpFn flattenFn;
     input Collector collector;
   protected
-    list<tuple<SCode.Mod, Boolean>> mods;
-    SCode.Mod mod;
-    Boolean is_omc;
+    list<SCode.Mod> mods;
     Option<tuple<list<ResidualEquation>, list<Integer>>> pair;
   algorithm
     mods := getHGTMods({Util.getOptionOrDefault(SCodeUtil.getElementComment(cls),
-      SCode.COMMENT(NONE(), NONE()))}, collector);
+      SCode.COMMENT(NONE(), NONE()))});
 
     if listEmpty(mods) then
       return;
@@ -504,11 +494,10 @@ public
       return;
     end if;
 
-    for m in mods loop
-      (mod, is_omc) := m;
-      checkFields(mod, {"tearingPairs"}, "of a class", is_omc);
+    for mod in mods loop
+      checkFields(mod, {"tearingPairs"}, "of a class");
 
-      for pair_mod in lookupFields(lookupField(mod, "tearingPairs"), "Pair", "tearingPairs", is_omc) loop
+      for pair_mod in lookupFields(lookupField(mod, "tearingPairs"), "Pair", "tearingPairs") loop
         pair := parsePair(pair_mod, prefix, scope, flattenFn);
 
         if isSome(pair) then
@@ -728,32 +717,16 @@ protected
   end TypeCheckFn;
 
   function getHGTMods
-    "Returns the hand guided tearing annotation modifiers in the given comments,
-     each with a flag that is true for __OpenModelica_HGT and false for __Modelon."
+    "Returns the hand guided tearing annotation modifiers in the given comments."
     input list<SCode.Comment> comments;
-    input Collector collector;
-    output list<tuple<SCode.Mod, Boolean>> mods = {};
+    output list<SCode.Mod> mods = {};
   protected
     SCode.Annotation ann;
-    SCode.Mod mod;
   algorithm
     for cmt in comments loop
       if isSome(cmt.annotation_) then
         SOME(ann) := cmt.annotation_;
-
-        for m in SCodeUtil.lookupAnnotations(ann, ANNOTATION_NAME) loop
-          mods := (m, true) :: mods;
-        end for;
-
-        if collector.acceptModelon then
-          for m in SCodeUtil.lookupAnnotations(ann, MODELON_ANNOTATION_NAME) loop
-            // __Modelon also contains other things than hand guided tearing.
-            if hasField(m, "name") or hasField(m, "ResidualEquation") or
-               hasField(m, "IterationVariable") or hasField(m, "tearingPairs") then
-              mods := (m, false) :: mods;
-            end if;
-          end for;
-        end if;
+        mods := listAppend(listReverse(SCodeUtil.lookupAnnotations(ann, ANNOTATION_NAME)), mods);
       end if;
     end for;
 
@@ -770,7 +743,7 @@ protected
     if isNone(Pointer.access(foundInfo)) then
       source := Equation.source(eq);
 
-      if not listEmpty(getHGTMods(ElementSource.getComments(source), collector)) then
+      if not listEmpty(getHGTMods(ElementSource.getComments(source))) then
         Pointer.update(foundInfo, SOME(ElementSource.getInfo(source)));
       end if;
     end if;
@@ -1136,7 +1109,7 @@ protected
     list<Integer> var_dims;
     SourceInfo mod_info = getInfo(mod, info);
   algorithm
-    checkFields(mod, {"enabled", "level", "nominal", "iterationVariable", "hold"}, "ResidualEquation", true);
+    checkFields(mod, {"enabled", "level", "nominal", "iterationVariable", "hold"}, "ResidualEquation");
 
     if not evalBoolean(mod, "enabled", true, scope, mod_info) then
       return;
@@ -1177,7 +1150,7 @@ protected
     list<IterationVariable> vars;
     list<Integer> var_dims;
   algorithm
-    checkFields(mod, {"enabled", "level", "residualEquation", "iterationVariable"}, "Pair", true);
+    checkFields(mod, {"enabled", "level", "residualEquation", "iterationVariable"}, "Pair");
 
     if not evalBoolean(mod, "enabled", true, scope, info) then
       pair := NONE();
@@ -1193,7 +1166,7 @@ protected
     end if;
 
     res_mod := lookupField(mod, "residualEquation");
-    checkFields(res_mod, {"nominal", "hold"}, "residualEquation", true);
+    checkFields(res_mod, {"nominal", "hold"}, "residualEquation");
 
     name := match SCodeUtil.getModifierBinding(res_mod)
       local
@@ -1233,7 +1206,7 @@ protected
     SourceInfo mod_info = getInfo(mod, info);
     String var_str;
   algorithm
-    checkFields(mod, {"max", "min", "nominal", "start", "hold"}, "iterationVariable", true);
+    checkFields(mod, {"max", "min", "nominal", "start", "hold"}, "iterationVariable");
 
     (names, dims, var_str) := match SCodeUtil.getModifierBinding(mod)
       local
@@ -1269,7 +1242,7 @@ protected
   protected
     SourceInfo mod_info = getInfo(mod, info);
   algorithm
-    checkFields(mod, {"enabled", "level", "max", "min", "nominal", "start", "hold"}, "IterationVariable", true);
+    checkFields(mod, {"enabled", "level", "max", "min", "nominal", "start", "hold"}, "IterationVariable");
 
     if evalBoolean(mod, "enabled", true, scope, mod_info) then
       var := SOME(listHead(parseIterationVariableAttributes(mod, {name}, {}, ComponentRef.toString(name),
@@ -1629,7 +1602,6 @@ protected
     input SCode.Mod mod;
     input String name;
     input String recordName;
-    input Boolean warnUnknown;
     output list<SCode.Mod> fields = {};
   algorithm
     () := match mod
@@ -1638,7 +1610,7 @@ protected
           for sm in mod.subModLst loop
             if sm.ident == name then
               fields := sm.mod :: fields;
-            elseif warnUnknown then
+            else
               Error.addSourceMessage(Error.HGT_UNKNOWN_FIELD,
                 {sm.ident, recordName}, SCodeUtil.getModifierInfo(sm.mod));
             end if;
@@ -1657,12 +1629,7 @@ protected
     input SCode.Mod mod;
     input list<String> knownFields;
     input String recordName;
-    input Boolean warnUnknown;
   algorithm
-    if not warnUnknown then
-      return;
-    end if;
-
     () := match mod
       case SCode.MOD()
         algorithm

@@ -4,7 +4,7 @@
 //
 // Level 1 hand guided tearing of a thermal-hydraulic plant (pump, manifold, two
 // heated branches, collector/mixer, return pipe with Colebrook friction): component
-// level pairs, a system level pair in OCT syntax (--acceptModelonHGT) with a named
+// level pairs, a system level pair with a named
 // equation, pairs in two different blocks, a design spec merged into
 // the block of its iteration variable, automatic completion, enabled = false,
 // residual nominals, start/nominal/min/max and the solution check of an inverted
@@ -12,7 +12,7 @@
 //
 
 loadFile("HGTPlant.mo"); getErrorString();
-setCommandLineOptions("--handGuidedTearing --acceptModelonHGT -d=hgtDump,tearingdump"); getErrorString();
+setCommandLineOptions("--handGuidedTearing -d=hgtDump,tearingdump"); getErrorString();
 r := simulate(HGTPlant.System, stopTime = 0); getErrorString();
 val(manifold.p, 0); val(collector.p, 0); val(pump.m, 0); val(h1.m, 0); val(h2.m, 0);
 val(ret.m, 0); val(ret.f, 0); val(T_wall, 0); val(h1.T_out, 0); val(h2.T_out, 0); val(mixer.T_mix, 0);

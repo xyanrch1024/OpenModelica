@@ -72,8 +72,8 @@ package HGTPlant "pump - manifold - 2 heated branches - collector/mixer - return
     // design spec: T_wall is iterated to reach T_set
     mixer.T_mix = T_set annotation(__OpenModelica_HGT(ResidualEquation(nominal = 10,
       iterationVariable(min = 300, max = 450, nominal = 100) = T_wall)));
-    // system level pair in OCT syntax (--acceptModelonHGT)
-    annotation(__Modelon(tearingPairs(Pair(residualEquation(nominal = 1000) = mixer.energy,
+    // system level pair with a named equation
+    annotation(__OpenModelica_HGT(tearingPairs(Pair(residualEquation(nominal = 1000) = mixer.energy,
                                            iterationVariable(start = 320, nominal = 300) = mixer.T_mix))));
   end System;
 end HGTPlant;

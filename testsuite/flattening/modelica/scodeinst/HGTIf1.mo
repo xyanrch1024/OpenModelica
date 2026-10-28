@@ -1,7 +1,7 @@
 // name: HGTIf1
 // keywords: hand guided tearing
 // status: correct
-// cflags: --handGuidedTearing --acceptModelonHGT -d=hgtDump
+// cflags: --handGuidedTearing -d=hgtDump
 //
 // The hand guided tearing annotations of the branch of an if-equation that a
 // parameter selects apply, as the branch replaces the if-equation; hold = false
@@ -16,8 +16,8 @@ equation
     der(x) = -x + y * y;
     der(y) = x * x - 2 * y;
   else
-    0 = -x + y * y annotation(__Modelon(ResidualEquation(iterationVariable(hold = false) = x, hold = false)));
-    0 = x * x - 2 * y annotation(__Modelon(ResidualEquation(iterationVariable(hold = false) = y, hold = false)));
+    0 = -x + y * y annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable(hold = false) = x, hold = false)));
+    0 = x * x - 2 * y annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable(hold = false) = y, hold = false)));
   end if;
 
   if time > 0.5 then

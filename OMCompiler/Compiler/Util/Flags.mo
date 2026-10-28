@@ -1464,13 +1464,10 @@ constant ConfigFlag TPL_INTERFACE_DIR = CONFIG_FLAG(172, "tplInterfaceDir",
 constant ConfigFlag HAND_GUIDED_TEARING = CONFIG_FLAG(173, "handGuidedTearing",
   NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
   "Enables hand guided tearing, i.e. the __OpenModelica_HGT annotations that select\niteration variables and residual equations. Corresponds to the OCT option\nhand_guided_tearing. Like in OCT, only steady-state models are supported.");
-constant ConfigFlag ACCEPT_MODELON_HGT = CONFIG_FLAG(174, "acceptModelonHGT",
-  NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
-  "Also reads the hand guided tearing part of __Modelon annotations, so that\nmodels written for OCT can be used without changes.");
-constant ConfigFlag HGT_MERGE_BLT_BLOCKS = CONFIG_FLAG(175, "hgtMergeBLTBlocks",
+constant ConfigFlag HGT_MERGE_BLT_BLOCKS = CONFIG_FLAG(174, "hgtMergeBLTBlocks",
   NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
   "Puts all hand guided tearing pairs and unpaired iteration variables and residual\nequations into the same BLT block. Corresponds to the OCT option merge_blt_blocks.");
-constant ConfigFlag HGT_ALLOW_MULTIPLE_RESIDUALS = CONFIG_FLAG(176, "hgtAllowMultipleResiduals",
+constant ConfigFlag HGT_ALLOW_MULTIPLE_RESIDUALS = CONFIG_FLAG(175, "hgtAllowMultipleResiduals",
   NONE(), EXTERNAL(), STRING_FLAG("level1"), SOME(
     STRING_DESC_OPTION({
     ("false", "Every hand guided tearing block may only have one residual equation."),
@@ -1478,7 +1475,7 @@ constant ConfigFlag HGT_ALLOW_MULTIPLE_RESIDUALS = CONFIG_FLAG(176, "hgtAllowMul
     ("true", "Hand guided tearing blocks may have any number of residual equations.")
     })),
   "Checks the number of residual equations of hand guided tearing blocks. Corresponds to\nthe OCT option allow_multiple_residuals_in_hgt_blocks.");
-constant ConfigFlag HGT_ONLY = CONFIG_FLAG(177, "hgtOnly",
+constant ConfigFlag HGT_ONLY = CONFIG_FLAG(176, "hgtOnly",
   NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
   "Tears the blocks that contain hand guided tearing items only with the given iteration\nvariables and residual equations: if the other equations of such a block can not be\nsolved with them, an error is reported instead of adding iteration variables or residual\nequations automatically.");
 

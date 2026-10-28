@@ -69,8 +69,8 @@ NFConvertDAE                       ← Spec.toDAE → DAE.HAND_GUIDED_TEARING
 
 ### 2.1 AbsynToSCode 的两处改动（`FrontEnd/AbsynToSCode.mo`）
 
-1. **保留空修饰**。正常情况下，没有绑定也没有子修饰的修饰（例如单独写的 `ResidualEquation`、`IterationVariable`）在转换成 SCode 时会被丢掉。`translateArgs` 现在对 `isHGTAnnotationPath` 认出的注解（`__OpenModelica_HGT`、`__Modelon`）传 `keepEmpty`，保留这些空修饰。
-2. **合并 `tearingPairs`**。一个类可以有多个 `annotation(...)` 子句，原来的合并逻辑只保留最后一个 `tearingPairs`。`mergeHGTTearingPairs` 会按源码顺序把所有 `Pair` 拼接起来；两个厂商名分别处理。
+1. **保留空修饰**。正常情况下，没有绑定也没有子修饰的修饰（例如单独写的 `ResidualEquation`、`IterationVariable`）在转换成 SCode 时会被丢掉。`translateArgs` 现在对 `isHGTAnnotationPath` 认出的注解（`__OpenModelica_HGT`）传 `keepEmpty`，保留这些空修饰。
+2. **合并 `tearingPairs`**。一个类可以有多个 `annotation(...)` 子句，原来的合并逻辑只保留最后一个 `tearingPairs`。`mergeHGTTearingPairs` 会按源码顺序把所有 `Pair` 拼接起来。
 
 这两处是前端里唯一不在 `NFHandGuidedTearing.mo` 中的逻辑改动。
 
@@ -89,7 +89,7 @@ annotation(__OpenModelica_HGT(tearingPairs(
   Pair(residualEquation = b.res, iterationVariable = c.z))));
 ```
 
-打开 `--acceptModelonHGT` 后，`__Modelon(...)` 也按同样的语法读取（OCT 兼容）。
+OCT 的 `__Modelon(...)` 注解不读取，和其他厂商的注解一样静默忽略，不报任何信息（测试 `HGTModelon1`）。
 
 **只支持显式配对**。OCT 还允许两种未配对的写法：不带 `iterationVariable` 的 `ResidualEquation`（未配对残差），以及变量声明上的 `IterationVariable(...)`（未配对迭代变量），由编译器按依赖关系自动绑定。OMC 不做这种绑定：这两种写法仍然会被解析（为了给出准确的错误位置），然后在 `finish` 中报错误 8022（见 §8）。
 
@@ -139,7 +139,6 @@ end Spec;
 | 字段 | 作用 |
 |---|---|
 | `enabled` | `--handGuidedTearing`。关闭时仍然会扫描注解，只是为了在最后给出提示 8008 |
-| `acceptModelon` | `--acceptModelonHGT` |
 | `found` | 是否见过任何 HGT 注解 |
 | `nested` | 当前在几层 for、if、when 里面，大于 0 时不收集 |
 | `equationNames` | 所有起了名字的方程：名字 → 位置，用于检查重名，也用于 `tearingPairs` 查名字 |
@@ -185,7 +184,7 @@ end if;
   - `prefix`：所在组件的名字，用来给方程名加前缀；
   - `flattenFn`：给注解里的表达式补前缀。
 - 流程：
-  1. 读出 `name` 和 `ResidualEquation`，可以来自多个注解子句，例如 OMC 和 Modelon 各一个；
+  1. 读出 `name` 和 `ResidualEquation`，可以来自多个注解子句；
   2. 有 `name` 就用它，没有就自动命名 `$hgtN`；然后加前缀；在 for 循环里再加上迭代值作下标（§7.2）；
   3. 数组方程：按行优先算出各元素的名字（`bal[1]`、`bal[1,2]`……），并把"名字 → (元素名, 维数)"记进 `arrayEquations`；
   4. 检查是否重名（8003），名字和所有元素名都记入 `equationNames`；
@@ -231,9 +230,7 @@ end if;
 
 ### 5.1 找注解：`getHGTMods`
 
-在注释里查找 `__OpenModelica_HGT`，以及在 `acceptModelon` 打开时查找 `__Modelon`。返回值是 `(修饰, 是否是 OMC 语法)` 的列表。
-
-`__Modelon` 里还会有 OCT 的其他内容，所以只有在它含有 `name`、`ResidualEquation`、`IterationVariable` 或 `tearingPairs` 之一时才收下。另外，`checkFields`、`lookupFields` 只对 OMC 语法报"未知字段"（8000），对 `__Modelon` 不报，因为里面合法的其他内容我们不认识。
+在注释里查找所有 `__OpenModelica_HGT` 注解，返回它们的修饰列表。`__Modelon` 不查找。`checkFields`、`lookupFields` 对不认识的字段报"未知字段"（8000）。
 
 ### 5.2 各种记录
 
@@ -449,7 +446,7 @@ class F.Plant
 
 | 编号 | 级别 | 含义 | 由谁报告 |
 |---|---|---|---|
-| 8000 | 警告 | 未知字段，被忽略（只对 OMC 语法） | `checkFields`、`lookupFields` |
+| 8000 | 警告 | 未知字段，被忽略 | `checkFields`、`lookupFields` |
 | 8001 | 错误 | 字段的值无效：名字不是标识符、level < 1、不是参数表达式、nominal ≤ 0、Pair 缺字段…… | 各解析函数 |
 | 8002 | 错误 | 不能作迭代变量：不是变量、不是 Real、不是连续变量 | `resolveIterationVariable`、`collectVariable` |
 | 8003 | 错误 | 方程重名 | `collectEquation` |
@@ -492,7 +489,7 @@ class F.Plant
 | `HGTSystemPair1` | 系统级配对，分写在两个注解子句里（合并）；数组组件 `ba[2].res` |
 | `HGTUnpaired1` | OCT TestUnpaired 例子中的未配对项：报 8022，名字带前缀 |
 | `HGTLevel1` | level 由参数给出（变成结构参数）；level 2 上允许依赖连续变量 |
-| `HGTModelon1` | `--acceptModelonHGT`、hold 警告、忽略 `__Modelon` 的其他内容 |
+| `HGTModelon1` | `__Modelon` 的 HGT 注解被静默忽略 |
 | `HGTIf1` | 参数选中的 if 分支；保留下来的 if 分支中的注解被忽略 |
 | `HGTNotSupported1` | when 方程中的注解（8007）；基类的 `tearingPairs` 不继承 |
 | `HGTFor1` | for 循环：嵌套循环、两个下标的名字、`tearingPairs` 引用某次迭代、自动命名、倒序的下标对应 |

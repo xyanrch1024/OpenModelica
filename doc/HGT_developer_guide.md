@@ -21,7 +21,7 @@
 
 ## 1. 概览
 
-HGT 让用户在模型里指定代数环的**迭代变量**和**残差方程**，编译器先按用户的指定撕裂，再自动补全其余部分。注解语法与 OCT 的 `__Modelon(...)` 一一对应，OMC 的容器注解是 `__OpenModelica_HGT(...)`。与 OCT 一样，只保证稳态模型（无状态变量）。
+HGT 让用户在模型里指定代数环的**迭代变量**和**残差方程**，编译器先按用户的指定撕裂，再自动补全其余部分。注解语法参照 OCT 的 `__Modelon(...)`，OMC 的容器注解是 `__OpenModelica_HGT(...)`；OMC 不读 `__Modelon`，和其他厂商的注解一样静默忽略。与 OCT 一样，只保证稳态模型（无状态变量）。
 
 数据从前端一路传到运行时：
 
@@ -74,7 +74,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 - `enabled`、`level`、`hold` 必须是参数表达式。`enabled` 和 `level` 在前端求值，并把用到的参数标记为结构参数。
 - `start`、`min`、`max`、`nominal` 保留为表达式。level 1 上它们只能依赖参数（错误 8006），level ≥ 2 允许依赖连续变量（OCT 的 R7）。但后端目前**只支持依赖参数的 min/max**，见 §4.7。
 - `hold` 会解析、存储，但未实现，给警告 8009 后忽略；字面量 `hold = false` 等同于默认值，不报警告。
-- 加了 `--acceptModelonHGT` 后，`__Modelon(...)` 也会读取，但只读其中的 `name`、`ResidualEquation`、`IterationVariable`、`tearingPairs`，其他内容静默忽略。
+- `__Modelon(...)` 不读取，静默忽略：OCT 模型要把 HGT 注解改写成 `__OpenModelica_HGT(...)`，而且只支持显式配对。
 - `merge_blt_blocks` 和 `allow_multiple_residuals_in_hgt_blocks` 在 OCT 里是编译选项，OMC 也只做成选项（见下表），**不是**注解字段。写在注解里会得到警告 8000（未知字段）。
 
 ### 2.2 选项（`Util/Flags.mo`，注册在 `Util/FlagsUtil.mo`）
@@ -82,10 +82,9 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 | 选项 | 编号 | 默认 | 作用 |
 |---|---|---|---|
 | `--handGuidedTearing` | config 173 | false | 总开关；同时自动启用后端模块 `hgtMatching` |
-| `--acceptModelonHGT` | config 174 | false | 也读 `__Modelon` |
-| `--hgtMergeBLTBlocks` | config 175 | false | 把所有 HGT 项合并进同一个 BLT 块（OCT `merge_blt_blocks`） |
-| `--hgtAllowMultipleResiduals` | config 176 | `level1` | `false`、`level1`、`true`：每个块允许几个残差（OCT 的 R9） |
-| `--hgtOnly` | config 177 | false | HGT 块只用用户给的迭代变量和残差方程撕裂：需要补迭代变量或残差方程时报错 8018，不再自动补全 |
+| `--hgtMergeBLTBlocks` | config 174 | false | 把所有 HGT 项合并进同一个 BLT 块（OCT `merge_blt_blocks`） |
+| `--hgtAllowMultipleResiduals` | config 175 | `level1` | `false`、`level1`、`true`：每个块允许几个残差（OCT 的 R9） |
+| `--hgtOnly` | config 176 | false | HGT 块只用用户给的迭代变量和残差方程撕裂：需要补迭代变量或残差方程时报错 8018，不再自动补全 |
 | `-d=hgtDump` | debug 202 | 关 | 打印前端收集到的规范和后端的分块结果 |
 
 `.cmake/meta_modelica_source_list.cmake` 中登记了 `NFFrontEnd/NFHandGuidedTearing.mo` 和 `BackEnd/HandGuidedTearing.mo` 两个新文件。
@@ -103,9 +102,9 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 | `IterationVariable.ITERATION_VARIABLE` | `name : ComponentRef`、`level`、`start/min/max/nominal/hold : Option<Expression>`、`info` |
 | `ResidualEquation.RESIDUAL_EQUATION` | `name : String`、`level`、`nominal`、`hold`、`iterationVariable : Option<IterationVariable>`（解析时可能为空，`checkOnlyPairs` 之后一定是 SOME）、`info` |
 | `Spec.SPEC` | `residuals`：所有配对，每条残差方程都带它的迭代变量 |
-| `Collector.COLLECTOR` | 展平过程中的累积状态：`enabled`、`acceptModelon`、`found`、嵌套深度 `nested`、已注册的方程名 `equationNames`、组件级残差 `residuals`、待解析的系统级配对 `pairs`、未配对变量 `iterationVariables`（只为了报错而收集）、自动命名计数器 `nameIndex` |
+| `Collector.COLLECTOR` | 展平过程中的累积状态：`enabled`、`found`、嵌套深度 `nested`、已注册的方程名 `equationNames`、组件级残差 `residuals`、待解析的系统级配对 `pairs`、未配对变量 `iterationVariables`（只为了报错而收集）、自动命名计数器 `nameIndex` |
 
-常量：`ANNOTATION_NAME = "__OpenModelica_HGT"`、`MODELON_ANNOTATION_NAME = "__Modelon"`、`EQUATION_TAG = "__OpenModelica_HGTEquation"`。
+常量：`ANNOTATION_NAME = "__OpenModelica_HGT"`、`EQUATION_TAG = "__OpenModelica_HGTEquation"`。
 
 **DAE 层**（`FrontEnd/DAE.mo`）：结构与上面对应，但用 DAE 的类型。
 
@@ -123,8 +122,8 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 
 ### 3.2 AbsynToSCode 的两处改动（`FrontEnd/AbsynToSCode.mo`）
 
-1. **保留空修饰。** 正常情况下，空修饰（比如单独写的 `ResidualEquation`）在 SCode 转换时会被丢掉。`translateArgs` 现在对 `__OpenModelica_HGT` 和 `__Modelon`（由 `isHGTAnnotationPath` 判断）往下传 `keepEmpty`，所以单独写的 `ResidualEquation` 和 `IterationVariable` 能保留下来。
-2. **合并多个 `tearingPairs`。** 一个类可以有多个 `annotation(...)` 子句，原来的合并逻辑只保留最后一个 `tearingPairs`。`translateCommentList` 现在在 `AbsynUtil.mergeAnnotationsList` 之后调用 `mergeHGTTearingPairs`，按源码顺序把所有 `Pair` 拼接起来；两个厂商名分开处理。
+1. **保留空修饰。** 正常情况下，空修饰（比如单独写的 `ResidualEquation`）在 SCode 转换时会被丢掉。`translateArgs` 现在对 `__OpenModelica_HGT`（由 `isHGTAnnotationPath` 判断）往下传 `keepEmpty`，所以单独写的 `ResidualEquation` 和 `IterationVariable` 能保留下来。
+2. **合并多个 `tearingPairs`。** 一个类可以有多个 `annotation(...)` 子句，原来的合并逻辑只保留最后一个 `tearingPairs`。`translateCommentList` 现在在 `AbsynUtil.mergeAnnotationsList` 之后调用 `mergeHGTTearingPairs`，按源码顺序把所有 `Pair` 拼接起来。
 
 ### 3.3 收集：在展平阶段完成
 
@@ -157,13 +156,12 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 - 方程：后出现的 `name` 或 `ResidualEquation` 覆盖先出现的。
 - 变量：每个 `IterationVariable` 都会收集，重复就是错误 8005。
 - 类：`tearingPairs` 已在 AbsynToSCode 中合并（§3.2）。
-- `__OpenModelica_HGT` 和 `__Modelon` 可以混用。
 
 ### 3.4 各字段的解析函数
 
 | 函数 | 作用 |
 |---|---|
-| `getHGTMods` | 取出元素上所有 HGT 注解（`__Modelon` 只在 `acceptModelon` 时读取） |
+| `getHGTMods` | 取出元素上所有 `__OpenModelica_HGT` 注解 |
 | `parseResidualEquation` | 解析 `ResidualEquation(...)`，可带 `iterationVariable` 形成配对 |
 | `parsePair` | 解析 `Pair(...)`；`residualEquation = 名字` 通过 `Dump.printComponentRefStr` 取文本 |
 | `parsePairedIterationVariable`、`parseUnpairedIterationVariable` | 解析两种迭代变量写法；配对里的变量继承所在记录的 level。后者解析出的未配对变量只用于报错 8022 |
@@ -502,8 +500,8 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | HGTError7 | 残差的 `nominal = 0`（8001） |
 | HGTError8 | 迭代变量的 nominal 由值为负的参数给出（8001） |
 | HGTLevel1 | level 由参数给出（变成结构参数）；level 2 上允许依赖连续变量 |
-| HGTModelon1 | `--acceptModelonHGT`、hold 警告、忽略其他 `__Modelon` 内容 |
-| HGTIf1 | 由参数选中的 if 分支中的注解（`__Modelon`、`hold = false` 不报警告）；保留下来的 if 分支中的注解被忽略（8007） |
+| HGTModelon1 | `__Modelon` 的 HGT 注解被静默忽略 |
+| HGTIf1 | 由参数选中的 if 分支中的注解（`hold = false` 不报警告）；保留下来的 if 分支中的注解被忽略（8007） |
 | HGTNotSupported1 | when 方程中的注解（8007）；基类中的 `tearingPairs` 不继承 |
 | HGTFor1 | for 循环：嵌套、两个下标的名字、`tearingPairs` 引用某次迭代、自动命名、倒序对应 |
 | HGTArray1 | 数组方程逐元素配对：切片、矩阵、标量和数组属性、`tearingPairs` 引用整条数组方程和单个元素、for 里的数组方程 |
@@ -526,7 +524,7 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | HGTLevel1 | OCT 文档中的 NonConvex 例子，嵌套 level 2；带状态模型给警告 8017 |
 | HGTLevel2 | 三层嵌套 |
 | HGTNetwork1 | 泵网络：组件级和系统级配对、设计目标、界；`m_set = 8` 时越界解被拒绝 |
-| HGTPlant1 | 热工水力例子：`__Modelon` 语法、两个块、自动补全、`enabled = false`、各属性 |
+| HGTPlant1 | 热工水力例子：系统级配对、两个块、自动补全、`enabled = false`、各属性 |
 | HGTAlgebra1 | 纯代数：多根选根、反问题、带界的迭代变量、自动补撕裂变量 |
 | HGTOnly1 | `--hgtOnly`：能解的块照常；撕裂卡住和匹配不上的块报 8018；不加 `--hgtOnly` 时同样的模型自动补全后能解 |
 | HGTIf1 | OCT 风格的稳态开关：参数 `isSteadyState` 选中带 HGT 注解的稳态分支 |

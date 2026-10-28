@@ -288,24 +288,22 @@ omc --newBackend -d=optdaedump,tearingdump,dumpBackendClocks model.mos
 
 前端收集 HGT 注解的部分（`NFHandGuidedTearing`）两个后端共用，`-d=hgtDump` 也能打印出前端读到的配对。但是新后端**完全不读取** `FlatModel.handGuidedTearing`，撕裂仍然按 `--tearingMethod` 自动进行。
 
-用 [HGT_matching_and_tearing.md](HGT_matching_and_tearing.md) §8.2 的 `Nested` 模型实测（`--newBackend --handGuidedTearing -d=hgtDump,tearingdump`）：
+用测试模型 `HGT.Bound` 实测（`--newBackend --handGuidedTearing -d=hgtDump,tearingdump`）：
 
 ```
 Hand guided tearing:
-  pair: residual equation e2 (level 2), iteration variable y (level 2)
-  pair: residual equation e3 (level 1), iteration variable x (level 1)
+  pair: residual equation $hgt1, iteration variable y (max = ymax)
 ...
-BLOCK: Algebraic Loop (Linear = false, Mixed = false, Homotopy = false, size = 3)
+BLOCK: Algebraic Loop (Linear = false, Mixed = false, Homotopy = false, size = 2)
 ### Iteration Variables:
-    [ALGB] (1) Real x (start = 1.0)
+    [ALGB] (1) Real y (start = 4.0)
 ### Residual Equations:
-    [SCAL] (1) $RES_SIM_2 = x - (y ^ 3.0 + y); ($RES_SIM_2)
+    [SCAL] (1) $RES_AUX_2 = log(x) - y; ($RES_AUX_2)
 ### Inner Equations:
-    ... z 由 z * x = 6 解出 ...
-    ... y 由 z = y + x 解出 ...
+    ... x 由 x + y ^ 3.0 = 30.0 解出 ...
 ```
 
-迭代变量 x 恰好是对的，但残差选的是 e2，内部方程用 e3 去解 z。用户的配对 e3↔x、e2↔y 以及嵌套结构都没有被采用。这个例子碰巧也能解出 x=2、y=1，但在真正需要 HGT 的模型上（例如开发指南里提到的 `HGTGrid` 的 sqrt 形式），这样就解不出来了。
+自动撕裂碰巧选了和用户一样的迭代变量和残差，但用户给的界 `max = ymax` 没有传到运行时。求解器把 y 推到 4 以上，x = 30 − y³ 变成负数，`log(x)` 断言失败，初始化失败。旧后端会把 y 限制在 ymax 以内，可以解出来。用户的项不在同一个代数环里时（例如 `HGT.CrossSCC`、`HGT.Chain`），新后端连撕裂集都不会按用户的选。
 
 ### 9.2 旧后端的各部分在新后端里对应什么
 
@@ -316,21 +314,20 @@ BLOCK: Algebraic Loop (Linear = false, Mixed = false, Homotopy = false, size = 3
 | 优化模块中的保护 | 不让别名消除删掉迭代变量和残差方程 | `NBAlias`、`NBFunctionAlias`、`simplify`、`Inline` 要跳过 HGT 项 | 中 |
 | `hgtMatching` | 强制配对、合并成一个块 | `NBCausalize`：匹配前锁定配对，排序时保证它们进同一个强连通分量 | **高**（数组匹配） |
 | `Tearing.handGuidedTearing` | 按用户指定撕裂，卡住时自动补迭代变量 | `NBTearing` 中新增 `hgt` 方法，参照 `guru` | 中 |
-| 嵌套 level | 内层块 `INNERCOMPONENT` | `TEARING_SET.innerEquations` 中放入一个内层 `ALGEBRAIC_LOOP` | 中到高（需要验证 NSimCode 和运行时） |
 | 伪根约束 `INNEREQUATIONCONSTRAINTS` | 反解非线性函数时检查原方程 | `NBSolve` 或 NSimCode 中生成 assert | 中 |
 | `hgtAttributes`、迭代变量界、`hgtBounds` | 运行时的投影和解检查 | `NSimCode.convert` 时填进旧 SimCode 的 `hgtAttributes`，之后完全复用 | 低 |
 | 初始化和仿真的区别（`initialResiduals`） | 初始方程上的配对只用于初始化 | 方程上已有 `attr.exclusively_initial`，直接用 | 低 |
 
 ### 9.3 建议的实现步骤
 
-**阶段 1：只支持标量项，不支持嵌套**
+**阶段 1：只支持标量项**
 
 1. `BackendDAE.MAIN` 增加 `Option<HGTSpec> handGuidedTearing`，在 `lower` 中从 `FlatModel` 读取。
 2. 迭代变量：在变量属性中标记不可删除，应用 start 和 nominal；残差按 nominal 缩放。这一步可以参照旧后端 `HandGuidedTearing.lower`，改用新前端的表达式类型。
 3. 在 `NBAlias` 等 Pre 模块中保护 HGT 项：被标记的变量不当作别名消除，带标签的方程不删除。
 4. 新增撕裂方法 `hgt`，接入 `NBTearing.getModule`，并且**只要强连通分量里有 HGT 项就强制使用它**，不受 `--tearingMethod` 影响。实现上参照 `guru`：
    - `iteration_vars` = 用户的迭代变量；`residual_eqns` = 用户的残差方程；
-   - 其余方程按 casual 可解性做因果化，卡住时自动补迭代变量（逻辑和旧后端 §6.2 ③ 相同）；
+   - 其余方程按 casual 可解性做因果化，卡住时自动补迭代变量（逻辑和旧后端 §6.2 ② 相同）；
    - 最后剩下的方程作为自动残差。
 5. 只做到这一步时，**用户的项分散在不同的强连通分量里**的情况还处理不了：旧后端靠 `hgtMatching` 强制合并，这一阶段可以先报错。
 6. `NSimCode.convert` 时生成 `hgtAttributes`，复用已有的运行时实现。
@@ -343,15 +340,7 @@ BLOCK: Algebraic Loop (Linear = false, Mixed = false, Homotopy = false, size = 3
 - 排序（`NBSorting`）时，在 HGT 行之间加人为依赖，相当于 `addRing`，保证它们进同一个分量。
 - 难点：新后端的匹配是数组层面的。如果某个 HGT 项是一条 for 方程的切片，就要把那条 for 方程拆成切片，或者对含 HGT 项的分区**退回标量匹配**。建议先退回标量：HGT 模型通常不大，而且用户写的配对本来就是标量的（注意前端目前也不支持在 for 方程上写 HGT 注解）。
 
-**阶段 3：嵌套 level**
-
-- 在 `TEARING_SET.innerEquations` 中放入一个内层 `ALGEBRAIC_LOOP`，用自己的撕裂集表示内层块。
-- 需要验证：
-  - `NSimStrongComponent.fromStrongComponent` 递归时，是否能为内层代数环生成嵌套的非线性系统；
-  - 旧 SimCode 是否能表达这种嵌套。旧后端的 HGT 已经用嵌套 NLS 实现过，见开发指南 §5.2，所以 SimCode 和运行时一侧是现成的，主要是 `convert` 的映射。
-- 求解顺序（内层块的输入已知后整体求解），参照旧后端的 `order := (-k) :: order` 逻辑。
-
-**阶段 4：数组上的 HGT（可选）**
+**阶段 3：数组上的 HGT（可选）**
 
 - 前端已经支持 for 方程和数组方程上的注解，但做法依赖展开：for 方程由 `unrollForLoop` 展开、数组方程由 `NFScalarize` 拆开，每个元素成为一个带标签的标量配对。新后端保留 for 方程和数组方程，所以这条路径用不上。
 - 在新后端要用 `Slice` 表达"这条 for 方程（或数组方程）的第 i 个切片和 `m[i]` 配对"，在数组层面强制匹配；前端也要改成把整条方程的配对规则（下标对应关系）传下去，而不是展开后的元素。
@@ -363,8 +352,7 @@ BLOCK: Algebraic Loop (Linear = false, Mixed = false, Homotopy = false, size = 3
 |---|---|---|
 | 1 | 1–2 周 | Pre 模块里的保护是否完整：新后端的别名消除比旧后端激进 |
 | 2 | 1–2 周 | 数组匹配和锁定配对能否共存；退回标量匹配的范围 |
-| 3 | 1 周以上 | NSimCode 对嵌套代数环的支持，雅可比矩阵的生成 |
-| 4 | 数周 | 前端语法、切片匹配、测试覆盖 |
+| 3 | 数周 | 前端语法、切片匹配、测试覆盖 |
 
 **测试**：旧后端的 14 个 HGT 仿真测试和 16 个前端测试可以直接加上 `--newBackend` 再跑一遍，作为回归测试。结果应该和旧后端一致，对比方法和 C/Rust 运行时那次一样，用 `diffSimulationResults`。
 

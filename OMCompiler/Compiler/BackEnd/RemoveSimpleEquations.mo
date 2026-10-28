@@ -950,7 +950,7 @@ algorithm
       algorithm
         // collect all equations
         eqnlst := BackendEquation.getList(elst, iEqns);
-        (elst,_,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+        (elst,_,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
         eqnlst1 := BackendEquation.getList(elst, iEqns);
         arg := inFunc(listAppend(eqnlst, eqnlst1), inTypeA);
       then

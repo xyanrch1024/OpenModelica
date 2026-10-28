@@ -3,7 +3,7 @@
 // status: incorrect
 // cflags: --handGuidedTearing
 //
-// Attributes of level 1 iteration variables can't depend on continuous variables.
+// Attributes of iteration variables can't depend on continuous variables.
 //
 
 model HGTError4
@@ -15,7 +15,7 @@ end HGTError4;
 
 // Result:
 // Error processing file: HGTError4.mo
-// [flattening/modelica/scodeinst/HGTError4.mo:12:56-12:86:writable] Error: The max attribute 'y' of the hand guided tearing iteration variable x depends on continuous variables, which is only allowed on level 2 or higher.
+// [flattening/modelica/scodeinst/HGTError4.mo:12:56-12:86:writable] Error: The max attribute 'y' of the hand guided tearing iteration variable x depends on continuous variables, it must be a parameter expression.
 //
 // # Error encountered! Exiting...
 // # Please check the error message and the flags.

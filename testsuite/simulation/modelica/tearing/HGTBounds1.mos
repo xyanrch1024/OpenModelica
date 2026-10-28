@@ -46,7 +46,7 @@ buildModel(HGT.Multi); getErrorString();
 // true
 // ""
 // {"", ""}
-// "Error: The hand guided tearing block of level 1 has 2 residual equations {$hgt2, $hgt1}, but --hgtAllowMultipleResiduals=false allows only one.
+// "Error: The hand guided tearing block has 2 residual equations {$hgt2, $hgt1}, but --hgtAllowMultipleResiduals=false allows only one.
 // Error: post-optimization module hgtMatching (initialization) failed.
 // Error: No system for the symbolic initialization was generated
 // "

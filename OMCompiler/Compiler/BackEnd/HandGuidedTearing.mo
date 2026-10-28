@@ -71,6 +71,7 @@ import List;
 import SCode;
 import SCodeUtil;
 import UnorderedMap;
+import UnorderedSet;
 import Util;
 
 constant String EQUATION_TAG = "__OpenModelica_HGTEquation";
@@ -259,22 +260,19 @@ end simulationSpec;
 function componentItems
   "Returns the hand guided tearing iteration variables and residual equations of
    a strong component, as indices local to the component (positions in its
-   variable and equation lists), and their levels."
+   variable and equation lists)."
   input BackendDAE.StrongComponent comp;
   input BackendDAE.EqSystem syst;
   input BackendDAE.Shared shared;
   output Boolean isHGT = false;
   output list<Integer> localVars = {};
   output list<Integer> localEqns = {};
-  output list<Integer> varLevels = {};
-  output list<Integer> eqnLevels = {};
 protected
   BackendDAE.HGTSpec spec;
   list<Integer> eqns, vars;
   Integer i;
   Option<String> name;
-  String str;
-  UnorderedMap<String, Integer> res_levels, var_levels;
+  UnorderedSet<String> res_names, var_names;
 algorithm
   if not isActive(shared) then
     return;
@@ -291,24 +289,15 @@ algorithm
   end if;
 
   SOME(spec) := shared.handGuidedTearing;
-  res_levels := UnorderedMap.new<Integer>(stringHashDjb2, stringEq);
-  var_levels := UnorderedMap.new<Integer>(stringHashDjb2, stringEq);
-
-  for r in spec.residuals loop
-    UnorderedMap.add(r.name, r.level, res_levels);
-  end for;
-
-  for v in allIterationVariables(spec) loop
-    UnorderedMap.add(crefString(v.name), v.level, var_levels);
-  end for;
+  res_names := UnorderedSet.fromList(list(r.name for r in spec.residuals), stringHashDjb2, stringEq);
+  var_names := UnorderedSet.fromList(list(crefString(v.name) for v in allIterationVariables(spec)), stringHashDjb2, stringEq);
 
   i := 1;
   for e in eqns loop
     name := equationName(BackendEquation.get(syst.orderedEqs, e));
 
-    if isSome(name) and UnorderedMap.contains(Util.getOption(name), res_levels) then
+    if isSome(name) and UnorderedSet.contains(Util.getOption(name), res_names) then
       localEqns := i :: localEqns;
-      eqnLevels := UnorderedMap.getOrFail(Util.getOption(name), res_levels) :: eqnLevels;
     end if;
 
     i := i + 1;
@@ -316,11 +305,8 @@ algorithm
 
   i := 1;
   for v in vars loop
-    str := crefString(BackendVariable.varCref(BackendVariable.getVarAt(syst.orderedVars, v)));
-
-    if UnorderedMap.contains(str, var_levels) then
+    if UnorderedSet.contains(crefString(BackendVariable.varCref(BackendVariable.getVarAt(syst.orderedVars, v))), var_names) then
       localVars := i :: localVars;
-      varLevels := UnorderedMap.getOrFail(str, var_levels) :: varLevels;
     end if;
 
     i := i + 1;
@@ -328,65 +314,8 @@ algorithm
 
   localEqns := listReverse(localEqns);
   localVars := listReverse(localVars);
-  eqnLevels := listReverse(eqnLevels);
-  varLevels := listReverse(varLevels);
   isHGT := not (listEmpty(localEqns) and listEmpty(localVars));
 end componentItems;
-
-function componentPairs
-  "Returns the hand guided tearing pairs of a strong component as indices local
-   to the component: (variable position, equation position)."
-  input BackendDAE.StrongComponent comp;
-  input BackendDAE.EqSystem syst;
-  input BackendDAE.Shared shared;
-  output list<tuple<Integer, Integer>> pairs = {};
-protected
-  BackendDAE.HGTSpec spec;
-  list<Integer> eqns, vars;
-  UnorderedMap<String, String> pair_vars "residual name -> iteration variable";
-  UnorderedMap<String, Integer> var_pos;
-  Option<String> name;
-  Option<Integer> pos;
-  Integer i;
-algorithm
-  if not isActive(shared) then
-    return;
-  end if;
-
-  (eqns, vars) := match comp
-    case BackendDAE.EQUATIONSYSTEM() then (comp.eqns, comp.vars);
-    case BackendDAE.SINGLEEQUATION() then ({comp.eqn}, {comp.var});
-    else ({}, {});
-  end match;
-
-  SOME(spec) := shared.handGuidedTearing;
-  pair_vars := UnorderedMap.new<String>(stringHashDjb2, stringEq);
-  for r in spec.residuals loop
-    UnorderedMap.add(r.name, crefString(r.iterationVariable.name), pair_vars);
-  end for;
-
-  var_pos := UnorderedMap.new<Integer>(stringHashDjb2, stringEq);
-  i := 1;
-  for var in vars loop
-    UnorderedMap.add(crefString(BackendVariable.varCref(BackendVariable.getVarAt(syst.orderedVars, var))), i, var_pos);
-    i := i + 1;
-  end for;
-
-  i := 1;
-  for e in eqns loop
-    name := equationName(BackendEquation.get(syst.orderedEqs, e));
-
-    if isSome(name) and UnorderedMap.contains(Util.getOption(name), pair_vars) then
-      pos := UnorderedMap.get(UnorderedMap.getOrFail(Util.getOption(name), pair_vars), var_pos);
-
-      if isSome(pos) then
-        pairs := (Util.getOption(pos), i) :: pairs;
-      end if;
-    end if;
-
-    i := i + 1;
-  end for;
-end componentPairs;
 
 protected
 
@@ -724,32 +653,23 @@ algorithm
 end matchSystem;
 
 function checkResidualCounts
-  "R9, OCT option allow_multiple_residuals_in_hgt_blocks: checks the number of
-   residual equations of the hand guided tearing blocks. Only the lowest level of
-   a block is checked here; the residual equations of higher levels are spread
-   over the nested blocks, which Tearing.handGuidedTearing checks."
+  "R9, OCT option allow_multiple_residuals_in_hgt_blocks: with
+   --hgtAllowMultipleResiduals=false a hand guided tearing block may only have
+   one residual equation of the user."
   input BackendDAE.StrongComponents comps;
   input BackendDAE.EqSystem syst;
   input BackendDAE.HGTSpec spec;
 protected
-  String allow;
-  UnorderedMap<String, Integer> levels;
-  UnorderedMap<Integer, Integer> counts;
-  UnorderedMap<Integer, String> names;
-  Option<String> name;
+  UnorderedSet<String> res_names;
+  list<String> names;
   list<Integer> eqns;
-  Integer level;
+  Option<String> name;
 algorithm
-  allow := Flags.getConfigString(Flags.HGT_ALLOW_MULTIPLE_RESIDUALS);
-
-  if allow == "true" then
+  if Flags.getConfigBool(Flags.HGT_ALLOW_MULTIPLE_RESIDUALS) then
     return;
   end if;
 
-  levels := UnorderedMap.new<Integer>(stringHashDjb2, stringEq);
-  for r in spec.residuals loop
-    UnorderedMap.add(r.name, r.level, levels);
-  end for;
+  res_names := UnorderedSet.fromList(list(r.name for r in spec.residuals), stringHashDjb2, stringEq);
 
   for comp in comps loop
     eqns := match comp
@@ -757,27 +677,19 @@ algorithm
       else {};
     end match;
 
-    counts := UnorderedMap.new<Integer>(Util.id, intEq);
-    names := UnorderedMap.new<String>(Util.id, intEq);
-
+    names := {};
     for e in eqns loop
       name := equationName(BackendEquation.get(syst.orderedEqs, e));
 
-      if isSome(name) and UnorderedMap.contains(Util.getOption(name), levels) then
-        level := UnorderedMap.getOrFail(Util.getOption(name), levels);
-        UnorderedMap.add(level, UnorderedMap.getOrDefault(level, counts, 0) + 1, counts);
-        UnorderedMap.add(level, if UnorderedMap.contains(level, names) then UnorderedMap.getOrFail(level, names) + ", " + Util.getOption(name) else Util.getOption(name), names);
+      if isSome(name) and UnorderedSet.contains(Util.getOption(name), res_names) then
+        names := Util.getOption(name) :: names;
       end if;
     end for;
 
-    if not UnorderedMap.isEmpty(counts) then
-      level := List.fold(UnorderedMap.keyList(counts), intMin, listHead(UnorderedMap.keyList(counts)));
-
-      if UnorderedMap.getOrFail(level, counts) > 1 and (allow == "false" or level > 1) then
-        Error.addMessage(Error.HGT_MULTIPLE_RESIDUALS, {intString(level), intString(UnorderedMap.getOrFail(level, counts)),
-          UnorderedMap.getOrFail(level, names), allow});
-        fail();
-      end if;
+    if listLength(names) > 1 then
+      Error.addMessage(Error.HGT_MULTIPLE_RESIDUALS, {intString(listLength(names)),
+        stringDelimitList(listReverse(names), ", ")});
+      fail();
     end if;
   end for;
 end checkResidualCounts;

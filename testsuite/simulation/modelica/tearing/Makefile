@@ -8,8 +8,6 @@ HGTError1.mos \
 HGTFor1.mos \
 HGTIf1.mos \
 HGTInit1.mos \
-HGTLevel1.mos \
-HGTLevel2.mos \
 HGTNetwork1.mos \
 HGTOnly1.mos \
 HGTPair1.mos \

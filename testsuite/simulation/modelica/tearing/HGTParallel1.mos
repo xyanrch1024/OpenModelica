@@ -2,12 +2,10 @@
 // keywords:  tearing, hand guided tearing
 // status:    correct
 //
-// Three nested levels in a component array: the pump speed (level 1) is
-// adjusted to the required total flow, the common pressure drop (level 2) to
-// the pump head, and the flow of each of the 12 parallel branches (level 3) to
-// the pressure drop. The pairs of the array elements differ only in their
-// subscripts, and the level 2 block contains 12 independent level 3 blocks
-// with one residual equation each.
+// A component array of 12 parallel branches: the pump speed is adjusted to the
+// required total flow, the common pressure drop to the pump head, and the flow
+// of each branch to the pressure drop, all in one block of 14 pairs. The pairs
+// of the array elements differ only in their subscripts.
 //
 
 loadFile("HGTParallel.mo"); getErrorString();
@@ -22,20 +20,20 @@ val(mixedTemperature, 0); val(heatDuty, 0);
 // true
 // ""
 // Hand guided tearing:
-//   pair: residual equation $hgt13 (level 2), iteration variable dp (level 2, min = 0.001, max = 6.0, nominal = 1.0)
-//   pair: residual equation $hgt14 (level 1), iteration variable speed (level 1, min = 0.15, max = 1.5, nominal = 1.0)
-//   pair: residual equation branch[10].$hgt10 (level 3), iteration variable branch[10].m (level 3, min = 0.02, max = 5.0, nominal = 1.0)
-//   pair: residual equation branch[11].$hgt11 (level 3), iteration variable branch[11].m (level 3, min = 0.02, max = 5.0, nominal = 1.0)
-//   pair: residual equation branch[12].$hgt12 (level 3), iteration variable branch[12].m (level 3, min = 0.02, max = 5.0, nominal = 1.0)
-//   pair: residual equation branch[1].$hgt1 (level 3), iteration variable branch[1].m (level 3, min = 0.02, max = 5.0, nominal = 1.0)
-//   pair: residual equation branch[2].$hgt2 (level 3), iteration variable branch[2].m (level 3, min = 0.02, max = 5.0, nominal = 1.0)
-//   pair: residual equation branch[3].$hgt3 (level 3), iteration variable branch[3].m (level 3, min = 0.02, max = 5.0, nominal = 1.0)
-//   pair: residual equation branch[4].$hgt4 (level 3), iteration variable branch[4].m (level 3, min = 0.02, max = 5.0, nominal = 1.0)
-//   pair: residual equation branch[5].$hgt5 (level 3), iteration variable branch[5].m (level 3, min = 0.02, max = 5.0, nominal = 1.0)
-//   pair: residual equation branch[6].$hgt6 (level 3), iteration variable branch[6].m (level 3, min = 0.02, max = 5.0, nominal = 1.0)
-//   pair: residual equation branch[7].$hgt7 (level 3), iteration variable branch[7].m (level 3, min = 0.02, max = 5.0, nominal = 1.0)
-//   pair: residual equation branch[8].$hgt8 (level 3), iteration variable branch[8].m (level 3, min = 0.02, max = 5.0, nominal = 1.0)
-//   pair: residual equation branch[9].$hgt9 (level 3), iteration variable branch[9].m (level 3, min = 0.02, max = 5.0, nominal = 1.0)
+//   pair: residual equation $hgt13, iteration variable dp (min = 0.001, max = 6.0, nominal = 1.0)
+//   pair: residual equation $hgt14, iteration variable speed (min = 0.15, max = 1.5, nominal = 1.0)
+//   pair: residual equation branch[10].$hgt10, iteration variable branch[10].m (min = 0.02, max = 5.0, nominal = 1.0)
+//   pair: residual equation branch[11].$hgt11, iteration variable branch[11].m (min = 0.02, max = 5.0, nominal = 1.0)
+//   pair: residual equation branch[12].$hgt12, iteration variable branch[12].m (min = 0.02, max = 5.0, nominal = 1.0)
+//   pair: residual equation branch[1].$hgt1, iteration variable branch[1].m (min = 0.02, max = 5.0, nominal = 1.0)
+//   pair: residual equation branch[2].$hgt2, iteration variable branch[2].m (min = 0.02, max = 5.0, nominal = 1.0)
+//   pair: residual equation branch[3].$hgt3, iteration variable branch[3].m (min = 0.02, max = 5.0, nominal = 1.0)
+//   pair: residual equation branch[4].$hgt4, iteration variable branch[4].m (min = 0.02, max = 5.0, nominal = 1.0)
+//   pair: residual equation branch[5].$hgt5, iteration variable branch[5].m (min = 0.02, max = 5.0, nominal = 1.0)
+//   pair: residual equation branch[6].$hgt6, iteration variable branch[6].m (min = 0.02, max = 5.0, nominal = 1.0)
+//   pair: residual equation branch[7].$hgt7, iteration variable branch[7].m (min = 0.02, max = 5.0, nominal = 1.0)
+//   pair: residual equation branch[8].$hgt8, iteration variable branch[8].m (min = 0.02, max = 5.0, nominal = 1.0)
+//   pair: residual equation branch[9].$hgt9, iteration variable branch[9].m (min = 0.02, max = 5.0, nominal = 1.0)
 // Hand guided tearing matching (initialization system):
 //   block of 29 equations: residual equations {branch[1].$hgt1, $hgt14, $hgt13, branch[12].$hgt12, branch[11].$hgt11, branch[10].$hgt10, branch[9].$hgt9, branch[8].$hgt8, branch[7].$hgt7, branch[6].$hgt6, branch[5].$hgt5, branch[4].$hgt4, branch[3].$hgt3, branch[2].$hgt2}, iteration variables {branch[2].m, branch[3].m, branch[4].m, branch[5].m, branch[6].m, branch[7].m, branch[8].m, branch[9].m, branch[10].m, branch[11].m, branch[12].m, dp, speed, branch[1].m}
 // Hand guided tearing matching (simulation system):
@@ -48,11 +46,11 @@ val(mixedTemperature, 0); val(heatDuty, 0);
 // "
 // end SimulationResult;
 // ""
-// 0.5979517949970713
+// 0.5979517949970714
 // 0.8345561896826359
-// 12.0
-// 1.2827264128752462
-// 0.8174792430598674
-// 316.4490240240768
+// 11.999999999999998
+// 1.282726412875246
+// 0.8174792430598675
+// 316.4490240240767
 // 825.0830450476899
 // endResult

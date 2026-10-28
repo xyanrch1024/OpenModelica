@@ -19,10 +19,10 @@ val(m, 0, "HGT.ForPipe_res.mat"); val(p[3], 0, "HGT.ForPipe_res.mat");
 // true
 // ""
 // Hand guided tearing:
-//   pair: residual equation $hgt1 (level 1), iteration variable m (level 1)
-//   pair: residual equation seg[1] (level 1), iteration variable p[2] (level 1, start = p_in - 2.0 * 1.0)
-//   pair: residual equation seg[2] (level 1), iteration variable p[3] (level 1, start = p_in - 2.0 * 2.0)
-//   pair: residual equation seg[3] (level 1), iteration variable p[4] (level 1, start = p_in - 2.0 * 3.0)
+//   pair: residual equation $hgt1, iteration variable m
+//   pair: residual equation seg[1], iteration variable p[2] (start = p_in - 2.0 * 1.0)
+//   pair: residual equation seg[2], iteration variable p[3] (start = p_in - 2.0 * 2.0)
+//   pair: residual equation seg[3], iteration variable p[4] (start = p_in - 2.0 * 3.0)
 // Hand guided tearing matching (initialization system):
 //   block of 4 equations: residual equations {seg[1], seg[2], seg[3], $hgt1}, iteration variables {m, p[4], p[3], p[2]}
 // Hand guided tearing matching (simulation system):
@@ -36,10 +36,10 @@ val(m, 0, "HGT.ForPipe_res.mat"); val(p[3], 0, "HGT.ForPipe_res.mat");
 // end SimulationResult;
 // ""
 // Hand guided tearing:
-//   pair: residual equation $hgt1 (level 1), iteration variable p[2] (level 1, start = 8.0)
-//   pair: residual equation $hgt2 (level 1), iteration variable p[3] (level 1, start = 6.0)
-//   pair: residual equation $hgt3 (level 1), iteration variable p[4] (level 1, start = 4.0)
-//   pair: residual equation $hgt4 (level 1), iteration variable m (level 1)
+//   pair: residual equation $hgt1, iteration variable p[2] (start = 8.0)
+//   pair: residual equation $hgt2, iteration variable p[3] (start = 6.0)
+//   pair: residual equation $hgt3, iteration variable p[4] (start = 4.0)
+//   pair: residual equation $hgt4, iteration variable m
 // Hand guided tearing matching (initialization system):
 //   block of 4 equations: residual equations {$hgt1, $hgt2, $hgt3, $hgt4}, iteration variables {m, p[4], p[3], p[2]}
 // Hand guided tearing matching (simulation system):

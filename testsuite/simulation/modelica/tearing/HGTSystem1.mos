@@ -18,7 +18,7 @@ val(splitter.factor, 1.0); val(mixer.y, 1.0);
 // true
 // ""
 // Hand guided tearing:
-//   pair: residual equation b.res (level 1), iteration variable b.y (level 1)
+//   pair: residual equation b.res, iteration variable b.y
 // Hand guided tearing matching (initialization system):
 //   block of 2 equations: residual equations {b.res}, iteration variables {b.y}
 // Hand guided tearing matching (simulation system):
@@ -34,7 +34,7 @@ val(splitter.factor, 1.0); val(mixer.y, 1.0);
 // 2.0
 // 1.0
 // Hand guided tearing:
-//   pair: residual equation mixer.ratio (level 1), iteration variable splitter.factor (level 1)
+//   pair: residual equation mixer.ratio, iteration variable splitter.factor
 // Hand guided tearing matching (initialization system):
 //   block of 3 equations: residual equations {mixer.ratio}, iteration variables {splitter.factor}
 // Hand guided tearing matching (simulation system):

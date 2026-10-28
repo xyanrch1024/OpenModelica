@@ -28,14 +28,14 @@ end HGTFor1;
 
 // Result:
 // Hand guided tearing:
-//   pair: residual equation $hgt1[1] (level 1), iteration variable z[2] (level 1)
-//   pair: residual equation $hgt1[2] (level 1), iteration variable z[1] (level 1)
-//   pair: residual equation r[1,1] (level 1), iteration variable x[1, 1] (level 1, start = 1.0 * 1.0)
-//   pair: residual equation r[1,2] (level 1), iteration variable x[1, 2] (level 1, start = 1.0 * 2.0)
-//   pair: residual equation r[2,1] (level 1), iteration variable x[2, 1] (level 1, start = 2.0 * 1.0)
-//   pair: residual equation r[2,2] (level 1), iteration variable x[2, 2] (level 1, start = 2.0 * 2.0)
-//   pair: residual equation s[1] (level 1), iteration variable y[1] (level 1)
-//   pair: residual equation s[2] (level 1), iteration variable y[2] (level 1)
+//   pair: residual equation $hgt1[1], iteration variable z[2]
+//   pair: residual equation $hgt1[2], iteration variable z[1]
+//   pair: residual equation r[1,1], iteration variable x[1, 1] (start = 1.0 * 1.0)
+//   pair: residual equation r[1,2], iteration variable x[1, 2] (start = 1.0 * 2.0)
+//   pair: residual equation r[2,1], iteration variable x[2, 1] (start = 2.0 * 1.0)
+//   pair: residual equation r[2,2], iteration variable x[2, 2] (start = 2.0 * 2.0)
+//   pair: residual equation s[1], iteration variable y[1]
+//   pair: residual equation s[2], iteration variable y[2]
 // class HGTFor1
 //   final parameter Integer n = 2;
 //   Real x[1,1];

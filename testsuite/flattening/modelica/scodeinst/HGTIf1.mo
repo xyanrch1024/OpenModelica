@@ -29,8 +29,8 @@ end HGTIf1;
 
 // Result:
 // Hand guided tearing:
-//   pair: residual equation $hgt1 (level 1, hold = false), iteration variable x (level 1, hold = false)
-//   pair: residual equation $hgt2 (level 1, hold = false), iteration variable y (level 1, hold = false)
+//   pair: residual equation $hgt1 (hold = false), iteration variable x (hold = false)
+//   pair: residual equation $hgt2 (hold = false), iteration variable y (hold = false)
 // class HGTIf1
 //   final parameter Boolean isSteadyState = true;
 //   Real x(start = 1.0);

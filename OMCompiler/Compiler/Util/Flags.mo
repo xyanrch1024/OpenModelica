@@ -1468,13 +1468,8 @@ constant ConfigFlag HGT_MERGE_BLT_BLOCKS = CONFIG_FLAG(174, "hgtMergeBLTBlocks",
   NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
   "Puts all hand guided tearing pairs and unpaired iteration variables and residual\nequations into the same BLT block. Corresponds to the OCT option merge_blt_blocks.");
 constant ConfigFlag HGT_ALLOW_MULTIPLE_RESIDUALS = CONFIG_FLAG(175, "hgtAllowMultipleResiduals",
-  NONE(), EXTERNAL(), STRING_FLAG("level1"), SOME(
-    STRING_DESC_OPTION({
-    ("false", "Every hand guided tearing block may only have one residual equation."),
-    ("level1", "Only hand guided tearing blocks of level 1 may have more than one residual equation."),
-    ("true", "Hand guided tearing blocks may have any number of residual equations.")
-    })),
-  "Checks the number of residual equations of hand guided tearing blocks. Corresponds to\nthe OCT option allow_multiple_residuals_in_hgt_blocks.");
+  NONE(), EXTERNAL(), BOOL_FLAG(true), NONE(),
+  "Allows hand guided tearing blocks with more than one residual equation; with false\nevery block may only have one. Corresponds to the OCT option\nallow_multiple_residuals_in_hgt_blocks.");
 constant ConfigFlag HGT_ONLY = CONFIG_FLAG(176, "hgtOnly",
   NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
   "Tears the blocks that contain hand guided tearing items only with the given iteration\nvariables and residual equations: if the other equations of such a block can not be\nsolved with them, an error is reported instead of adding iteration variables or residual\nequations automatically.");

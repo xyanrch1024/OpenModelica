@@ -1193,7 +1193,7 @@ algorithm
         result;
     case BackendDAE.TORNSYSTEM(BackendDAE.TEARINGSET(tearingvars=vlst,residualequations=elst,innerEquations=innerEquations))::rest
       algorithm
-        (elst1,vlst1Lst,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+        (elst1,vlst1Lst,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
         vlst1 := List.flatten(vlst1Lst);
         varlst1 := List.map1r(vlst1, BackendVariable.getVarAt, vars);
         varlst := List.map1r(vlst, BackendVariable.getVarAt, vars);

@@ -29,20 +29,20 @@ end HGTArray1;
 
 // Result:
 // Hand guided tearing:
-//   pair: residual equation $hgt1[1,1] (level 1), iteration variable y[1, 1] (level 1, nominal = c[1, 1])
-//   pair: residual equation $hgt1[1,2] (level 1), iteration variable y[1, 2] (level 1, nominal = c[1, 2])
-//   pair: residual equation $hgt1[2,1] (level 1), iteration variable y[2, 1] (level 1, nominal = c[2, 1])
-//   pair: residual equation $hgt1[2,2] (level 1), iteration variable y[2, 2] (level 1, nominal = c[2, 2])
-//   pair: residual equation bw[1,1] (level 1), iteration variable w[1, 1] (level 1)
-//   pair: residual equation bw[1,2] (level 1), iteration variable w[1, 2] (level 1)
-//   pair: residual equation bw[2,1] (level 1), iteration variable w[2, 1] (level 1)
-//   pair: residual equation bw[2,2] (level 1), iteration variable w[2, 2] (level 1)
-//   pair: residual equation bx[1] (level 1, nominal = 2.0), iteration variable x[1] (level 1, start = 1.0, min = 0.0)
-//   pair: residual equation bx[2] (level 1, nominal = 2.0), iteration variable x[2] (level 1, start = 2.0, min = 0.0)
-//   pair: residual equation bx[3] (level 1, nominal = 2.0), iteration variable x[3] (level 1, start = 3.0, min = 0.0)
-//   pair: residual equation bz3 (level 1), iteration variable z[3] (level 1)
-//   pair: residual equation bz[1] (level 1), iteration variable z[1] (level 1)
-//   pair: residual equation bz[2] (level 1), iteration variable z[2] (level 1)
+//   pair: residual equation $hgt1[1,1], iteration variable y[1, 1] (nominal = c[1, 1])
+//   pair: residual equation $hgt1[1,2], iteration variable y[1, 2] (nominal = c[1, 2])
+//   pair: residual equation $hgt1[2,1], iteration variable y[2, 1] (nominal = c[2, 1])
+//   pair: residual equation $hgt1[2,2], iteration variable y[2, 2] (nominal = c[2, 2])
+//   pair: residual equation bw[1,1], iteration variable w[1, 1]
+//   pair: residual equation bw[1,2], iteration variable w[1, 2]
+//   pair: residual equation bw[2,1], iteration variable w[2, 1]
+//   pair: residual equation bw[2,2], iteration variable w[2, 2]
+//   pair: residual equation bx[1] (nominal = 2.0), iteration variable x[1] (start = 1.0, min = 0.0)
+//   pair: residual equation bx[2] (nominal = 2.0), iteration variable x[2] (start = 2.0, min = 0.0)
+//   pair: residual equation bx[3] (nominal = 2.0), iteration variable x[3] (start = 3.0, min = 0.0)
+//   pair: residual equation bz3, iteration variable z[3]
+//   pair: residual equation bz[1], iteration variable z[1]
+//   pair: residual equation bz[2], iteration variable z[2]
 // class HGTArray1
 //   parameter Real c[1,1] = 1.0;
 //   parameter Real c[1,2] = 2.0;

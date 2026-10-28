@@ -31,7 +31,7 @@ val(m, 0);
 // true
 // ""
 // Hand guided tearing:
-//   pair: residual equation $hgt1 (level 1), iteration variable m (level 1)
+//   pair: residual equation $hgt1, iteration variable m
 // Hand guided tearing matching (initialization system):
 //   block of 11 equations: residual equations {$hgt1}, iteration variables {m}
 //
@@ -44,12 +44,11 @@ val(m, 0);
 // Handle strong component with index: 1
 // To disable tearing of this component use '--noTearingForComponent=1'.
 //
-// Tearing type: hand guided (level 1)
+// Tearing type: hand guided
 // User iteration variables (local): 1
 // User residual equations (local): 11
 // Iteration variables (local): 1
 // Residual equations (local): 11
-// Nested blocks: 0
 // Automatically added: 0
 //
 //
@@ -71,12 +70,11 @@ val(m, 0);
 // Handle strong component with index: 2
 // To disable tearing of this component use '--noTearingForComponent=2'.
 //
-// Tearing type: hand guided (level 1)
+// Tearing type: hand guided
 // User iteration variables (local): 11
 // User residual equations (local): 1
 // Iteration variables (local): 11
 // Residual equations (local): 1
-// Nested blocks: 0
 // Automatically added: 0
 //
 //

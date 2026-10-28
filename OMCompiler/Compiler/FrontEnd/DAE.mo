@@ -413,7 +413,6 @@ end Element;
 public uniontype HGTIterationVariable "A hand guided tearing iteration variable."
   record HGT_ITERATION_VARIABLE
     ComponentRef name;
-    Integer level;
     Option<Exp> start "NONE() means the start attribute of the variable.";
     Option<Exp> min "NONE() means the min attribute of the variable.";
     Option<Exp> max "NONE() means the max attribute of the variable.";
@@ -426,7 +425,6 @@ end HGTIterationVariable;
 public uniontype HGTResidual "A hand guided tearing residual equation."
   record HGT_RESIDUAL
     String name "The name in the __OpenModelica_HGTEquation source annotation.";
-    Integer level;
     Option<Exp> nominal "NONE() means 1.";
     Option<Exp> hold;
     HGTIterationVariable iterationVariable "Only explicit pairs are supported.";

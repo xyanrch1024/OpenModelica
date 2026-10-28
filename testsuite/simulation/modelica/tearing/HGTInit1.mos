@@ -17,7 +17,7 @@ val(x, 0); val(x, 1);
 // true
 // ""
 // Hand guided tearing:
-//   pair: residual equation initialBalance (level 1), iteration variable x (level 1)
+//   pair: residual equation initialBalance, iteration variable x
 // Hand guided tearing matching (initialization system):
 //   block of 1 equations: residual equations {initialBalance}, iteration variables {x}
 // record SimulationResult

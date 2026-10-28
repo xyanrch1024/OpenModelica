@@ -61,36 +61,12 @@ package HGT "Hand guided tearing (OCT compatible) test models, steady state"
     annotation(__OpenModelica_HGT(tearingPairs(Pair(residualEquation = mixer.ratio, iterationVariable = splitter.factor))));
   end CrossComponentPair;
 
-  model NonConvex "OCT User's Guide example: level 2 solves x2 for given x1, level 1 solves x1"
-    parameter Real f = 10;
-    Real x1(min = 0, max = 20, start = 15);
-    Real x2(min = 0, max = 20, start = 15);
-    Real k, l, s;
-  equation
-    0 = k + (x1 - 9) / (-2);
-    0 = l + (x2 - f) / (-2);
-    0 = x2 / 40 + x1 / 20 - s;
-    0 = exp(-exp(k) + k + 1.0) - 0.3 * exp(-exp(l) + l + 1.0) - 0.5
-      annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = x1, level = 1)));
-    0 = s + x1 * x2 / 16^2 - 1
-      annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = x2, level = 2)));
-  end NonConvex;
-
-  model WithStates "hand guided tearing is only supported for steady state"
-    Real x(start = 1, fixed = true), y, z(start = 1);
-  equation
-    der(x) = -x + y;
-    y + z = x annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = z)));
-    y = z ^ 3;
-  end WithStates;
-
   model Independent "error: the residual does not depend on its variable"
     Real a, b;
   equation
     b = 3 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = a)));
     a = 2 * time;
   end Independent;
-
 
   model Pipe "turbulent flow, the hand guided tearing solves it for the pressures"
     parameter Real k = 1;
@@ -131,15 +107,6 @@ package HGT "Hand guided tearing (OCT compatible) test models, steady state"
     x + y = 3 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = x)));
     x * y = 2 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = y)));
   end Multi;
-  model ThreeLevels "y3 is solved for given y1 and y2, y2 for given y1, y1 outermost"
-    Real y1(start = 1), y2(start = 1), y3(start = 1), a, b;
-  equation
-    a = y1 + y2 + y3;
-    b = y2 * y3;
-    y3 ^ 3 + y3 = b + 1 + y1 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = y3, level = 3)));
-    y2 + exp(y2) = 2 + y3 - y1 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = y2, level = 2)));
-    a = 4 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = y1, level = 1)));
-  end ThreeLevels;
   model SteadyStateSwitch "OCT style: a parameter selects the dynamic or the steady-state equations"
     parameter Boolean isSteadyState = true;
     Real x(start = 1);

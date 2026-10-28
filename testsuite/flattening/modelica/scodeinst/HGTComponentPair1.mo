@@ -20,8 +20,8 @@ end HGTComponentPair1;
 
 // Result:
 // Hand guided tearing:
-//   pair: residual equation $hgt1 (level 1), iteration variable x (level 1)
-//   pair: residual equation res2 (level 1, nominal = 100.0), iteration variable y (level 1, start = p, min = -10.0, max = 10.0, nominal = 2.0)
+//   pair: residual equation $hgt1, iteration variable x
+//   pair: residual equation res2 (nominal = 100.0), iteration variable y (start = p, min = -10.0, max = 10.0, nominal = 2.0)
 // class HGTComponentPair1
 //   parameter Real p = 2.0;
 //   Real x(start = 1.0);

@@ -15,9 +15,9 @@ buildModel(HGT.Independent); getErrorString();
 // true
 // ""
 // Hand guided tearing:
-//   pair: residual equation $hgt1 (level 1), iteration variable a (level 1)
+//   pair: residual equation $hgt1, iteration variable a
 // {"", ""}
-// "[simulation/modelica/tearing/HGT.mo:90:41-90:80:writable] Error: The residual equation '$hgt1' and the iteration variable a of a hand guided tearing pair are in different independent equation systems, so the residual equation does not depend on the iteration variable.
+// "[simulation/modelica/tearing/HGT.mo:67:41-67:80:writable] Error: The residual equation '$hgt1' and the iteration variable a of a hand guided tearing pair are in different independent equation systems, so the residual equation does not depend on the iteration variable.
 // Error: post-optimization module hgtMatching (initialization) failed.
 // Error: No system for the symbolic initialization was generated
 // "

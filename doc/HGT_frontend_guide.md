@@ -101,7 +101,6 @@ OCT 的 `__Modelon(...)` 注解不读取，和其他厂商的注解一样静默�
 uniontype IterationVariable
   record ITERATION_VARIABLE
     ComponentRef name;            // 全限定名，例如 p1.m
-    Integer level;
     Option<Expression> start, min, max, nominal;   // NONE() = 用变量自己的属性
     Option<Expression> hold;
     SourceInfo info;
@@ -111,7 +110,6 @@ end IterationVariable;
 uniontype ResidualEquation
   record RESIDUAL_EQUATION
     String name;                  // 方程标签里的名字，例如 p1.law、$hgt1
-    Integer level;
     Option<Expression> nominal;   // NONE() = 1
     Option<Expression> hold;
     Option<IterationVariable> iterationVariable;   // 解析时可能为空，finish 之后一定是 SOME()
@@ -129,7 +127,7 @@ end Spec;
 几点说明：
 - **迭代变量挂在残差方程上**：规范里只有配对，没有单独的迭代变量列表。后端用 `allIterationVariables` 从配对里取出所有迭代变量。转换成 DAE 时（`ResidualEquation.toDAE`），`iterationVariable` 变成必填字段，后端不用再解包 `Option`。
 - 方程用**名字**标识（字符串），变量用 `ComponentRef` 标识。原因是方程本身没有名字，只能靠标签；变量有正式的引用。
-- `level`、`enabled` 在前端就**求值成常量**；`start`、`min`、`max`、`nominal`、`hold` 保留为表达式，只做了展平，也就是补上前缀。
+- `enabled` 在前端就**求值成常量**，`level` 只检查它是 1（不支持嵌套撕裂），都不保存；`start`、`min`、`max`、`nominal`、`hold` 保留为表达式，只做了展平，也就是补上前缀。
 - 每个类型都有 `toString`，供 `-d=hgtDump` 使用；也都有 `toDAE`，转换成 `DAE.HGT_RESIDUAL` / `DAE.HGT_ITERATION_VARIABLE`，字段一一对应。
 
 ### 3.3 收集器 `Collector`
@@ -244,7 +242,6 @@ end if;
 
 几个规则：
 - `enabled = false` 时整个项被丢弃，返回 `NONE()`。
-- 配对时，迭代变量的 level 就是配对的 level。
 
 ### 5.3 解析名字：`resolveIterationVariable`
 
@@ -264,13 +261,13 @@ Absyn.Exp → Inst.instExp(在 scope 中) → Typing.typeExp → flattenFn（补
 
 | 函数 | 作用 | 规则 |
 |---|---|---|
-| `parseRealAttribute` | `start`、`min`、`max`、`nominal`，返回每个元素一个值 | 元素类型必须是 Real 或 Integer，Integer 会转成 Real；值是标量时用于所有元素，是数组时维数必须和所属的方程或变量相同（否则 8001），逐元素对应；**level 1 上不许依赖连续变量**（8006，OCT 的 R7）；可求值的 `nominal` 必须为正（`checkPositive`，8001） |
+| `parseRealAttribute` | `start`、`min`、`max`、`nominal`，返回每个元素一个值 | 元素类型必须是 Real 或 Integer，Integer 会转成 Real；值是标量时用于所有元素，是数组时维数必须和所属的方程或变量相同（否则 8001），逐元素对应；**不许依赖连续变量**（8006）；可求值的 `nominal` 必须为正（`checkPositive`，8001） |
 | `parseHold` | `hold` | 必须是 Boolean 参数表达式；保留为表达式 |
 | `evalBoolean` | `enabled` | 用 `evalParameterExp` 求值成 `true` 或 `false` |
-| `evalLevel` | `level` | 求值成 Integer，且必须 ≥ 1（8001） |
+| `checkLevel` | `level` | 求值后必须是 1（8001）：嵌套撕裂（level ≥ 2）不支持 |
 | `evalParameterExp` | 前两者共用 | instExp、typeExp，必须是参数表达式；**用 `Structural.markExp` 标记成结构参数**，然后 `Ceval.evalExp` |
 
-**为什么 `level` 和 `enabled` 要标记成结构参数**：它们决定模型怎么撕裂，属于编译期的结构信息。被标记之后，参数会变成 `final parameter`，用户不能在仿真时再修改它们（见 §10 例子中的 `lvl`）。
+**为什么 `level` 和 `enabled` 要标记成结构参数**：它们决定模型怎么撕裂，属于编译期的结构信息（`level` 虽然只能是 1，也照样标记）。被标记之后，参数会变成 `final parameter`，用户不能在仿真时再修改它们（见 §10 例子中的 `lvl`）。
 
 ### 5.5 修饰的工具函数
 
@@ -344,7 +341,6 @@ m = k .* sqrt(p[1:3] - p[2:4]) annotation(__OpenModelica_HGT(name = seg,
 
 - **形状**：方程和变量的维数必须完全相同（`checkShape`），否则报 8001，信息里给出两边的维数。别的对应关系（例如倒序）用 for 方程写。
 - **属性**：标量用于所有元素，数组必须和变量（残差的 nominal 则和方程）同形状，逐元素对应。`level`、`enabled`、`hold` 只能是标量。
-- **只在 level 1**：数组残差方程和数组迭代变量（包括切片）暂时只支持 level 1，level ≥ 2 报 8001（`checkArrayLevel`）。for 循环不受影响，因为每次迭代都是标量配对。
 - **元素的名字**：按行优先在名字后加元素下标：`seg[1]`、`bal[1,2]`。for 循环里的数组方程先加迭代值、再加元素下标：`w[i, :]` 在 i = 2 时得到 `bw[2,1]`、`bw[2,2]`。
 - **`tearingPairs`**：`Pair(residualEquation = bal, iterationVariable = x)` 逐元素配对整条数组方程；`Pair(residualEquation = bal[2], iterationVariable = x[3])` 配单个元素。`parsePair` 先按变量展开成每个元素一个配对，`finish` 再查 `arrayEquations`：是数组方程就检查形状并换成元素名，是标量方程就要求变量也是标量。
 
@@ -423,8 +419,8 @@ end F;
 
 ```
 Hand guided tearing:
-  pair: residual equation $hgt1 (level 1), iteration variable z (level 1, min = 0.0)
-  pair: residual equation p1.law (level 1), iteration variable p1.m (level 1, start = 2.0, nominal = 2.0)
+  pair: residual equation $hgt1, iteration variable z (min = 0.0)
+  pair: residual equation p1.law, iteration variable p1.m (start = 2.0, nominal = 2.0)
 class F.Plant
   final parameter Integer lvl = 1;
   ...
@@ -437,7 +433,7 @@ class F.Plant
 | `Plant` 类上的 `tearingPairs` | `collectClass`（前缀为空） | 配对 `p1.law ↔ p1.m` 先存进 `pairs`；`iterationVariable` 在 `Plant` 中解析成 `p1.m` |
 | `p1` 中的 `m = k*sqrt(dp)` | `collectEquation`（前缀 `p1`） | 名字 `p1.law`，打上标签；它不是残差，只是有了名字 |
 | `p2` 中的同一条方程 | `collectEquation`（前缀 `p2`） | 名字 `p2.law`，打上标签，不会重名 |
-| `z ^ 2 = p1.m` 上的 `ResidualEquation(level = lvl, iterationVariable(min = 0) = z)` | `collectEquation` | 没写名字，自动命名为 `$hgt1`；和 `z` 配对；`level = lvl` 求值为 1，**`lvl` 变成 `final parameter`** |
+| `z ^ 2 = p1.m` 上的 `ResidualEquation(level = lvl, iterationVariable(min = 0) = z)` | `collectEquation` | 没写名字，自动命名为 `$hgt1`；和 `z` 配对；`level = lvl` 求值为 1，通过检查，**`lvl` 变成 `final parameter`** |
 | 展平结束 | `finish` | `pairs` 中 `p1.law` 的名字存在，于是加入；按名字排序，`$hgt1` 排在 `p1.law` 前面 |
 
 后端拿到的就是这两个配对。`p2.law` 有名字但没有被任何配对引用，所以只是一个普通方程。
@@ -447,12 +443,12 @@ class F.Plant
 | 编号 | 级别 | 含义 | 由谁报告 |
 |---|---|---|---|
 | 8000 | 警告 | 未知字段，被忽略 | `checkFields`、`lookupFields` |
-| 8001 | 错误 | 字段的值无效：名字不是标识符、level < 1、不是参数表达式、nominal ≤ 0、Pair 缺字段…… | 各解析函数 |
+| 8001 | 错误 | 字段的值无效：名字不是标识符、level 不是 1、不是参数表达式、nominal ≤ 0、Pair 缺字段…… | 各解析函数 |
 | 8002 | 错误 | 不能作迭代变量：不是变量、不是 Real、不是连续变量 | `resolveIterationVariable`、`collectVariable` |
 | 8003 | 错误 | 方程重名 | `collectEquation` |
 | 8004 | 错误 | `tearingPairs` 引用的方程名不存在 | `finish` |
 | 8005 | 错误 | 同一个方程或变量有多个 HGT 规定 | `finish` |
-| 8006 | 错误 | level 1 上的属性依赖连续变量 | `parseRealAttribute` |
+| 8006 | 错误 | 属性依赖连续变量（必须是参数表达式） | `parseRealAttribute` |
 | 8007 | 警告 | 不支持，被忽略：非 Real 的方程或变量、没有标量化时的数组方程、when 方程和保留下来的 if 分支中的注解 | `collectEquation`、`collectVariable`、`enterNestedEquations` |
 | 8008 | 提示 | 模型里有 HGT 注解，但没开 `--handGuidedTearing` | `finish` |
 | 8009 | 警告 | `hold` 尚未支持 | `finish` |
@@ -488,19 +484,18 @@ class F.Plant
 | `HGTComponentPair1` | 组件级配对、自动命名、带名字的配对、各属性、只有名字的方程 |
 | `HGTSystemPair1` | 系统级配对，分写在两个注解子句里（合并）；数组组件 `ba[2].res` |
 | `HGTUnpaired1` | OCT TestUnpaired 例子中的未配对项：报 8022，名字带前缀 |
-| `HGTLevel1` | level 由参数给出（变成结构参数）；level 2 上允许依赖连续变量 |
+| `HGTLevel1` | 由参数给出的 level 2：嵌套撕裂不支持（8001） |
 | `HGTModelon1` | `__Modelon` 的 HGT 注解被静默忽略 |
 | `HGTIf1` | 参数选中的 if 分支；保留下来的 if 分支中的注解被忽略 |
 | `HGTNotSupported1` | when 方程中的注解（8007）；基类的 `tearingPairs` 不继承 |
 | `HGTFor1` | for 循环：嵌套循环、两个下标的名字、`tearingPairs` 引用某次迭代、自动命名、倒序的下标对应 |
 | `HGTArray1` | 数组方程逐元素配对：切片、矩阵、标量和数组属性、`tearingPairs` 引用整条数组方程和单个元素、for 循环里的数组方程 |
 | `HGTDisabled1` | 没开开关时的提示 8008 |
-| `HGTError1`–`HGTError5` | 参数作迭代变量（8002）、Pair 的方程名不存在（8004）、方程重名（8003）、level 1 上的属性依赖连续变量（8006）、同一变量既配对又未配对（8005） |
-| `HGTError6` | `level = 0`（8001），未知字段（8000） |
+| `HGTError1`–`HGTError5` | 参数作迭代变量（8002）、Pair 的方程名不存在（8004）、方程重名（8003）、属性依赖连续变量（8006）、同一变量既配对又未配对（8005） |
+| `HGTError6` | `level = 0`（8001，只支持 level 1），未知字段（8000） |
 | `HGTError7`、`HGTError8` | 残差和迭代变量的 nominal ≤ 0（8001），后者由参数给出 |
 | `HGTError9` | 未配对项报 8022，显式配对（组件级和 `tearingPairs`）不受影响 |
 | `HGTError10`–`HGTError12` | 数组方程与切片尺寸不同、数组属性尺寸不对、标量方程配数组变量（8001） |
-| `HGTError13`、`HGTError14` | level 2 上的数组配对，组件级和 `tearingPairs`（8001） |
 
 ## 13. 改代码时要注意的地方
 

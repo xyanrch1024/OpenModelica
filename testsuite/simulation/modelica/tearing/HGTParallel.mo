@@ -25,7 +25,6 @@ equation
        + 0.08 * m^3
        annotation(
          __OpenModelica_HGT(ResidualEquation(
-           level = 3,
            iterationVariable(
              min = 0.02,
              max = 5,
@@ -71,7 +70,6 @@ equation
   pumpHead = dp + returnDrop
     annotation(
       __OpenModelica_HGT(ResidualEquation(
-        level = 2,
         iterationVariable(
           min = 0.001,
           max = 6,
@@ -84,7 +82,6 @@ equation
   totalFlow = targetFlow
     annotation(
       __OpenModelica_HGT(ResidualEquation(
-        level = 1,
         iterationVariable(
           min = 0.15,
           max = 1.5,

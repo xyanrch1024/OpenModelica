@@ -23,9 +23,9 @@ val(x[1, 3], 0); val(x[2, 1], 0);
 // true
 // ""
 // Hand guided tearing:
-//   pair: residual equation seg[1] (level 1), iteration variable p[2] (level 1, start = 8.0)
-//   pair: residual equation seg[2] (level 1), iteration variable p[3] (level 1, start = 6.0)
-//   pair: residual equation seg[3] (level 1), iteration variable p[4] (level 1, start = 4.0)
+//   pair: residual equation seg[1], iteration variable p[2] (start = 8.0)
+//   pair: residual equation seg[2], iteration variable p[3] (start = 6.0)
+//   pair: residual equation seg[3], iteration variable p[4] (start = 4.0)
 // Hand guided tearing matching (initialization system):
 //   block of 4 equations: residual equations {seg[3], seg[2], seg[1]}, iteration variables {p[2], p[3], p[4]}
 // Hand guided tearing matching (simulation system):
@@ -39,9 +39,9 @@ val(x[1, 3], 0); val(x[2, 1], 0);
 // end SimulationResult;
 // ""
 // Hand guided tearing:
-//   pair: residual equation seg[1] (level 1), iteration variable p[2] (level 1, start = 10.0 - 2.0 * 1.0)
-//   pair: residual equation seg[2] (level 1), iteration variable p[3] (level 1, start = 10.0 - 2.0 * 2.0)
-//   pair: residual equation seg[3] (level 1), iteration variable p[4] (level 1, start = 10.0 - 2.0 * 3.0)
+//   pair: residual equation seg[1], iteration variable p[2] (start = 10.0 - 2.0 * 1.0)
+//   pair: residual equation seg[2], iteration variable p[3] (start = 10.0 - 2.0 * 2.0)
+//   pair: residual equation seg[3], iteration variable p[4] (start = 10.0 - 2.0 * 3.0)
 // Hand guided tearing matching (initialization system):
 //   block of 4 equations: residual equations {seg[3], seg[2], seg[1]}, iteration variables {p[2], p[3], p[4]}
 // Hand guided tearing matching (simulation system):
@@ -58,12 +58,12 @@ val(x[1, 3], 0); val(x[2, 1], 0);
 // 4.379303164961426
 // 1.8758606329922851
 // Hand guided tearing:
-//   pair: residual equation $hgt1[1,1] (level 1), iteration variable x[1, 1] (level 1, nominal = c[1, 1])
-//   pair: residual equation $hgt1[1,2] (level 1), iteration variable x[1, 2] (level 1, nominal = c[1, 2])
-//   pair: residual equation $hgt1[1,3] (level 1), iteration variable x[1, 3] (level 1, nominal = c[1, 3])
-//   pair: residual equation $hgt1[2,1] (level 1), iteration variable x[2, 1] (level 1, nominal = c[2, 1])
-//   pair: residual equation $hgt1[2,2] (level 1), iteration variable x[2, 2] (level 1, nominal = c[2, 2])
-//   pair: residual equation $hgt1[2,3] (level 1), iteration variable x[2, 3] (level 1, nominal = c[2, 3])
+//   pair: residual equation $hgt1[1,1], iteration variable x[1, 1] (nominal = c[1, 1])
+//   pair: residual equation $hgt1[1,2], iteration variable x[1, 2] (nominal = c[1, 2])
+//   pair: residual equation $hgt1[1,3], iteration variable x[1, 3] (nominal = c[1, 3])
+//   pair: residual equation $hgt1[2,1], iteration variable x[2, 1] (nominal = c[2, 1])
+//   pair: residual equation $hgt1[2,2], iteration variable x[2, 2] (nominal = c[2, 2])
+//   pair: residual equation $hgt1[2,3], iteration variable x[2, 3] (nominal = c[2, 3])
 // Hand guided tearing matching (initialization system):
 //   block of 1 equations: residual equations {$hgt1[1,1]}, iteration variables {x[1,1]}
 // Hand guided tearing matching (initialization system):

@@ -1206,8 +1206,8 @@ public constant ErrorTypes.Message HGT_EQUATION_NAME_NOT_FOUND = ErrorTypes.MESS
   "The hand guided tearing pair refers to the equation '%s', but no equation has that name (equations are named with __OpenModelica_HGT(name=...)).");
 public constant ErrorTypes.Message HGT_DUPLICATE_SPECIFICATION = ErrorTypes.MESSAGE(8005, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "%s is given more than one hand guided tearing specification.");
-public constant ErrorTypes.Message HGT_CONTINUOUS_ATTRIBUTE_ON_LEVEL_ONE = ErrorTypes.MESSAGE(8006, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
-  "The %s attribute '%s' of the hand guided tearing %s depends on continuous variables, which is only allowed on level 2 or higher.");
+public constant ErrorTypes.Message HGT_CONTINUOUS_ATTRIBUTE = ErrorTypes.MESSAGE(8006, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+  "The %s attribute '%s' of the hand guided tearing %s depends on continuous variables, it must be a parameter expression.");
 public constant ErrorTypes.Message HGT_NOT_SUPPORTED = ErrorTypes.MESSAGE(8007, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
   "The hand guided tearing annotation is ignored: %s.");
 public constant ErrorTypes.Message HGT_DISABLED = ErrorTypes.MESSAGE(8008, ErrorTypes.TRANSLATION(), ErrorTypes.NOTIFICATION(),
@@ -1233,7 +1233,7 @@ public constant ErrorTypes.Message HGT_MIN_MAX_NOT_SUPPORTED = ErrorTypes.MESSAG
 public constant ErrorTypes.Message HGT_TEARING_FAILED = ErrorTypes.MESSAGE(8020, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
   "Hand guided tearing of the strong component with the residual equations {%s} failed: %s.");
 public constant ErrorTypes.Message HGT_MULTIPLE_RESIDUALS = ErrorTypes.MESSAGE(8021, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
-  "The hand guided tearing block of level %s has %s residual equations {%s}, but --hgtAllowMultipleResiduals=%s allows only one.");
+  "The hand guided tearing block has %s residual equations {%s}, but --hgtAllowMultipleResiduals=false allows only one.");
 public constant ErrorTypes.Message HGT_UNPAIRED_NOT_ALLOWED = ErrorTypes.MESSAGE(8022, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "The hand guided tearing %s is not paired. Only explicit pairs are supported, given by ResidualEquation(iterationVariable = ...) or tearingPairs(Pair(...)).");
 

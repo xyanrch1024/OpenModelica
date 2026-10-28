@@ -17,8 +17,8 @@ val(x, 0); val(y, 0);
 // true
 // ""
 // Hand guided tearing:
-//   pair: residual equation $hgt1 (level 1, hold = false), iteration variable x (level 1, hold = false)
-//   pair: residual equation $hgt2 (level 1, hold = false), iteration variable y (level 1, hold = false)
+//   pair: residual equation $hgt1 (hold = false), iteration variable x (hold = false)
+//   pair: residual equation $hgt2 (hold = false), iteration variable y (hold = false)
 // Hand guided tearing matching (initialization system):
 //   block of 2 equations: residual equations {$hgt2, $hgt1}, iteration variables {x, y}
 // Hand guided tearing matching (simulation system):

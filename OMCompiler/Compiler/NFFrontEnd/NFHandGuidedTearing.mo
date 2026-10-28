@@ -98,7 +98,6 @@ public
   uniontype IterationVariable
     record ITERATION_VARIABLE
       ComponentRef name;
-      Integer level;
       Option<Expression> start "NONE() means the start attribute of the variable.";
       Option<Expression> min "NONE() means the min attribute of the variable.";
       Option<Expression> max "NONE() means the max attribute of the variable.";
@@ -111,17 +110,16 @@ public
       input IterationVariable var;
       output String str;
     algorithm
-      str := ComponentRef.toString(var.name) + " (level " + intString(var.level) +
-        optAttrString("start", var.start) + optAttrString("min", var.min) +
-        optAttrString("max", var.max) + optAttrString("nominal", var.nominal) +
-        optAttrString("hold", var.hold) + ")";
+      str := ComponentRef.toString(var.name) + attrsString({optAttrString("start", var.start),
+        optAttrString("min", var.min), optAttrString("max", var.max),
+        optAttrString("nominal", var.nominal), optAttrString("hold", var.hold)});
     end toString;
 
     function toDAE
       input IterationVariable var;
       output DAE.HGTIterationVariable daeVar;
     algorithm
-      daeVar := DAE.HGT_ITERATION_VARIABLE(ComponentRef.toDAE(var.name), var.level,
+      daeVar := DAE.HGT_ITERATION_VARIABLE(ComponentRef.toDAE(var.name),
         Util.applyOption(var.start, function Expression.toDAE(allowEmpty = false)),
         Util.applyOption(var.min, function Expression.toDAE(allowEmpty = false)),
         Util.applyOption(var.max, function Expression.toDAE(allowEmpty = false)),
@@ -134,7 +132,6 @@ public
   uniontype ResidualEquation
     record RESIDUAL_EQUATION
       String name "The name in the __OpenModelica_HGTEquation tag of the equation.";
-      Integer level;
       Option<Expression> nominal "NONE() means 1.";
       Option<Expression> hold;
       Option<IterationVariable> iterationVariable "SOME() for a tearing pair.";
@@ -147,9 +144,8 @@ public
     protected
       IterationVariable var;
     algorithm
-      str := residual.name + " (level " + intString(residual.level) +
-        optAttrString("nominal", residual.nominal) +
-        optAttrString("hold", residual.hold) + ")";
+      str := residual.name + attrsString({optAttrString("nominal", residual.nominal),
+        optAttrString("hold", residual.hold)});
 
       if isSome(residual.iterationVariable) then
         SOME(var) := residual.iterationVariable;
@@ -165,7 +161,7 @@ public
       output DAE.HGTResidual daeResidual;
     algorithm
       // Only explicit pairs get here, see checkOnlyPairs.
-      daeResidual := DAE.HGT_RESIDUAL(residual.name, residual.level,
+      daeResidual := DAE.HGT_RESIDUAL(residual.name,
         Util.applyOption(residual.nominal, function Expression.toDAE(allowEmpty = false)),
         Util.applyOption(residual.hold, function Expression.toDAE(allowEmpty = false)),
         IterationVariable.toDAE(Util.getOption(residual.iterationVariable)),
@@ -454,7 +450,7 @@ public
         elseif not Type.isScalar(ty) then
           // An unpaired iteration variable, which finish reports as an error.
           if evalBoolean(lookupField(mod, "IterationVariable"), "enabled", true, scope, info) then
-            Pointer.update(collector.iterationVariables, ITERATION_VARIABLE(name, 1, NONE(), NONE(),
+            Pointer.update(collector.iterationVariables, ITERATION_VARIABLE(name, NONE(), NONE(),
               NONE(), NONE(), NONE(), info) :: Pointer.access(collector.iterationVariables));
           end if;
         else
@@ -812,20 +808,6 @@ protected
       "an array of size [" + stringDelimitList(list(intString(d) for d in dims), ", ") + "]";
   end dimsString;
 
-  function checkArrayLevel
-    "Array residual equations and iteration variables are only supported on
-     level 1 for now."
-    input Integer level;
-    input list<Integer> dims "The dimensions of the equation or variable, {} for a scalar.";
-    input SourceInfo info;
-  algorithm
-    if level > 1 and not listEmpty(dims) then
-      Error.addSourceMessage(Error.HGT_INVALID_VALUE, {intString(level), "level",
-        "array residual equations and iteration variables are only supported on level 1"}, info);
-      fail();
-    end if;
-  end checkArrayLevel;
-
   function checkShape
     "An array residual equation is paired element-wise, so the iteration
      variable must have the same dimensions."
@@ -870,7 +852,6 @@ protected
     input list<String> names;
     input list<Option<Expression>> nominals;
     input list<Option<IterationVariable>> vars;
-    input Integer level;
     input Option<Expression> hold;
     input SourceInfo info;
     output list<ResidualEquation> residuals = {};
@@ -883,7 +864,7 @@ protected
     for n in names loop
       nominal :: rest_nominals := rest_nominals;
       var :: rest_vars := rest_vars;
-      residuals := RESIDUAL_EQUATION(n, level, nominal, hold, var, info) :: residuals;
+      residuals := RESIDUAL_EQUATION(n, nominal, hold, var, info) :: residuals;
     end for;
 
     residuals := listReverse(residuals);
@@ -994,10 +975,20 @@ protected
     str := match exp
       local
         Expression e;
-      case SOME(e) then ", " + name + " = " + Expression.toString(e);
+      case SOME(e) then name + " = " + Expression.toString(e);
       else "";
     end match;
   end optAttrString;
+
+  function attrsString
+    "Returns the given attributes in parentheses, or nothing if all are empty."
+    input list<String> attrs;
+    output String str;
+  protected
+    list<String> strl = list(a for a guard not stringEmpty(a) in attrs);
+  algorithm
+    str := if listEmpty(strl) then "" else " (" + stringDelimitList(strl, ", ") + ")";
+  end attrsString;
 
   function hasHold
     "True if any item may be held: a hold attribute that is not literally false."
@@ -1102,7 +1093,6 @@ protected
     input SourceInfo info;
     output list<ResidualEquation> residuals = {};
   protected
-    Integer level;
     list<Option<Expression>> nominals;
     Option<Expression> hold;
     list<IterationVariable> vars;
@@ -1115,19 +1105,17 @@ protected
       return;
     end if;
 
-    level := evalLevel(mod, scope, mod_info);
-    checkArrayLevel(level, dims, mod_info);
-    nominals := parseRealAttribute(mod, "nominal", "residual equation " + name, level, dims, scope, flattenFn, mod_info);
+    checkLevel(mod, scope, mod_info);
+    nominals := parseRealAttribute(mod, "nominal", "residual equation " + name, dims, scope, flattenFn, mod_info);
     hold := parseHold(mod, scope, flattenFn, mod_info);
 
     if hasField(mod, "iterationVariable") then
       (vars, var_dims) := parsePairedIterationVariable(lookupField(mod, "iterationVariable"),
-        level, scope, flattenFn, mod_info);
-      checkArrayLevel(level, var_dims, mod_info);
+        scope, flattenFn, mod_info);
       checkShape(dims, var_dims, vars, mod_info);
-      residuals := makeResiduals(names, nominals, list(SOME(v) for v in vars), level, hold, mod_info);
+      residuals := makeResiduals(names, nominals, list(SOME(v) for v in vars), hold, mod_info);
     else
-      residuals := makeResiduals(names, nominals, list(NONE() for n in names), level, hold, mod_info);
+      residuals := makeResiduals(names, nominals, list(NONE() for n in names), hold, mod_info);
     end if;
   end parseResidualEquation;
 
@@ -1142,7 +1130,6 @@ protected
     output Option<tuple<list<ResidualEquation>, list<Integer>>> pair;
   protected
     SourceInfo info = SCodeUtil.getModifierInfo(mod);
-    Integer level;
     SCode.Mod res_mod;
     String name;
     list<Option<Expression>> nominals;
@@ -1157,7 +1144,7 @@ protected
       return;
     end if;
 
-    level := evalLevel(mod, scope, info);
+    checkLevel(mod, scope, info);
 
     if not hasField(mod, "residualEquation") or not hasField(mod, "iterationVariable") then
       Error.addSourceMessage(Error.HGT_INVALID_VALUE,
@@ -1182,12 +1169,11 @@ protected
     end match;
 
     name := prefixName(prefix, name);
-    (vars, var_dims) := parsePairedIterationVariable(lookupField(mod, "iterationVariable"), level, scope, flattenFn, info);
-    checkArrayLevel(level, var_dims, info);
-    nominals := parseRealAttribute(res_mod, "nominal", "residual equation " + name, level, var_dims, scope, flattenFn, info);
+    (vars, var_dims) := parsePairedIterationVariable(lookupField(mod, "iterationVariable"), scope, flattenFn, info);
+    nominals := parseRealAttribute(res_mod, "nominal", "residual equation " + name, var_dims, scope, flattenFn, info);
     hold := parseHold(res_mod, scope, flattenFn, info);
     pair := SOME((makeResiduals(list(name for v in vars), nominals, list(SOME(v) for v in vars),
-      level, hold, info), var_dims));
+      hold, info), var_dims));
   end parsePair;
 
   function parsePairedIterationVariable
@@ -1195,7 +1181,6 @@ protected
      iterationVariable(start = 1) = x. An array variable or slice gives one
      iteration variable per element; also returns its dimensions."
     input SCode.Mod mod;
-    input Integer level "The level of the pair.";
     input InstNode scope;
     input FlattenExpFn flattenFn;
     input SourceInfo info;
@@ -1228,7 +1213,7 @@ protected
           fail();
     end match;
 
-    vars := parseIterationVariableAttributes(mod, names, dims, var_str, level, scope, flattenFn, mod_info);
+    vars := parseIterationVariableAttributes(mod, names, dims, var_str, scope, flattenFn, mod_info);
   end parsePairedIterationVariable;
 
   function parseUnpairedIterationVariable
@@ -1245,8 +1230,9 @@ protected
     checkFields(mod, {"enabled", "level", "max", "min", "nominal", "start", "hold"}, "IterationVariable");
 
     if evalBoolean(mod, "enabled", true, scope, mod_info) then
+      checkLevel(mod, scope, mod_info);
       var := SOME(listHead(parseIterationVariableAttributes(mod, {name}, {}, ComponentRef.toString(name),
-        evalLevel(mod, scope, mod_info), scope, flattenFn, mod_info)));
+        scope, flattenFn, mod_info)));
     else
       var := NONE();
     end if;
@@ -1259,7 +1245,6 @@ protected
     input list<ComponentRef> names;
     input list<Integer> dims "The dimensions of the variable, {} for a scalar.";
     input String varString "The variable as written, for error messages.";
-    input Integer level;
     input InstNode scope;
     input FlattenExpFn flattenFn;
     input SourceInfo info;
@@ -1269,10 +1254,10 @@ protected
     list<Option<Expression>> starts, mins, maxs, nominals;
     Option<Expression> hold, st, mi, ma, no;
   algorithm
-    starts := parseRealAttribute(mod, "start", owner, level, dims, scope, flattenFn, info);
-    mins := parseRealAttribute(mod, "min", owner, level, dims, scope, flattenFn, info);
-    maxs := parseRealAttribute(mod, "max", owner, level, dims, scope, flattenFn, info);
-    nominals := parseRealAttribute(mod, "nominal", owner, level, dims, scope, flattenFn, info);
+    starts := parseRealAttribute(mod, "start", owner, dims, scope, flattenFn, info);
+    mins := parseRealAttribute(mod, "min", owner, dims, scope, flattenFn, info);
+    maxs := parseRealAttribute(mod, "max", owner, dims, scope, flattenFn, info);
+    nominals := parseRealAttribute(mod, "nominal", owner, dims, scope, flattenFn, info);
     hold := parseHold(mod, scope, flattenFn, info);
     // Element by element (the Rust port can't translate a threaded list
     // comprehension of records).
@@ -1282,7 +1267,7 @@ protected
       mi :: mins := mins;
       ma :: maxs := maxs;
       no :: nominals := nominals;
-      vars := ITERATION_VARIABLE(n, level, st, mi, ma, no, hold, info) :: vars;
+      vars := ITERATION_VARIABLE(n, st, mi, ma, no, hold, info) :: vars;
     end for;
     vars := listReverse(vars);
   end parseIterationVariableAttributes;
@@ -1354,13 +1339,11 @@ protected
   function parseRealAttribute
     "Parses an optional Real attribute such as start, min, max or nominal of a
      scalar or, element-wise, of an array: a scalar value applies to all
-     elements, an array value must have the given dimensions. Continuous
-     variables may only be used on level 2 or higher. Returns one attribute per
-     element."
+     elements, an array value must have the given dimensions. It must be a
+     parameter expression. Returns one attribute per element."
     input SCode.Mod mod;
     input String attrName;
     input String owner "Description of what the attribute belongs to, for error messages.";
-    input Integer level;
     input list<Integer> dims "The dimensions of the owner, {} for a scalar.";
     input InstNode scope;
     input FlattenExpFn flattenFn;
@@ -1388,8 +1371,8 @@ protected
             fail();
           end if;
 
-          if var > Variability.NON_STRUCTURAL_PARAMETER and level < 2 then
-            Error.addSourceMessage(Error.HGT_CONTINUOUS_ATTRIBUTE_ON_LEVEL_ONE,
+          if var > Variability.NON_STRUCTURAL_PARAMETER then
+            Error.addSourceMessage(Error.HGT_CONTINUOUS_ATTRIBUTE,
               {attrName, Dump.printExpStr(aexp), owner}, info);
             fail();
           end if;
@@ -1503,34 +1486,32 @@ protected
     end match;
   end evalBoolean;
 
-  function evalLevel
-    "Evaluates the optional level field, which must be at least 1."
+  function checkLevel
+    "Checks the optional level field: only level 1 is supported, i.e. no nested
+     hand guided tearing blocks."
     input SCode.Mod mod;
     input InstNode scope;
     input SourceInfo info;
-    output Integer level;
   protected
     Absyn.Exp aexp;
     Expression exp;
   algorithm
-    level := match SCodeUtil.getModifierBinding(lookupField(mod, "level"))
+    () := match SCodeUtil.getModifierBinding(lookupField(mod, "level"))
       case SOME(aexp)
         algorithm
           exp := evalParameterExp(aexp, "level", "Integer", Type.isInteger, scope, info);
-        then
-          match exp
-            case Expression.INTEGER() guard exp.value >= 1 then exp.value;
-            else
-              algorithm
-                Error.addSourceMessage(Error.HGT_INVALID_VALUE,
-                  {Dump.printExpStr(aexp), "level", "expected an Integer parameter expression that is at least 1"}, info);
-              then
-                fail();
-          end match;
 
-      else 1;
+          if not Expression.isEqual(exp, Expression.INTEGER(1)) then
+            Error.addSourceMessage(Error.HGT_INVALID_VALUE,
+              {Dump.printExpStr(aexp), "level", "only level 1 is supported"}, info);
+            fail();
+          end if;
+        then
+          ();
+
+      else ();
     end match;
-  end evalLevel;
+  end checkLevel;
 
   function evalParameterExp
     "Instantiates, types and evaluates a parameter expression. The parameters

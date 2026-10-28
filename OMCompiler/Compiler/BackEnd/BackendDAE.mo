@@ -640,11 +640,6 @@ uniontype InnerEquation
     Constraints cons;
   end INNEREQUATIONCONSTRAINTS;
 
-  record INNERCOMPONENT
-    "A nested strong component that is solved within the outer torn system
-     (hand guided tearing with level > 1), always a TORNSYSTEM."
-    StrongComponent comp;
-  end INNERCOMPONENT;
 end InnerEquation;
 
 

@@ -735,7 +735,7 @@ algorithm
     case BackendDAE.TORNSYSTEM(BackendDAE.TEARINGSET(tearingvars=vlst, residualequations=elst, innerEquations=innerEquations)) algorithm
       eqnlst := BackendEquation.getList(elst, inEquationArray);
       varlst := List.map1r(vlst, BackendVariable.getVarAt, inVariables);
-      (otherEqns,otherVarsLst,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+      (otherEqns,otherVarsLst,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
       otherVars := List.flatten(otherVarsLst);
       eqnlst1 := BackendEquation.getList(otherEqns, inEquationArray);
       varlst1 := List.map1r(otherVars, BackendVariable.getVarAt, inVariables);
@@ -785,7 +785,7 @@ algorithm
     then ({e}, vlst);
 
     case BackendDAE.TORNSYSTEM(BackendDAE.TEARINGSET(tearingvars=vlst, residualequations=elst, innerEquations=innerEquations)) algorithm
-      (elst1,vLstLst,_) := List.map_3(BackendDAEUtil.flattenInnerEquations(innerEquations), BackendDAEUtil.getEqnAndVarsFromInnerEquation);
+      (elst1,vLstLst,_) := List.map_3(innerEquations, BackendDAEUtil.getEqnAndVarsFromInnerEquation);
       vlst1 := List.flatten(vLstLst);
       elst := listAppend(elst1, elst);
       vlst := listAppend(vlst1, vlst);

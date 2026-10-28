@@ -21,9 +21,9 @@ r := simulate(HGTNetwork.System, stopTime = 0, simflags = "-override=m_set=8"); 
 // true
 // ""
 // Hand guided tearing:
-//   pair: residual equation $hgt1 (level 1, nominal = 10.0), iteration variable u (level 1, min = 0.05, max = 1.0)
-//   pair: residual equation collector.balance (level 1), iteration variable p_c (level 1)
-//   pair: residual equation manifold.balance (level 1), iteration variable p_m (level 1, max = p_tank + 4.99)
+//   pair: residual equation $hgt1 (nominal = 10.0), iteration variable u (min = 0.05, max = 1.0)
+//   pair: residual equation collector.balance, iteration variable p_c
+//   pair: residual equation manifold.balance, iteration variable p_m (max = p_tank + 4.99)
 // Hand guided tearing matching (initialization system):
 //   block of 8 equations: residual equations {manifold.balance, collector.balance, $hgt1}, iteration variables {u, p_c, p_m}
 // Hand guided tearing matching (simulation system):

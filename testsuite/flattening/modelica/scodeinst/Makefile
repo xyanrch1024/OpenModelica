@@ -769,6 +769,8 @@ HGTError8.mo \
 HGTError10.mo \
 HGTError11.mo \
 HGTError12.mo \
+HGTError13.mo \
+HGTError14.mo \
 HGTError9.mo \
 HGTFor1.mo \
 HGTIf1.mo \

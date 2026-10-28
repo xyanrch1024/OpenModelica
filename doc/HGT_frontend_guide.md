@@ -348,6 +348,7 @@ m = k .* sqrt(p[1:3] - p[2:4]) annotation(__OpenModelica_HGT(name = seg,
 
 - **形状**：方程和变量的维数必须完全相同（`checkShape`），否则报 8001，信息里给出两边的维数。别的对应关系（例如倒序）用 for 方程写。
 - **属性**：标量用于所有元素，数组必须和变量（残差的 nominal 则和方程）同形状，逐元素对应。`level`、`enabled`、`hold` 只能是标量。
+- **只在 level 1**：数组残差方程和数组迭代变量（包括切片）暂时只支持 level 1，level ≥ 2 报 8001（`checkArrayLevel`）。for 循环不受影响，因为每次迭代都是标量配对。
 - **元素的名字**：按行优先在名字后加元素下标：`seg[1]`、`bal[1,2]`。for 循环里的数组方程先加迭代值、再加元素下标：`w[i, :]` 在 i = 2 时得到 `bw[2,1]`、`bw[2,2]`。
 - **`tearingPairs`**：`Pair(residualEquation = bal, iterationVariable = x)` 逐元素配对整条数组方程；`Pair(residualEquation = bal[2], iterationVariable = x[3])` 配单个元素。`parsePair` 先按变量展开成每个元素一个配对，`finish` 再查 `arrayEquations`：是数组方程就检查形状并换成元素名，是标量方程就要求变量也是标量。
 
@@ -503,6 +504,7 @@ class F.Plant
 | `HGTError7`、`HGTError8` | 残差和迭代变量的 nominal ≤ 0（8001），后者由参数给出 |
 | `HGTError9` | 未配对项报 8022，显式配对（组件级和 `tearingPairs`）不受影响 |
 | `HGTError10`–`HGTError12` | 数组方程与切片尺寸不同、数组属性尺寸不对、标量方程配数组变量（8001） |
+| `HGTError13`、`HGTError14` | level 2 上的数组配对，组件级和 `tearingPairs`（8001） |
 
 ## 13. 改代码时要注意的地方
 

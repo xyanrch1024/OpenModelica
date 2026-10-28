@@ -845,6 +845,20 @@ protected
       "an array of size [" + stringDelimitList(list(intString(d) for d in dims), ", ") + "]";
   end dimsString;
 
+  function checkArrayLevel
+    "Array residual equations and iteration variables are only supported on
+     level 1 for now."
+    input Integer level;
+    input list<Integer> dims "The dimensions of the equation or variable, {} for a scalar.";
+    input SourceInfo info;
+  algorithm
+    if level > 1 and not listEmpty(dims) then
+      Error.addSourceMessage(Error.HGT_INVALID_VALUE, {intString(level), "level",
+        "array residual equations and iteration variables are only supported on level 1"}, info);
+      fail();
+    end if;
+  end checkArrayLevel;
+
   function checkShape
     "An array residual equation is paired element-wise, so the iteration
      variable must have the same dimensions."
@@ -1103,12 +1117,14 @@ protected
     end if;
 
     level := evalLevel(mod, scope, mod_info);
+    checkArrayLevel(level, dims, mod_info);
     nominals := parseRealAttribute(mod, "nominal", "residual equation " + name, level, dims, scope, flattenFn, mod_info);
     hold := parseHold(mod, scope, flattenFn, mod_info);
 
     if hasField(mod, "iterationVariable") then
       (vars, var_dims) := parsePairedIterationVariable(lookupField(mod, "iterationVariable"),
         level, scope, flattenFn, mod_info);
+      checkArrayLevel(level, var_dims, mod_info);
       checkShape(dims, var_dims, vars, mod_info);
       residuals := list(RESIDUAL_EQUATION(n, level, nom, hold, SOME(v), mod_info)
         threaded for n in names, nom in nominals, v in vars);
@@ -1170,6 +1186,7 @@ protected
 
     name := prefixName(prefix, name);
     (vars, var_dims) := parsePairedIterationVariable(lookupField(mod, "iterationVariable"), level, scope, flattenFn, info);
+    checkArrayLevel(level, var_dims, info);
     nominals := parseRealAttribute(res_mod, "nominal", "residual equation " + name, level, var_dims, scope, flattenFn, info);
     hold := parseHold(res_mod, scope, flattenFn, info);
     pair := SOME((list(RESIDUAL_EQUATION(name, level, nom, hold, SOME(v), info)

@@ -173,7 +173,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 | `parseHold` | 解析 hold（目前只存储） |
 | `checkFields`、`lookupFields` | 遇到未知字段报警告 8000 |
 
-**数组**：Real 数组方程与同形状的数组迭代变量或切片逐元素配对（形状不同报 8001），元素方程按行优先命名为 `bal[1]`、`bal[1,2]`。展平时整条数组方程只打一个标签，`NFScalarize.scalarizeEquation` 总是拆开带标签的数组方程，并用 `indexEquationTag` 把每个元素的标签改成元素名。`tearingPairs` 可以引用整条数组方程（逐元素）或单个元素（`bal[2]`）。详见前端导读 §7。
+**数组**：Real 数组方程与同形状的数组迭代变量或切片逐元素配对（形状不同报 8001），元素方程按行优先命名为 `bal[1]`、`bal[1,2]`。展平时整条数组方程只打一个标签，`NFScalarize.scalarizeEquation` 总是拆开带标签的数组方程，并用 `indexEquationTag` 把每个元素的标签改成元素名。`tearingPairs` 可以引用整条数组方程（逐元素）或单个元素（`bal[2]`）。数组配对暂时只支持 level 1，level ≥ 2 报 8001。详见前端导读 §7。
 
 不支持的情况都是给警告、丢弃该项，然后继续：非 Real 的方程或变量、没有标量化时的数组方程（8007），when 方程、不展开的 for 方程以及仍保留下来的 if 分支内的注解（8007）。
 
@@ -508,6 +508,7 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | HGTFor1 | for 循环：嵌套、两个下标的名字、`tearingPairs` 引用某次迭代、自动命名、倒序对应 |
 | HGTArray1 | 数组方程逐元素配对：切片、矩阵、标量和数组属性、`tearingPairs` 引用整条数组方程和单个元素、for 里的数组方程 |
 | HGTError10–12 | 数组方程与切片尺寸不同、数组属性尺寸不对、标量方程配数组变量（8001） |
+| HGTError13–14 | level 2 上的数组配对，组件级和 `tearingPairs`（8001） |
 | HGTSystemPair1 | 跨组件的系统级配对，分写在两个注解子句中（合并）；数组组件 `ba[2].res` |
 | HGTUnpaired1 | OCT TestUnpaired 例子中的未配对项：报 8022，名字带前缀 |
 | HGTError9 | 未配对的残差方程和迭代变量报 8022，显式配对（组件级和 `tearingPairs`）不受影响 |
@@ -556,7 +557,7 @@ cd testsuite/flattening/modelica/scodeinst && ../../../rtest -v HGT*.mo
 
 - 只保证稳态模型；有状态时只给警告 8017。
 - 新后端不支持。
-- when 方程、不展开的 for 方程、运行时才能决定的 if 分支内的注解都不支持（展开的 for 方程和由参数选中的 if 分支支持）。数组只支持逐元素的显式配对，且模型必须标量化。
+- when 方程、不展开的 for 方程、运行时才能决定的 if 分支内的注解都不支持（展开的 for 方程和由参数选中的 if 分支支持）。数组只支持 level 1 上逐元素的显式配对，且模型必须标量化。
 - `tearingPairs` 不从基类继承。
 - 只能合并同一个 EqSystem 内的块。
 - 嵌套层要求组件中都是标量方程；HpcOm 和 OMSI 不支持嵌套层。

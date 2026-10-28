@@ -768,6 +768,7 @@ HGTError8.mo \
 HGTIf1.mo \
 HGTLevel1.mo \
 HGTModelon1.mo \
+HGTOnly2.mo \
 HGTNotSupported1.mo \
 HGTSystemPair1.mo \
 HGTUnpaired1.mo \

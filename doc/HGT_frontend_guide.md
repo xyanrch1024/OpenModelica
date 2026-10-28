@@ -331,9 +331,10 @@ flatModel.handGuidedTearing := HandGuidedTearing.finish(settings.hgt);
    - 这条方程已经有组件级的 `ResidualEquation` → 8005（`checkUniqueEquation`）。
 3. 残差方程按名字排序（`isNameGreater`），让输出和测试结果稳定，不受哈希顺序影响。
 4. **每个变量只能有一个 HGT 规定**：配对的变量和未配对的变量合在一起检查重复（8005，`checkUniqueVariable`）。
-5. 没有任何项 → `NONE()`。
-6. 有任何 `hold` 不是字面量 `false` 的 → 警告 8009（hold 尚未支持）。
-7. `-d=hgtDump` → 打印 `Spec.toString`。
+5. `--hgtOnly` → `checkOnlyPairs`：每个未配对的残差方程和迭代变量各报一条 8022，然后失败。只接受显式配对，不交给后端的 `bindUnpaired` 自动绑定。放在这里检查，是因为这时 `tearingPairs` 的配对也已经加进来了。
+6. 没有任何项 → `NONE()`。
+7. 有任何 `hold` 不是字面量 `false` 的 → 警告 8009（hold 尚未支持）。
+8. `-d=hgtDump` → 打印 `Spec.toString`。
 
 ## 9. checkEquations 与转换成 DAE
 
@@ -418,8 +419,9 @@ class F.Plant
 | 8008 | 提示 | 模型里有 HGT 注解，但没开 `--handGuidedTearing` | `finish` |
 | 8009 | 警告 | `hold` 尚未支持 | `finish` |
 | 8010 | 错误 | 标签方程在化简过程中被删掉或复制了 | `checkEquations` |
+| 8022 | 错误 | `--hgtOnly` 下有未配对的残差方程或迭代变量 | `checkOnlyPairs`（`finish` 中） |
 
-8011 及以后的编号由后端报告，见开发指南 §7。
+8011–8021 由后端报告，见开发指南 §7。
 
 ## 12. 读代码的顺序、调试与测试
 
@@ -450,6 +452,7 @@ class F.Plant
 | `HGTUnpaired1` | 子模型中的未配对项，名字带前缀 |
 | `HGTLevel1` | level 由参数给出（变成结构参数）；level 2 上允许依赖连续变量 |
 | `HGTModelon1` | `--acceptModelonHGT`、hold 警告、忽略 `__Modelon` 的其他内容 |
+| `HGTOnly2` | `--hgtOnly`：未配对项报 8022，显式配对不受影响 |
 | `HGTIf1` | 参数选中的 if 分支；保留下来的 if 分支中的注解被忽略 |
 | `HGTNotSupported1` | 数组、for 循环（8007）；基类的 `tearingPairs` 不继承 |
 | `HGTDisabled1` | 没开开关时的提示 8008 |

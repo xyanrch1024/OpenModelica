@@ -83,7 +83,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 | `--acceptModelonHGT` | config 174 | false | 也读 `__Modelon` |
 | `--hgtMergeBLTBlocks` | config 175 | false | 把所有 HGT 项合并进同一个 BLT 块（OCT `merge_blt_blocks`） |
 | `--hgtAllowMultipleResiduals` | config 176 | `level1` | `false`、`level1`、`true`：每个块允许几个残差（OCT 的 R9） |
-| `--hgtOnly` | config 177 | false | HGT 块只用用户给的迭代变量和残差方程撕裂：需要补迭代变量或残差方程时报错 8018，不再自动补全 |
+| `--hgtOnly` | config 177 | false | HGT 块只用用户给的迭代变量和残差方程撕裂：需要补迭代变量或残差方程时报错 8018，不再自动补全；只接受显式配对，未配对的残差方程和迭代变量在前端报错 8022，不做自动绑定 |
 | `-d=hgtDump` | debug 202 | 关 | 打印前端收集到的规范和后端的分块结果 |
 
 `.cmake/meta_modelica_source_list.cmake` 中登记了 `NFFrontEnd/NFHandGuidedTearing.mo` 和 `BackEnd/HandGuidedTearing.mo` 两个新文件。
@@ -487,6 +487,7 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | 8019 | 警告 | min/max 依赖变量（自适应界未实现），已忽略 |
 | 8020 | 错误 | HGT 撕裂失败，附原因 |
 | 8021 | 错误 | 块中残差数超过 `--hgtAllowMultipleResiduals` 的限制（R9） |
+| 8022 | 错误 | `--hgtOnly`：有未配对的残差方程或迭代变量（前端报告） |
 
 ## 8. 测试
 
@@ -526,6 +527,7 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | HGTNetwork1 | 泵网络：组件级和系统级配对、设计目标、界；`m_set = 8` 时越界解被拒绝 |
 | HGTPlant1 | 热工水力例子：`__Modelon` 语法、两个块、自动补全、`enabled = false`、各属性 |
 | HGTAlgebra1 | 纯代数：多根选根、反问题、带界的未配对变量、自动补撕裂变量 |
+| HGTOnly2（scodeinst） | `--hgtOnly`：未配对的残差方程和迭代变量报 8022，显式配对（组件级和 `tearingPairs`）不受影响 |
 | HGTOnly1 | `--hgtOnly`：能解的块照常；撕裂卡住和匹配不上的块报 8018；不加 `--hgtOnly` 时同样的模型自动补全后能解 |
 | HGTIf1 | OCT 风格的稳态开关：参数 `isSteadyState` 选中带 HGT 注解的稳态分支 |
 | HGTInit1 | initial equation 上的配对只用于初始化系统，仿真系统中没有这个配对 |
@@ -570,7 +572,7 @@ cd testsuite/flattening/modelica/scodeinst && ../../../rtest -v HGT*.mo
 | 想做的事 | 从哪里改 |
 |---|---|
 | 新增注解字段 | `NFHandGuidedTearing.mo`：`parse*` 函数和字段白名单 `checkFields`；DAE 记录（`DAE.mo`）；`toDAE` |
-| 新增前端校验或错误 | `NFHandGuidedTearing.finish` 和 `parse*` 函数；`Error.mo` 中 HGT 号段 8000–8021 之后的空号（8022 起；HGT 的错误号放在 8000 号段，以免和官方按顺序新增的错误号冲突） |
+| 新增前端校验或错误 | `NFHandGuidedTearing.finish` 和 `parse*` 函数；`Error.mo` 中 HGT 号段 8000–8022 之后的空号（8023 起；HGT 的错误号放在 8000 号段，以免和官方按顺序新增的错误号冲突） |
 | 新增保护（新的优化模块） | 该模块中调用 `HandGuidedTearing.isTaggedEquation` 或 `anyTaggedEquation` |
 | 改变分块规则 | `HandGuidedTearing.matchSystem` |
 | 改变块内撕裂 | `Tearing.handGuidedTearing`、`hgtInnerEquations` |

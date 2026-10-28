@@ -514,6 +514,10 @@ public
       checkUniqueVariable(v, var_names);
     end for;
 
+    if Flags.getConfigBool(Flags.HGT_ONLY) then
+      checkOnlyPairs(residuals, vars);
+    end if;
+
     if listEmpty(residuals) and listEmpty(vars) then
       spec := NONE();
       return;
@@ -733,6 +737,32 @@ protected
       else false;
     end match;
   end isHeld;
+
+  function checkOnlyPairs
+    "--hgtOnly: the residual equations and iteration variables must be paired
+     explicitly, they are not bound automatically."
+    input list<ResidualEquation> residuals;
+    input list<IterationVariable> vars;
+  protected
+    Boolean unpaired = false;
+  algorithm
+    for r in residuals loop
+      if isNone(r.iterationVariable) then
+        Error.addSourceMessage(Error.HGT_UNPAIRED_NOT_ALLOWED, {"residual equation " + r.name}, r.info);
+        unpaired := true;
+      end if;
+    end for;
+
+    for v in vars loop
+      Error.addSourceMessage(Error.HGT_UNPAIRED_NOT_ALLOWED,
+        {"iteration variable " + ComponentRef.toString(v.name)}, v.info);
+      unpaired := true;
+    end for;
+
+    if unpaired then
+      fail();
+    end if;
+  end checkOnlyPairs;
 
   function checkUniqueEquation
     input ResidualEquation residual;

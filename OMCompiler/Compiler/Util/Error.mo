@@ -1238,6 +1238,8 @@ public constant ErrorTypes.Message HGT_TEARING_FAILED = ErrorTypes.MESSAGE(8020,
   "Hand guided tearing of the strong component with the residual equations {%s} failed: %s.");
 public constant ErrorTypes.Message HGT_MULTIPLE_RESIDUALS = ErrorTypes.MESSAGE(8021, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
   "The hand guided tearing block of level %s has %s residual equations {%s}, but --hgtAllowMultipleResiduals=%s allows only one.");
+public constant ErrorTypes.Message HGT_UNPAIRED_NOT_ALLOWED = ErrorTypes.MESSAGE(8022, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+  "The hand guided tearing %s is not paired, but --hgtOnly only supports explicit pairs, given by ResidualEquation(iterationVariable = ...) or tearingPairs(Pair(...)).");
 
 public constant ErrorTypes.Message MATCH_SHADOWING = ErrorTypes.MESSAGE(5001, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "Local variable '%s' shadows another variable.");

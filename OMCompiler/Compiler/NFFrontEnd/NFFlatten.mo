@@ -1984,6 +1984,24 @@ function prefixString
   output String str = if Prefix.isEmpty(prefix) then "" else ComponentRef.toString(Prefix.prefix(prefix));
 end prefixString;
 
+function hgtEquationScope
+  "Returns the scope to resolve the hand guided tearing annotation of an
+   equation in. The equations of a for-loop have the scope of the loop, which
+   the Rust port of omc only references weakly and which is gone when the loop
+   is unrolled; the iterators are replaced in the annotation then, so the scope
+   of the enclosing class is enough."
+  input Equation eq;
+  input Prefix prefix;
+  output InstNode scope;
+algorithm
+  scope := Equation.scope(eq);
+
+  if InstNode.isEmpty(scope) then
+    scope := if Prefix.isEmpty(prefix) then Prefix.rootNode(prefix) else
+      InstNode.classScope(ComponentRef.node(Prefix.prefix(prefix)));
+  end if;
+end hgtEquationScope;
+
 function collectHGTClass
   "Collects the hand guided tearing annotation of the class that is flattened
    with the given prefix."
@@ -2035,7 +2053,7 @@ algorithm
 
         if HandGuidedTearing.hasAnnotation(eq.source) then
           eq.source := HandGuidedTearing.collectEquation(eq.source, ty,
-            Equation.scope(eq), prefixString(prefix),
+            hgtEquationScope(eq, prefix), prefixString(prefix),
             function flattenExp(prefix = prefix, info = info), settings.hgt);
         end if;
       then

@@ -526,6 +526,7 @@ class F.Plant
 **为了兼容 Rust 移植版 omc**（mmtorust 会把 MetaModelica 转译成 Rust）
 - 不要对内置函数做偏应用，例如 `function listMember(lst = ...)`，改写成循环；
 - 局部变量不要叫 `cons` 之类与内置函数同名的名字；
+- 不要用 `threaded for` 的列表推导式构造 uniontype 的记录（例如 `list(RESIDUAL_EQUATION(...) threaded for ...)`），转译后元素类型名会指向模块而不是结构体；改写成循环，见 `makeResiduals`；
 - `match` 不能用在输出参数的默认值里，要放到 algorithm 部分；
 - 不能直接对函数调用的结果取字段，要用模式匹配。
 

@@ -626,7 +626,7 @@ public
         if isSome(opt_array) then
           SOME((elem_names, eq_dims)) := opt_array;
           checkShape(eq_dims, var_dims, list(Util.getOption(p.iterationVariable) for p in pair_list), first.info);
-          pair_list := list(setResidualName(p, n) threaded for p in pair_list, n in elem_names);
+          pair_list := renameResiduals(pair_list, elem_names);
         else
           checkShape({}, var_dims, list(Util.getOption(p.iterationVariable) for p in pair_list), first.info);
         end if;
@@ -876,12 +876,51 @@ protected
     end if;
   end checkShape;
 
-  function setResidualName
-    input output ResidualEquation residual;
-    input String name;
+  function renameResiduals
+    "Gives the residual equations the names, one by one."
+    input list<ResidualEquation> residuals;
+    input list<String> names;
+    output list<ResidualEquation> outResiduals = {};
+  protected
+    list<String> rest = names;
+    String name;
+    ResidualEquation res;
   algorithm
-    residual.name := name;
-  end setResidualName;
+    for r in residuals loop
+      name :: rest := rest;
+      res := r;
+      res.name := name;
+      outResiduals := res :: outResiduals;
+    end for;
+
+    outResiduals := listReverse(outResiduals);
+  end renameResiduals;
+
+  function makeResiduals
+    "Returns one residual equation per name, with the nominal and iteration
+     variable at the same position (the Rust port can't translate a threaded
+     list comprehension of records)."
+    input list<String> names;
+    input list<Option<Expression>> nominals;
+    input list<Option<IterationVariable>> vars;
+    input Integer level;
+    input Option<Expression> hold;
+    input SourceInfo info;
+    output list<ResidualEquation> residuals = {};
+  protected
+    list<Option<Expression>> rest_nominals = nominals;
+    list<Option<IterationVariable>> rest_vars = vars;
+    Option<Expression> nominal;
+    Option<IterationVariable> var;
+  algorithm
+    for n in names loop
+      nominal :: rest_nominals := rest_nominals;
+      var :: rest_vars := rest_vars;
+      residuals := RESIDUAL_EQUATION(n, level, nominal, hold, var, info) :: residuals;
+    end for;
+
+    residuals := listReverse(residuals);
+  end makeResiduals;
 
   function generateName
     "Returns the name of a residual equation that has none. An equation in a
@@ -1126,11 +1165,9 @@ protected
         level, scope, flattenFn, mod_info);
       checkArrayLevel(level, var_dims, mod_info);
       checkShape(dims, var_dims, vars, mod_info);
-      residuals := list(RESIDUAL_EQUATION(n, level, nom, hold, SOME(v), mod_info)
-        threaded for n in names, nom in nominals, v in vars);
+      residuals := makeResiduals(names, nominals, list(SOME(v) for v in vars), level, hold, mod_info);
     else
-      residuals := list(RESIDUAL_EQUATION(n, level, nom, hold, NONE(), mod_info)
-        threaded for n in names, nom in nominals);
+      residuals := makeResiduals(names, nominals, list(NONE() for n in names), level, hold, mod_info);
     end if;
   end parseResidualEquation;
 
@@ -1189,8 +1226,8 @@ protected
     checkArrayLevel(level, var_dims, info);
     nominals := parseRealAttribute(res_mod, "nominal", "residual equation " + name, level, var_dims, scope, flattenFn, info);
     hold := parseHold(res_mod, scope, flattenFn, info);
-    pair := SOME((list(RESIDUAL_EQUATION(name, level, nom, hold, SOME(v), info)
-      threaded for v in vars, nom in nominals), var_dims));
+    pair := SOME((makeResiduals(list(name for v in vars), nominals, list(SOME(v) for v in vars),
+      level, hold, info), var_dims));
   end parsePair;
 
   function parsePairedIterationVariable
@@ -1270,15 +1307,24 @@ protected
   protected
     String owner = "iteration variable " + varString;
     list<Option<Expression>> starts, mins, maxs, nominals;
-    Option<Expression> hold;
+    Option<Expression> hold, st, mi, ma, no;
   algorithm
     starts := parseRealAttribute(mod, "start", owner, level, dims, scope, flattenFn, info);
     mins := parseRealAttribute(mod, "min", owner, level, dims, scope, flattenFn, info);
     maxs := parseRealAttribute(mod, "max", owner, level, dims, scope, flattenFn, info);
     nominals := parseRealAttribute(mod, "nominal", owner, level, dims, scope, flattenFn, info);
     hold := parseHold(mod, scope, flattenFn, info);
-    vars := list(ITERATION_VARIABLE(n, level, st, mi, ma, no, hold, info)
-      threaded for n in names, st in starts, mi in mins, ma in maxs, no in nominals);
+    // Element by element (the Rust port can't translate a threaded list
+    // comprehension of records).
+    vars := {};
+    for n in names loop
+      st :: starts := starts;
+      mi :: mins := mins;
+      ma :: maxs := maxs;
+      no :: nominals := nominals;
+      vars := ITERATION_VARIABLE(n, level, st, mi, ma, no, hold, info) :: vars;
+    end for;
+    vars := listReverse(vars);
   end parseIterationVariableAttributes;
 
   function resolveIterationVariable

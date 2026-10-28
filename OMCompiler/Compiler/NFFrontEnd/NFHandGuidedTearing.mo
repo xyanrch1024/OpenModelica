@@ -178,7 +178,7 @@ public
     "The hand guided tearing specification of a model."
     record SPEC
       list<ResidualEquation> residuals "Paired and unpaired residual equations.";
-      list<IterationVariable> iterationVariables "Unpaired iteration variables.";
+      list<IterationVariable> iterationVariables "Unpaired iteration variables, always empty since only explicit pairs are supported.";
     end SPEC;
 
     function toString
@@ -218,7 +218,7 @@ public
       UnorderedMap<String, SourceInfo> equationNames "All named equations.";
       UnorderedMap<String, ResidualEquation> residuals "Residual equations, by equation name.";
       Pointer<list<ResidualEquation>> pairs "Pairs from tearingPairs, the equations are checked by finish.";
-      Pointer<list<IterationVariable>> iterationVariables "Unpaired iteration variables.";
+      Pointer<list<IterationVariable>> iterationVariables "Unpaired iteration variables, collected to report them as errors.";
       Pointer<Integer> nameIndex "Used to name residual equations that have no name.";
     end COLLECTOR;
 
@@ -514,9 +514,7 @@ public
       checkUniqueVariable(v, var_names);
     end for;
 
-    if Flags.getConfigBool(Flags.HGT_ONLY) then
-      checkOnlyPairs(residuals, vars);
-    end if;
+    checkOnlyPairs(residuals, vars);
 
     if listEmpty(residuals) and listEmpty(vars) then
       spec := NONE();
@@ -739,8 +737,8 @@ protected
   end isHeld;
 
   function checkOnlyPairs
-    "--hgtOnly: the residual equations and iteration variables must be paired
-     explicitly, they are not bound automatically."
+    "The residual equations and iteration variables must be paired explicitly,
+     unpaired ones are not bound automatically."
     input list<ResidualEquation> residuals;
     input list<IterationVariable> vars;
   protected

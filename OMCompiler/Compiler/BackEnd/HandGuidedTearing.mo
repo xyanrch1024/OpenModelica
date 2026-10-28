@@ -240,24 +240,15 @@ algorithm
 end hgtMatching;
 
 function simulationSpec
-  "Removes the items that only apply to the initialization system from the
-   specification: the residual equations that are initial equations, their
-   iteration variables, and the unpaired iteration variables of the levels whose
-   unpaired residual equations are all initial equations."
+  "Removes the pairs that only apply to the initialization system from the
+   specification, i.e. those whose residual equation is an initial equation."
   input output BackendDAE.HGTSpec spec;
-protected
-  list<Integer> init_levels, sim_levels;
 algorithm
   if listEmpty(spec.initialResiduals) then
     return;
   end if;
 
-  init_levels := list(r.level for r guard isNone(r.iterationVariable) and
-    listMember(r.name, spec.initialResiduals) in spec.residuals);
   spec.residuals := list(r for r guard not listMember(r.name, spec.initialResiduals) in spec.residuals);
-  sim_levels := list(r.level for r guard isNone(r.iterationVariable) in spec.residuals);
-  spec.iterationVariables := list(v for v guard not (listMember(v.level, init_levels) and
-    not listMember(v.level, sim_levels)) in spec.iterationVariables);
   spec.initialResiduals := {};
 end simulationSpec;
 
@@ -425,7 +416,8 @@ algorithm
 end findSpec;
 
 function allIterationVariables
-  "Returns the paired and the unpaired iteration variables."
+  "Returns the iteration variables of the pairs (the frontend only accepts
+   explicit pairs, so there are no unpaired ones)."
   input BackendDAE.HGTSpec spec;
   output list<DAE.HGTIterationVariable> vars = spec.iterationVariables;
 algorithm
@@ -608,8 +600,6 @@ function matchSystem
 protected
   UnorderedMap<String, Integer> eqn_index;
   list<tuple<Integer, Integer>> pairs = {} "(variable, equation)";
-  list<tuple<Integer, Integer>> unpaired_vars = {} "(variable, level)";
-  list<tuple<Integer, Integer>> unpaired_eqns = {} "(equation, level)";
   Option<Integer> oe, ov;
   Integer e, v, n_rows, n_vars, r;
   AvlTreePathFunction.Tree funcs;
@@ -618,7 +608,6 @@ protected
   array<list<Integer>> map_eqn_row;
   array<Integer> map_row_eqn, ass1, ass2, old_ass2;
   array<Boolean> hgt_rows, hgt_vars;
-  list<tuple<Integer, Integer>> bound, all_pairs;
   list<Integer> free_rows, free_vars, auto_rows = {}, merge_rows = {};
   BackendDAE.StrongComponents comps;
   DAE.HGTIterationVariable hgt_var;
@@ -627,37 +616,24 @@ algorithm
   eqn_index := UnorderedMap.new<Integer>(stringHashDjb2, stringEq);
   indexTags(syst.orderedEqs, eqn_index);
 
+  // The frontend only accepts explicit pairs, every residual equation has its
+  // iteration variable.
   for res in spec.residuals loop
     oe := UnorderedMap.get(res.name, eqn_index);
+    SOME(hgt_var) := res.iterationVariable;
+    ov := varIndex(hgt_var.name, syst.orderedVars);
 
-    if isSome(res.iterationVariable) then
-      SOME(hgt_var) := res.iterationVariable;
-      ov := varIndex(hgt_var.name, syst.orderedVars);
-
-      if isSome(oe) and isSome(ov) then
-        pairs := (Util.getOption(ov), Util.getOption(oe)) :: pairs;
-      elseif isSome(oe) or isSome(ov) then
-        Error.addSourceMessage(Error.HGT_NOT_SAME_SYSTEM, {res.name, crefString(hgt_var.name)}, res.info);
-        fail();
-      end if;
-    elseif isSome(oe) then
-      unpaired_eqns := (Util.getOption(oe), res.level) :: unpaired_eqns;
+    if isSome(oe) and isSome(ov) then
+      pairs := (Util.getOption(ov), Util.getOption(oe)) :: pairs;
+    elseif isSome(oe) or isSome(ov) then
+      Error.addSourceMessage(Error.HGT_NOT_SAME_SYSTEM, {res.name, crefString(hgt_var.name)}, res.info);
+      fail();
     end if;
   end for;
 
-  for var in spec.iterationVariables loop
-    ov := varIndex(var.name, syst.orderedVars);
-
-    if isSome(ov) then
-      unpaired_vars := (Util.getOption(ov), var.level) :: unpaired_vars;
-    end if;
-  end for;
-
-  if listEmpty(pairs) and listEmpty(unpaired_vars) and listEmpty(unpaired_eqns) then
+  if listEmpty(pairs) then
     return;
   end if;
-
-  checkUnpairedCounts(unpaired_vars, unpaired_eqns);
 
   // Scalar adjacency matrices: solvable for the matching, normal for sorting.
   funcs := BackendDAEUtil.getFunctions(shared);
@@ -697,14 +673,6 @@ algorithm
     markRow(eqnRow(e, map_eqn_row), hgt_rows, ass1, ass2);
   end for;
 
-  for u in unpaired_vars loop
-    markVar(Util.tuple21(u), hgt_vars, ass1, ass2);
-  end for;
-
-  for u in unpaired_eqns loop
-    markRow(eqnRow(Util.tuple21(u), map_eqn_row), hgt_rows, ass1, ass2);
-  end for;
-
   // Force the user pairs, i.e. let each residual equation "solve" its variable.
   for p in pairs loop
     (v, e) := p;
@@ -716,15 +684,6 @@ algorithm
     if ass2[row] < 0 and not hgt_rows[row] then
       augment(row, m_s, ass1, ass2, hgt_vars, hgt_rows, arrayCreate(n_vars, false));
     end if;
-  end for;
-
-  // Bind the unpaired iteration variables to unpaired residual equations that
-  // depend on them.
-  bound := bindUnpaired(unpaired_vars, unpaired_eqns, map_eqn_row, mt_n, ass2, syst);
-
-  for p in bound loop
-    (v, r) := p;
-    assign(v, r, ass1, ass2);
   end for;
 
   // What is still unmatched couldn't be repaired: let those equations solve the
@@ -741,9 +700,7 @@ algorithm
   if not listEmpty(free_rows) and Flags.getConfigBool(Flags.HGT_ONLY) then
     Error.addMessage(Error.HGT_NOT_SOLVABLE, {
       stringDelimitList(list(Util.getOptionOrDefault(equationName(BackendEquation.get(syst.orderedEqs, Util.tuple22(p))), "")
-        for p in pairs), ", ") + (if listEmpty(pairs) or listEmpty(unpaired_eqns) then "" else ", ") +
-      stringDelimitList(list(Util.getOptionOrDefault(equationName(BackendEquation.get(syst.orderedEqs, Util.tuple21(u))), "")
-        for u in unpaired_eqns), ", "),
+        for p in pairs), ", "),
       "no matching exists for the equations {" + stringDelimitList(list(BackendDump.equationString(
         BackendEquation.get(syst.orderedEqs, map_row_eqn[row])) for row in free_rows), "; ") +
       "} and the variables {" + stringDelimitList(list(crefString(BackendVariable.varCref(
@@ -770,8 +727,8 @@ algorithm
   (syst, comps) := BackendDAETransform.strongComponentsScalar(syst, shared, map_eqn_row, map_row_eqn);
 
   // Each residual equation must depend on its iteration variable.
-  all_pairs := listAppend(list((Util.tuple21(p), eqnRow(Util.tuple22(p), map_eqn_row)) for p in pairs), bound);
-  checkDependence(all_pairs, comps, m_n, map_eqn_row, map_row_eqn, syst);
+  checkDependence(list((Util.tuple21(p), eqnRow(Util.tuple22(p), map_eqn_row)) for p in pairs),
+    comps, m_n, map_eqn_row, map_row_eqn, syst);
   checkResidualCounts(comps, syst, spec);
 
   if Flags.isSet(Flags.HGT_DUMP) then
@@ -940,154 +897,6 @@ algorithm
     end if;
   end for;
 end augment;
-
-function checkUnpairedCounts
-  "R5: the number of unpaired residual equations must equal the number of
-   unpaired iteration variables, on each level."
-  input list<tuple<Integer, Integer>> unpairedVars;
-  input list<tuple<Integer, Integer>> unpairedEqns;
-protected
-  list<Integer> levels;
-  Integer nv, ne;
-algorithm
-  levels := List.unique(listAppend(list(Util.tuple22(u) for u in unpairedVars),
-                                   list(Util.tuple22(u) for u in unpairedEqns)));
-
-  for l in levels loop
-    nv := listLength(list(u for u guard Util.tuple22(u) == l in unpairedVars));
-    ne := listLength(list(u for u guard Util.tuple22(u) == l in unpairedEqns));
-
-    if nv <> ne then
-      Error.addMessage(Error.HGT_UNPAIRED_COUNT, {intString(l), intString(ne), intString(nv)});
-      fail();
-    end if;
-  end for;
-end checkUnpairedCounts;
-
-function bindUnpaired
-  "Pairs the unpaired iteration variables with unpaired residual equations of
-   the same level that depend on them, by a bipartite matching on the
-   dependencies. Returns (variable, row) pairs."
-  input list<tuple<Integer, Integer>> unpairedVars "(variable, level)";
-  input list<tuple<Integer, Integer>> unpairedEqns "(equation, level)";
-  input array<list<Integer>> mapEqnIncRow;
-  input BackendDAE.AdjacencyMatrixT mt;
-  input array<Integer> ass2;
-  input BackendDAE.EqSystem syst;
-  output list<tuple<Integer, Integer>> bound = {};
-protected
-  array<Integer> target_level, row_match;
-  list<tuple<Integer, list<Integer>>> candidates = {};
-  Integer v, l, r;
-  list<Integer> unbound_vars = {};
-algorithm
-  if listEmpty(unpairedVars) then
-    return;
-  end if;
-
-  target_level := arrayCreate(arrayLength(ass2), 0);
-  for u in unpairedEqns loop
-    arrayUpdate(target_level, eqnRow(Util.tuple21(u), mapEqnIncRow), Util.tuple22(u));
-  end for;
-
-  for u in unpairedVars loop
-    (v, l) := u;
-    candidates := (v, dependentRows(v, l, mt, ass2, target_level)) :: candidates;
-  end for;
-
-  row_match := arrayCreate(arrayLength(ass2), -1);
-
-  for c in candidates loop
-    if not bindAugment(Util.tuple21(c), candidates, row_match, arrayCreate(arrayLength(ass2), false)) then
-      unbound_vars := Util.tuple21(c) :: unbound_vars;
-    end if;
-  end for;
-
-  if not listEmpty(unbound_vars) then
-    Error.addMessage(Error.HGT_UNPAIRED_NOT_BOUND, {stringDelimitList(list(
-      crefString(BackendVariable.varCref(BackendVariable.getVarAt(syst.orderedVars, uv))) for uv in unbound_vars), ", ")});
-    fail();
-  end if;
-
-  for row in 1:arrayLength(row_match) loop
-    if row_match[row] > 0 then
-      bound := (row_match[row], row) :: bound;
-    end if;
-  end for;
-end bindUnpaired;
-
-function dependentRows
-  "Returns the unpaired residual rows of the given level that depend on the
-   variable, directly or through matched equations."
-  input Integer var;
-  input Integer level;
-  input BackendDAE.AdjacencyMatrixT mt;
-  input array<Integer> ass2;
-  input array<Integer> targetLevel;
-  output list<Integer> rows = {};
-protected
-  array<Boolean> visited_vars, visited_rows;
-  list<Integer> queue = {var};
-  Integer x, r;
-algorithm
-  visited_vars := arrayCreate(arrayLength(mt), false);
-  visited_rows := arrayCreate(arrayLength(ass2), false);
-  arrayUpdate(visited_vars, var, true);
-
-  while not listEmpty(queue) loop
-    x :: queue := queue;
-
-    for rr in mt[x] loop
-      r := intAbs(rr);
-
-      if r > 0 and not visited_rows[r] then
-        arrayUpdate(visited_rows, r, true);
-
-        if targetLevel[r] == level then
-          rows := r :: rows;
-        elseif ass2[r] > 0 and not visited_vars[ass2[r]] then
-          arrayUpdate(visited_vars, ass2[r], true);
-          queue := ass2[r] :: queue;
-        end if;
-      end if;
-    end for;
-  end while;
-end dependentRows;
-
-function bindAugment
-  input Integer var;
-  input list<tuple<Integer, list<Integer>>> candidates;
-  input array<Integer> rowMatch;
-  input array<Boolean> visited;
-  output Boolean found = false;
-protected
-  list<Integer> rows;
-algorithm
-  rows := Util.tuple22(List.getMemberOnTrue(var, candidates, isCandidateOf));
-
-  for r in rows loop
-    if not visited[r] then
-      arrayUpdate(visited, r, true);
-
-      if rowMatch[r] < 0 then
-        found := true;
-      else
-        found := bindAugment(rowMatch[r], candidates, rowMatch, visited);
-      end if;
-
-      if found then
-        arrayUpdate(rowMatch, r, var);
-        return;
-      end if;
-    end if;
-  end for;
-end bindAugment;
-
-function isCandidateOf
-  input Integer var;
-  input tuple<Integer, list<Integer>> candidate;
-  output Boolean res = var == Util.tuple21(candidate);
-end isCandidateOf;
 
 function addRing
   "Returns copies of the adjacency matrices where the given rows depend on each

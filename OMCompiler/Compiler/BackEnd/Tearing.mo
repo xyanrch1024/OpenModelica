@@ -6044,25 +6044,8 @@ algorithm
     arrayUpdate(locked, v, true);
   end for;
 
-  // unpaired nested equations with unpaired nested variables
-  allowed := arrayCreate(size, false);
-  for i in nestedVars loop
-    if ass1[i] < 0 then
-      arrayUpdate(allowed, i, true);
-    end if;
-  end for;
-  for i in nestedRows loop
-    if ass2[i] < 0 then
-      hgtAugment(i, m, ass1, ass2, allowed, locked, arrayCreate(size, false));
-    end if;
-  end for;
-  for i in nestedVars loop
-    if ass1[i] > 0 then
-      arrayUpdate(locked, i, true);
-    end if;
-  end for;
-
   // all other equations of the inner part
+  allowed := arrayCreate(size, false);
   for i in 1:size loop
     arrayUpdate(allowed, i, in_var[i] and not locked[i]);
   end for;

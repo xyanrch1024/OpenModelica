@@ -39,8 +39,7 @@ package HGTNetwork "pump - distribution manifold - 3 parallel branches - collect
     Junction manifold, collector;
     Real p_m(start = 3, min = 1, max = 6) "manifold pressure [bar]";
     Real p_c(start = 2) "collector pressure [bar]";
-    Real u(start = 0.5) "opening of the valve of branch 1"
-      annotation(__OpenModelica_HGT(IterationVariable(min = 0.05, max = 1)));
+    Real u(start = 0.5) "opening of the valve of branch 1";
   equation
     pump.p_in = p_tank;  pump.p_out = p_m;
     b1.pa = p_m; b2.pa = p_m; b3.pa = p_m;
@@ -48,7 +47,8 @@ package HGTNetwork "pump - distribution manifold - 3 parallel branches - collect
     ret.pa = p_c; ret.pb = p_tank;
     manifold.m_in = pump.m;   manifold.m_out = {b1.m, b2.m, b3.m};
     collector.m_in = ret.m;   collector.m_out = {b1.m, b2.m, b3.m};
-    b1.m = m_set annotation(__OpenModelica_HGT(ResidualEquation(nominal = 10)));  // design spec, unpaired
+    b1.m = m_set annotation(__OpenModelica_HGT(ResidualEquation(nominal = 10,  // design spec
+      iterationVariable(min = 0.05, max = 1) = u)));
     annotation(__OpenModelica_HGT(tearingPairs(
       Pair(residualEquation = manifold.balance, iterationVariable(max = p_tank + 4.99) = p_m),
       Pair(residualEquation = collector.balance, iterationVariable = p_c))));

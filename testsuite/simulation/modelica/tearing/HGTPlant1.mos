@@ -5,7 +5,7 @@
 // Level 1 hand guided tearing of a thermal-hydraulic plant (pump, manifold, two
 // heated branches, collector/mixer, return pipe with Colebrook friction): component
 // level pairs, a system level pair in OCT syntax (--acceptModelonHGT) with a named
-// equation, unpaired items bound in two different blocks, a design spec merged into
+// equation, pairs in two different blocks, a design spec merged into
 // the block of its iteration variable, automatic completion, enabled = false,
 // residual nominals, start/nominal/min/max and the solution check of an inverted
 // pump curve.
@@ -23,13 +23,11 @@ val(ret.m, 0); val(ret.f, 0); val(T_wall, 0); val(h1.T_out, 0); val(h2.T_out, 0)
 // true
 // ""
 // Hand guided tearing:
-//   unpaired residual equation $hgt5 (level 1, nominal = 10.0)
+//   pair: residual equation $hgt5 (level 1, nominal = 10.0), iteration variable T_wall (level 1, min = 300.0, max = 450.0, nominal = 100.0)
 //   pair: residual equation collector.$hgt4 (level 1), iteration variable collector.p (level 1, nominal = 1.0)
 //   pair: residual equation manifold.$hgt3 (level 1), iteration variable manifold.p (level 1, nominal = 1.0)
 //   pair: residual equation mixer.energy (level 1, nominal = 1000.0), iteration variable mixer.T_mix (level 1, start = 320.0, nominal = 300.0)
-//   unpaired residual equation ret.$hgt2 (level 1)
-//   unpaired iteration variable ret.f (level 1, min = 0.005, max = 0.1, nominal = 0.03)
-//   unpaired iteration variable T_wall (level 1, min = 300.0, max = 450.0, nominal = 100.0)
+//   pair: residual equation ret.$hgt2 (level 1), iteration variable ret.f (level 1, min = 0.005, max = 0.1, nominal = 0.03)
 // Hand guided tearing matching (initialization system):
 //   block of 8 equations: residual equations {manifold.$hgt3, collector.$hgt4, ret.$hgt2}, iteration variables {ret.f, collector.p, manifold.p}
 //   block of 6 equations: residual equations {mixer.energy, $hgt5}, iteration variables {T_wall, mixer.T_mix}

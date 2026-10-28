@@ -1480,7 +1480,7 @@ constant ConfigFlag HGT_ALLOW_MULTIPLE_RESIDUALS = CONFIG_FLAG(176, "hgtAllowMul
   "Checks the number of residual equations of hand guided tearing blocks. Corresponds to\nthe OCT option allow_multiple_residuals_in_hgt_blocks.");
 constant ConfigFlag HGT_ONLY = CONFIG_FLAG(177, "hgtOnly",
   NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
-  "Tears the blocks that contain hand guided tearing items only with the given iteration\nvariables and residual equations: if the other equations of such a block can not be\nsolved with them, an error is reported instead of adding iteration variables or residual\nequations automatically. Only explicit pairs are allowed, unpaired residual equations and\niteration variables are an error.");
+  "Tears the blocks that contain hand guided tearing items only with the given iteration\nvariables and residual equations: if the other equations of such a block can not be\nsolved with them, an error is reported instead of adding iteration variables or residual\nequations automatically.");
 
 function getFlags
   "Loads the flags with getGlobalRoot. Assumes flags have been loaded."

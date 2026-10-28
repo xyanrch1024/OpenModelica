@@ -41,7 +41,7 @@ NFConvertDAE ──► DAE.HAND_GUIDED_TEARING 元素
 各优化模块：识别带标签的方程，不删除、不改写
    ▼
 hgtMatching（post-opt 和 init-opt，在 tearingSystem 之前）
-   │  强制配对 → 修复匹配 → 绑定未配对项 → 合并环 → 重算 SCC → 校验
+   │  强制配对 → 修复匹配 → 合并环 → 重算 SCC → 校验
    ▼
 Tearing.handGuidedTearing（tearingSystem 内）
    │  固定用户项 → 贪心因果化 → 自动补撕裂变量 → 嵌套层（INNERCOMPONENT）
@@ -65,9 +65,11 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 | 位置 | 字段 | 含义 |
 |---|---|---|
 | 方程 | `name = id` | 给方程命名，供 `tearingPairs` 引用 |
-| 方程 | `ResidualEquation(enabled, level, nominal, hold, iterationVariable(start, min, max, nominal, hold) = v)` | 带 `iterationVariable` 时是组件级配对，否则是未配对残差 |
-| 变量声明 | `IterationVariable(enabled, level, start, min, max, nominal, hold)` | 未配对迭代变量 |
+| 方程 | `ResidualEquation(enabled, level, nominal, hold, iterationVariable(start, min, max, nominal, hold) = v)` | 组件级配对，必须带 `iterationVariable` |
+| 变量声明 | `IterationVariable(enabled, level, start, min, max, nominal, hold)` | 未配对迭代变量：**不支持**，报错误 8022 |
 | 类 | `tearingPairs(Pair(enabled, level, residualEquation(nominal, hold) = 方程名, iterationVariable(...) = v), ...)` | 系统级配对 |
+
+**只支持显式配对**：每个残差方程都必须通过 `ResidualEquation(iterationVariable = …)` 或 `tearingPairs` 的 `Pair` 指定它的迭代变量。不带 `iterationVariable` 的 `ResidualEquation`（未配对残差）和变量声明上的 `IterationVariable`（未配对迭代变量）都在前端报错误 8022，不会交给后端去自动绑定。这一点与 OCT 不同：OCT 支持未配对项，由编译器按依赖关系把它们一一绑定。
 
 - `enabled`、`level`、`hold` 必须是参数表达式。`enabled` 和 `level` 在前端求值，并把用到的参数标记为结构参数。
 - `start`、`min`、`max`、`nominal` 保留为表达式。level 1 上它们只能依赖参数（错误 8006），level ≥ 2 允许依赖连续变量（OCT 的 R7）。但后端目前**只支持依赖参数的 min/max**，见 §4.7。
@@ -83,7 +85,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 | `--acceptModelonHGT` | config 174 | false | 也读 `__Modelon` |
 | `--hgtMergeBLTBlocks` | config 175 | false | 把所有 HGT 项合并进同一个 BLT 块（OCT `merge_blt_blocks`） |
 | `--hgtAllowMultipleResiduals` | config 176 | `level1` | `false`、`level1`、`true`：每个块允许几个残差（OCT 的 R9） |
-| `--hgtOnly` | config 177 | false | HGT 块只用用户给的迭代变量和残差方程撕裂：需要补迭代变量或残差方程时报错 8018，不再自动补全；只接受显式配对，未配对的残差方程和迭代变量在前端报错 8022，不做自动绑定 |
+| `--hgtOnly` | config 177 | false | HGT 块只用用户给的迭代变量和残差方程撕裂：需要补迭代变量或残差方程时报错 8018，不再自动补全 |
 | `-d=hgtDump` | debug 202 | 关 | 打印前端收集到的规范和后端的分块结果 |
 
 `.cmake/meta_modelica_source_list.cmake` 中登记了 `NFFrontEnd/NFHandGuidedTearing.mo` 和 `BackEnd/HandGuidedTearing.mo` 两个新文件。
@@ -100,8 +102,8 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 |---|---|
 | `IterationVariable.ITERATION_VARIABLE` | `name : ComponentRef`、`level`、`start/min/max/nominal/hold : Option<Expression>`、`info` |
 | `ResidualEquation.RESIDUAL_EQUATION` | `name : String`、`level`、`nominal`、`hold`、`iterationVariable : Option<IterationVariable>`（SOME 表示配对）、`info` |
-| `Spec.SPEC` | `residuals`（配对的和未配对的）、`iterationVariables`（只含未配对的） |
-| `Collector.COLLECTOR` | 展平过程中的累积状态：`enabled`、`acceptModelon`、`found`、嵌套深度 `nested`、已注册的方程名 `equationNames`、组件级残差 `residuals`、待解析的系统级配对 `pairs`、未配对变量 `iterationVariables`、自动命名计数器 `nameIndex` |
+| `Spec.SPEC` | `residuals`（都是配对）、`iterationVariables`（未配对的迭代变量，因为不支持未配对项，总是空） |
+| `Collector.COLLECTOR` | 展平过程中的累积状态：`enabled`、`acceptModelon`、`found`、嵌套深度 `nested`、已注册的方程名 `equationNames`、组件级残差 `residuals`、待解析的系统级配对 `pairs`、未配对变量 `iterationVariables`（只为了报错而收集）、自动命名计数器 `nameIndex` |
 
 常量：`ANNOTATION_NAME = "__OpenModelica_HGT"`、`MODELON_ANNOTATION_NAME = "__Modelon"`、`EQUATION_TAG = "__OpenModelica_HGTEquation"`。
 
@@ -163,7 +165,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 | `getHGTMods` | 取出元素上所有 HGT 注解（`__Modelon` 只在 `acceptModelon` 时读取） |
 | `parseResidualEquation` | 解析 `ResidualEquation(...)`，可带 `iterationVariable` 形成配对 |
 | `parsePair` | 解析 `Pair(...)`；`residualEquation = 名字` 通过 `Dump.printComponentRefStr` 取文本 |
-| `parsePairedIterationVariable`、`parseUnpairedIterationVariable` | 解析两种迭代变量写法；配对里的变量继承所在记录的 level |
+| `parsePairedIterationVariable`、`parseUnpairedIterationVariable` | 解析两种迭代变量写法；配对里的变量继承所在记录的 level。后者解析出的未配对变量只用于报错 8022 |
 | `resolveIterationVariable` | 实例化变量引用，检查它是标量 Real 的连续变量（错误 8002） |
 | `parseRealAttribute` | 解析 start/min/max/nominal：Integer 转成 Real，level 1 上不许依赖连续变量（8006）；编译期能求值的 nominal 必须为正（`checkPositive`，8001），否则缩放时会除以 0 |
 | `evalBoolean`、`evalLevel`、`evalParameterExp` | 求值 `enabled` 和 `level`（level ≥ 1），用 `Structural.markExp` 把相关参数标为结构参数 |
@@ -180,9 +182,10 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 2. 解析系统级配对：引用的方程名必须已注册（否则错误 8004）；`checkUniqueEquation` 保证一个方程最多只有一个 HGT 规范（8005）。
 3. 残差按名字排序。
 4. `checkUniqueVariable`：一个变量在配对和未配对中合起来只能出现一次（8005）。
-5. 有 hold 且不是字面量 `false` 时给警告 8009（`isHeld`）。
-6. 打开 `-d=hgtDump` 时，用 `Spec.toString` 打印规范，以 `Hand guided tearing:` 开头。
-7. 规范为空时返回 NONE()。
+5. `checkOnlyPairs`：每个未配对的残差方程和迭代变量各报一条错误 8022，然后失败。
+6. 有 hold 且不是字面量 `false` 时给警告 8009（`isHeld`）。
+7. 打开 `-d=hgtDump` 时，用 `Spec.toString` 打印规范，以 `Hand guided tearing:` 开头。
+8. 规范为空时返回 NONE()。
 
 `checkEquations`（在 `NFInst.mo` 中，标量化之后调用）检查每个残差标签在方程和初始方程中恰好出现一次。不是一次就报错误 8010（被前端化简删掉了或复制了）。
 
@@ -199,7 +202,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 - 初始化系统在 `Initialization.mo` 中用 `BackendDAEUtil.setSharedHandGuidedTearing` 复制这个规范。
 - `HandGuidedTearing.lower` 做四件事：
   1. `findSpec` 找到规范元素（会递归进 `DAE.COMP`）。
-  2. 对所有迭代变量（配对的和未配对的）调用 `lowerVariable`：设为不可替换（`setVarUnreplaceable`），有 start 或 nominal 就写进变量属性。
+  2. 对所有配对的迭代变量调用 `lowerVariable`：设为不可替换（`setVarUnreplaceable`），有 start 或 nominal 就写进变量属性。
   3. 对带 nominal 的残差方程调用 `scaleResidual`，把 `lhs = rhs` 改写成 `0 = (lhs - rhs)/nominal`。这对 `eqns` 和 `ieqns` 都做。
   4. 记下 `ieqns` 中带标签的方程名，存进 `initialResiduals`。仿真 DAE 在后优化之前就清空了 `shared.initialEqs`（`Initialization.removeInitializationStuff`），所以只能在这里记。
 - 识别 HGT 方程只靠 §3.3 的标签：
@@ -233,9 +236,7 @@ HGT 方程必须原样保留到撕裂阶段，迭代变量也不能被消掉。�
 **入口** `hgtMatching`：
 
 - HGT 不活跃时直接返回。
-- 对仿真系统（`isSimulationDAE`）先调用 `simulationSpec`，去掉只属于初始化系统的项，并写回仿真 DAE 的 `shared`（Tearing 读的就是它）：
-  - `initialResiduals` 中的残差方程，连同与它配对的迭代变量；
-  - 某个 level 上的未配对残差全是初始方程时，这个 level 的未配对迭代变量。
+- 对仿真系统（`isSimulationDAE`）先调用 `simulationSpec`，去掉只属于初始化系统的配对，也就是残差方程在 `initialResiduals` 中的配对，并写回仿真 DAE 的 `shared`（Tearing 读的就是它）。
 - 然后只对仿真系统调用 `checkPresence`：
   - 统计所有系统的 `orderedEqs` 中各标签出现的次数，不是 1 次就报错误 8011；
   - 迭代变量不在任何系统里，报错误 8012；
@@ -244,20 +245,15 @@ HGT 方程必须原样保留到撕裂阶段，迭代变量也不能被消掉。�
 
 **`matchSystem` 的步骤**
 
-1. **定位 HGT 项**（`indexTags`、`varIndex`）。配对的方程和变量都在本系统中时才算这个系统的配对；只有一边在时报错误 8013。未配对项连同 level 一起收集。本系统没有 HGT 项就直接返回。
-2. **R5 检查**（`checkUnpairedCounts`）：每个 level 上，未配对残差和未配对变量的个数必须相等，否则报错误 8014。
-3. **建标量邻接矩阵**：匹配用 SOLVABLE 矩阵，排序用 NORMAL 矩阵。如果长度对得上，就从现有的 `syst.matching.ass2` 出发。
-4. **释放并锁定 HGT 项**（`markVar`、`markRow`）：取消所有 HGT 变量和行的现有匹配，并标记为锁定。
-5. **强制配对**（`assign`）：不检查可解性，这对应 OCT 的 R1（先撕用户指定的对）。
-6. **修复匹配**（`augment`）：对每个未匹配的非 HGT 行，在 SOLVABLE 矩阵上找增广路径，绕开锁定的行和变量。
-7. **绑定未配对项**（`bindUnpaired`、`dependentRows`、`bindAugment`）：
-   - 对每个未配对变量，用 BFS 沿当前匹配找出直接或间接依赖它、且 level 相同的未配对残差行；
-   - 再做二分增广匹配；
-   - 绑不上的报错误 8015。
-8. **剩余项**：仍然空着的行和变量任意配对，记为 `auto_rows`，撕裂时会成为自动补充的残差和迭代变量。个数不等时报内部错误 "the system is not square"。开了 `--hgtOnly` 时，只要有剩余项就报错误 8018，列出匹配不上的方程和变量。
-9. **合并成环**（`addRing`）：只要存在 `auto_rows`，或打开了 `--hgtMergeBLTBlocks`，就把 `auto_rows` 和所有 HGT 行（各 level）串成一个人工依赖环：row[i] 依赖 row[i+1] 所匹配的变量。这样 Tarjan 会把这些行以及它们之间路径上的所有块并成一个 SCC。至少要有 2 行，而且只能合并同一个 EqSystem 内的块。
-10. **重算 SCC**：`setAdjacencyAndMatching` 写回矩阵和匹配，然后调用 `BackendDAETransform.strongComponentsScalar`。
-11. **校验**：
+1. **定位 HGT 项**（`indexTags`、`varIndex`）。配对的方程和变量都在本系统中时才算这个系统的配对；只有一边在时报错误 8013。本系统没有配对就直接返回。
+2. **建标量邻接矩阵**：匹配用 SOLVABLE 矩阵，排序用 NORMAL 矩阵。如果长度对得上，就从现有的 `syst.matching.ass2` 出发。
+3. **释放并锁定 HGT 项**（`markVar`、`markRow`）：取消所有 HGT 变量和行的现有匹配，并标记为锁定。
+4. **强制配对**（`assign`）：不检查可解性，这对应 OCT 的 R1（先撕用户指定的对）。
+5. **修复匹配**（`augment`）：对每个未匹配的非 HGT 行，在 SOLVABLE 矩阵上找增广路径，绕开锁定的行和变量。
+6. **剩余项**：仍然空着的行和变量任意配对，记为 `auto_rows`，撕裂时会成为自动补充的残差和迭代变量。个数不等时报内部错误 "the system is not square"。开了 `--hgtOnly` 时，只要有剩余项就报错误 8018，列出匹配不上的方程和变量。
+7. **合并成环**（`addRing`）：只要存在 `auto_rows`，或打开了 `--hgtMergeBLTBlocks`，就把 `auto_rows` 和所有 HGT 行（各 level）串成一个人工依赖环：row[i] 依赖 row[i+1] 所匹配的变量。这样 Tarjan 会把这些行以及它们之间路径上的所有块并成一个 SCC。至少要有 2 行，而且只能合并同一个 EqSystem 内的块。
+8. **重算 SCC**：`setAdjacencyAndMatching` 写回矩阵和匹配，然后调用 `BackendDAETransform.strongComponentsScalar`。
+9. **校验**：
     - `checkDependence`：每个配对或绑定所在的 SCC 中，必须有方程用到对应的迭代变量，否则报错误 8016。
     - `checkResidualCounts`（R9）：按 `--hgtAllowMultipleResiduals` 统计每个块、每个 level 的用户残差数。值为 `false` 时任何块超过 1 个就报错；值为 `level1` 时 level > 1 的块超过 1 个才报错。错误号 8021。
 12. **打开 `-d=hgtDump` 时**（`dumpComponents`）打印：
@@ -321,7 +317,6 @@ level 更高的项会在外层块的内部构成一个**嵌套的撕裂系统**�
 - **`hgtNestedGroups`** 计算嵌套组：
   - 去掉外层的行和变量；
   - 强制嵌套层的配对；
-  - 用 `hgtAugment` 把嵌套层的未配对行匹配给嵌套层的未配对变量；
   - 其余内部行匹配到允许的内部变量，匹配失败报 8020（结构奇异）；
   - 用 `hgtTarjan` 对内部行求 SCC，每个包含嵌套项的 SCC 就是一个组；同一 level 中互不相连的部分会成为不同的组。
 - **`hgtNestedComponent`**：为每个组建一个 `EQUATIONSYSTEM`，把用户项、level 和配对换算成块内的局部位置，然后**递归**调用 `handGuidedTearing`（level 为组内最低的 level）。结果包装成 `BackendDAE.InnerEquation.INNERCOMPONENT(comp)`，`comp` 总是 TORNSYSTEM。
@@ -354,8 +349,8 @@ level 更高的项会在外层块的内部构成一个**嵌套的撕裂系统**�
 
 内部函数：
 
-- 匹配相关：`matchSystem`、`markVar`/`markRow`、`assign`、`augment`、`bindUnpaired`、`dependentRows`、`bindAugment`、`addRing`、`setAdjacencyAndMatching`
-- 检查相关：`checkPresence`、`checkUnpairedCounts`、`checkDependence`、`checkResidualCounts`、`checkBound`
+- 匹配相关：`matchSystem`、`markVar`/`markRow`、`assign`、`augment`、`addRing`、`setAdjacencyAndMatching`
+- 检查相关：`checkPresence`、`checkDependence`、`checkResidualCounts`、`checkBound`
 - 输出：`dumpComponents`
 
 ### 4.7 迭代变量的 min/max
@@ -479,15 +474,13 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | 8011 | 错误 | 后端优化删除或复制了带标签的方程 |
 | 8012 | 错误 | 迭代变量被消去 |
 | 8013 | 错误 | 配对的两边不在同一个独立方程系统中 |
-| 8014 | 错误 | 某个 level 上未配对残差数与未配对变量数不等（R5） |
-| 8015 | 错误 | 未配对变量绑不到同一 level 的未配对残差 |
 | 8016 | 错误 | 残差方程不依赖它的迭代变量 |
 | 8017 | 警告 | 模型有状态变量（只保证稳态） |
 | 8018 | 错误 | `--hgtOnly`：HGT 块用给定的迭代变量解不出来（匹配不上，或者有方程解不出剩下的变量） |
 | 8019 | 警告 | min/max 依赖变量（自适应界未实现），已忽略 |
 | 8020 | 错误 | HGT 撕裂失败，附原因 |
 | 8021 | 错误 | 块中残差数超过 `--hgtAllowMultipleResiduals` 的限制（R9） |
-| 8022 | 错误 | `--hgtOnly`：有未配对的残差方程或迭代变量（前端报告） |
+| 8022 | 错误 | 有未配对的残差方程或迭代变量，只支持显式配对（前端报告） |
 
 ## 8. 测试
 
@@ -510,7 +503,8 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | HGTIf1 | 由参数选中的 if 分支中的注解（`__Modelon`、`hold = false` 不报警告）；保留下来的 if 分支中的注解被忽略（8007） |
 | HGTNotSupported1 | 数组、for 循环（8007）；基类中的 `tearingPairs` 不继承 |
 | HGTSystemPair1 | 跨组件的系统级配对，分写在两个注解子句中（合并）；数组组件 `ba[2].res` |
-| HGTUnpaired1 | 子模型中的未配对项，名字带前缀 |
+| HGTUnpaired1 | OCT TestUnpaired 例子中的未配对项：报 8022，名字带前缀 |
+| HGTError9 | 未配对的残差方程和迭代变量报 8022，显式配对（组件级和 `tearingPairs`）不受影响 |
 
 **仿真**：`testsuite/simulation/modelica/tearing/HGT*.mos`（模型在 `HGT.mo`、`HGTAlgebra.mo`、`HGTNetwork.mo`、`HGTPlant.mo`）
 
@@ -518,16 +512,15 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 |---|---|
 | HGTPair1 | 跨 SCC 的配对；环内配对加残差 nominal |
 | HGTPair2 | 1×1 块；本会被 removeSimpleEquations 删掉的别名方程 |
-| HGTSystem1 | 系统级配对；未配对项 |
-| HGTError1 | 配对两边不在同一系统（8013）；未配对个数不等（8014） |
+| HGTSystem1 | 系统级配对，包括跨两个组件的配对（`CrossComponentPair`） |
+| HGTError1 | 配对两边不在同一系统（8013） |
 | HGTSolve1 | casual 可解性；解检查拒绝负初值下的伪根；与 `--tearingStrictness` 无关 |
 | HGTBounds1 | max 界防止 log 的参数为负；多残差块；`--hgtAllowMultipleResiduals=false`（8021） |
 | HGTLevel1 | OCT 文档中的 NonConvex 例子，嵌套 level 2；带状态模型给警告 8017 |
 | HGTLevel2 | 三层嵌套 |
 | HGTNetwork1 | 泵网络：组件级和系统级配对、设计目标、界；`m_set = 8` 时越界解被拒绝 |
 | HGTPlant1 | 热工水力例子：`__Modelon` 语法、两个块、自动补全、`enabled = false`、各属性 |
-| HGTAlgebra1 | 纯代数：多根选根、反问题、带界的未配对变量、自动补撕裂变量 |
-| HGTOnly2（scodeinst） | `--hgtOnly`：未配对的残差方程和迭代变量报 8022，显式配对（组件级和 `tearingPairs`）不受影响 |
+| HGTAlgebra1 | 纯代数：多根选根、反问题、带界的迭代变量、自动补撕裂变量 |
 | HGTOnly1 | `--hgtOnly`：能解的块照常；撕裂卡住和匹配不上的块报 8018；不加 `--hgtOnly` 时同样的模型自动补全后能解 |
 | HGTIf1 | OCT 风格的稳态开关：参数 `isSteadyState` 选中带 HGT 注解的稳态分支 |
 | HGTInit1 | initial equation 上的配对只用于初始化系统，仿真系统中没有这个配对 |
@@ -548,7 +541,7 @@ cd testsuite/flattening/modelica/scodeinst && ../../../rtest -v HGT*.mo
 - 函数改了名：`isProtectedEquation` → `isTaggedEquation`，`setSharedHGT` → `setSharedHandGuidedTearing`，`hgtTearing` → `Tearing.handGuidedTearing`。
 - 残差 nominal 在 lower 阶段就改写成方程，没有等到撕裂时再处理。
 - 剩余的子环不用 Cellier 撕裂，而是用贪心法补撕裂变量。
-- 绑定未配对项用的是沿当前匹配的 BFS，没有用 `Sorting.Tarjan`。
+- 不支持未配对项（8022），所以没有实现设计文档中未配对项的绑定（R5）。
 - 只要存在 `auto_rows`，所有 HGT 行（各 level）都会合并成环，不只在 `--hgtMergeBLTBlocks` 打开时才这样做。
 
 **已知限制**

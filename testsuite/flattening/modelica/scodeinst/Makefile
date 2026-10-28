@@ -765,10 +765,10 @@ HGTError5.mo \
 HGTError6.mo \
 HGTError7.mo \
 HGTError8.mo \
+HGTError9.mo \
 HGTIf1.mo \
 HGTLevel1.mo \
 HGTModelon1.mo \
-HGTOnly2.mo \
 HGTNotSupported1.mo \
 HGTSystemPair1.mo \
 HGTUnpaired1.mo \

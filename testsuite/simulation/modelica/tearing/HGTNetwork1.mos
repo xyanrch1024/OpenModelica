@@ -3,8 +3,7 @@
 // status:    correct
 //
 // Level 1 hand guided tearing of a pump network: component and system level
-// pairs, an unpaired residual equation (design spec) and iteration variable
-// (valve opening) bound together, min/max bounds and a residual nominal. With
+// pairs, a design spec paired with the valve opening, min/max bounds and a residual nominal. With
 // m_set = 8 the design spec needs an opening u > 1: the bounded Newton solver
 // fails and the solution of the fallback solver is rejected.
 //
@@ -22,10 +21,9 @@ r := simulate(HGTNetwork.System, stopTime = 0, simflags = "-override=m_set=8"); 
 // true
 // ""
 // Hand guided tearing:
-//   unpaired residual equation $hgt1 (level 1, nominal = 10.0)
+//   pair: residual equation $hgt1 (level 1, nominal = 10.0), iteration variable u (level 1, min = 0.05, max = 1.0)
 //   pair: residual equation collector.balance (level 1), iteration variable p_c (level 1)
 //   pair: residual equation manifold.balance (level 1), iteration variable p_m (level 1, max = p_tank + 4.99)
-//   unpaired iteration variable u (level 1, min = 0.05, max = 1.0)
 // Hand guided tearing matching (initialization system):
 //   block of 8 equations: residual equations {manifold.balance, collector.balance, $hgt1}, iteration variables {u, p_c, p_m}
 // Hand guided tearing matching (simulation system):

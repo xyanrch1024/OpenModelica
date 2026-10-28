@@ -35,12 +35,11 @@ package HGTPlant "pump - manifold - 2 heated branches - collector/mixer - return
   model ReturnPipe "dp = R*f*m*|m|, Colebrook friction factor (implicit in f)"
     parameter Real R = 50, c = 2e4, rr = 1e-3;
     Real pa, pb, m, Re;
-    Real f(start = 0.03) "unpaired iteration variable with bounds"
-      annotation(__OpenModelica_HGT(IterationVariable(min = 0.005, max = 0.1, nominal = 0.03)));
+    Real f(start = 0.03) "friction factor, iteration variable with bounds";
   equation
     Re = c * abs(m) + 1;
     1 / sqrt(f) = -2 * log10(2.51 / (Re * sqrt(f)) + rr / 3.7)
-      annotation(__OpenModelica_HGT(ResidualEquation));   // unpaired residual equation
+      annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable(min = 0.005, max = 0.1, nominal = 0.03) = f)));
     pa - pb = R * f * m * abs(m);
   end ReturnPipe;
 
@@ -57,8 +56,7 @@ package HGTPlant "pump - manifold - 2 heated branches - collector/mixer - return
     ReturnPipe ret;
     Junction manifold, collector;
     Mixer mixer;
-    Real T_wall(start = 350) "wall temperature of both heaters, the design variable"
-      annotation(__OpenModelica_HGT(IterationVariable(min = 300, max = 450, nominal = 100)));
+    Real T_wall(start = 350) "wall temperature of both heaters, the design variable";
   equation
     // hydraulics
     pump.p_in = p_tank;  pump.p_out = manifold.p;
@@ -71,8 +69,9 @@ package HGTPlant "pump - manifold - 2 heated branches - collector/mixer - return
     h1.T_in = T_tank; h2.T_in = T_tank;
     h1.T_wall = T_wall; h2.T_wall = T_wall;
     mixer.m = {h1.m, h2.m}; mixer.T = {h1.T_out, h2.T_out};
-    // design spec: unpaired residual equation, bound to the unpaired T_wall
-    mixer.T_mix = T_set annotation(__OpenModelica_HGT(ResidualEquation(nominal = 10)));
+    // design spec: T_wall is iterated to reach T_set
+    mixer.T_mix = T_set annotation(__OpenModelica_HGT(ResidualEquation(nominal = 10,
+      iterationVariable(min = 300, max = 450, nominal = 100) = T_wall)));
     // system level pair in OCT syntax (--acceptModelonHGT)
     annotation(__Modelon(tearingPairs(Pair(residualEquation(nominal = 1000) = mixer.energy,
                                            iterationVariable(start = 320, nominal = 300) = mixer.T_mix))));

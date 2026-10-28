@@ -1,10 +1,11 @@
 // name: HGTUnpaired1
 // keywords: hand guided tearing
-// status: correct
+// status: incorrect
 // cflags: --handGuidedTearing -d=hgtDump
 //
 // Unpaired iteration variables and residual equations, written like the
-// TestUnpaired example of the OCT User's Guide.
+// TestUnpaired example of the OCT User's Guide, are not supported: only
+// explicit pairs are. The errors give the names with the component prefix.
 //
 
 model HGTUnpaired1
@@ -36,24 +37,12 @@ equation
 end HGTUnpaired1;
 
 // Result:
-// Hand guided tearing:
-//   unpaired residual equation mixer.dx (level 1)
-//   unpaired iteration variable splitter.factor (level 1)
-// class HGTUnpaired1
-//   Real splitter.x;
-//   parameter Real splitter.k = 1.0;
-//   parameter Real splitter.factor_guess = 0.5;
-//   Real splitter.factor(min = 0.0, max = 1.0, start = splitter.factor_guess);
-//   Real splitter.x1 = splitter.factor * splitter.k * splitter.x;
-//   Real splitter.x2 = (1.0 - splitter.factor) * splitter.k * splitter.x;
-//   Real mixer.x1;
-//   Real mixer.x2;
-//   Real mixer.y;
-// equation
-//   0.0 = mixer.x1 - mixer.x2;
-//   mixer.y = mixer.x1;
-//   splitter.x = 1.0;
-//   splitter.x1 = mixer.x1;
-//   splitter.x2 = mixer.x2;
-// end HGTUnpaired1;
+// Error processing file: HGTUnpaired1.mo
+// [flattening/modelica/scodeinst/HGTUnpaired1.mo:27:5-27:76:writable] Error: The hand guided tearing residual equation mixer.dx is not paired. Only explicit pairs are supported, given by ResidualEquation(iterationVariable = ...) or tearingPairs(Pair(...)).
+// [flattening/modelica/scodeinst/HGTUnpaired1.mo:17:37-17:70:writable] Error: The hand guided tearing iteration variable splitter.factor is not paired. Only explicit pairs are supported, given by ResidualEquation(iterationVariable = ...) or tearingPairs(Pair(...)).
+//
+// # Error encountered! Exiting...
+// # Please check the error message and the flags.
+//
+// Execution failed!
 // endResult

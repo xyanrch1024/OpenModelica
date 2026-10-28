@@ -30,7 +30,7 @@
 - 每遇到一条带注解的方程、一个带注解的变量声明、一个带 `tearingPairs` 的类，就解析注解，把其中的名字解析成**全限定名**；
 - 给残差方程的 `source` 打上标签 `__OpenModelica_HGTEquation = "名字"`。
 
-展平结束后得到一个 `Spec`（残差方程列表 + 未配对迭代变量列表），存进 `FlatModel.handGuidedTearing`，最后转换成 `DAE.HAND_GUIDED_TEARING` 交给后端。
+展平结束后得到一个 `Spec`（配对的列表，每个配对是一条残差方程加它的迭代变量），存进 `FlatModel.handGuidedTearing`，最后转换成 `DAE.HAND_GUIDED_TEARING` 交给后端。
 
 前端**只负责收集和校验**，不改变方程，也不做任何撕裂。
 
@@ -77,21 +77,19 @@ NFConvertDAE                       ← Spec.toDAE → DAE.HAND_GUIDED_TEARING
 ### 3.1 三种写法
 
 ```modelica
-// ① 方程上：组件级配对、未配对残差，或者只起名字
+// ① 方程上：组件级配对，或者只起名字
 x = y + 1 annotation(__OpenModelica_HGT(name = res));
 x = y + 1 annotation(__OpenModelica_HGT(ResidualEquation(
   iterationVariable(start = 1) = z, level = 1, nominal = 1)));
-x = y + 1 annotation(__OpenModelica_HGT(ResidualEquation));        // 未配对
 
-// ② 变量声明上：未配对迭代变量
-Real z annotation(__OpenModelica_HGT(IterationVariable(level = 1)));
-
-// ③ 类上：系统级配对，名字可以跨组件
+// ② 类上：系统级配对，名字可以跨组件
 annotation(__OpenModelica_HGT(tearingPairs(
   Pair(residualEquation = b.res, iterationVariable = c.z))));
 ```
 
 打开 `--acceptModelonHGT` 后，`__Modelon(...)` 也按同样的语法读取（OCT 兼容）。
+
+**只支持显式配对**。OCT 还允许两种未配对的写法：不带 `iterationVariable` 的 `ResidualEquation`（未配对残差），以及变量声明上的 `IterationVariable(...)`（未配对迭代变量），由编译器按依赖关系自动绑定。OMC 不做这种绑定：这两种写法仍然会被解析（为了给出准确的错误位置），然后在 `finish` 中报错误 8022（见 §8）。
 
 ### 3.2 数据结构
 
@@ -121,8 +119,8 @@ end ResidualEquation;
 
 uniontype Spec
   record SPEC
-    list<ResidualEquation> residuals;          // 配对的和未配对的残差方程
-    list<IterationVariable> iterationVariables; // 只有未配对的迭代变量
+    list<ResidualEquation> residuals;          // 都是配对：iterationVariable 总是 SOME()
+    list<IterationVariable> iterationVariables; // 未配对的迭代变量，总是空
   end SPEC;
 end Spec;
 ```
@@ -146,7 +144,7 @@ end Spec;
 | `equationNames` | 所有起了名字的方程：名字 → 位置，用于检查重名，也用于 `tearingPairs` 查名字 |
 | `residuals` | 残差方程：名字 → `ResidualEquation` |
 | `pairs` | `tearingPairs` 中的配对。它们引用的方程可能还没展平，所以先存下来，在 `finish` 里检查 |
-| `iterationVariables` | 未配对的迭代变量 |
+| `iterationVariables` | 未配对的迭代变量，只为了在 `finish` 中报错而收集 |
 | `nameIndex` | 自动命名 `$hgtN` 用的计数器 |
 
 Collector 是一个记录，但字段大多是 `Pointer` 或 `UnorderedMap`，所以在展平的递归过程中可以原地修改，不需要层层返回。
@@ -205,6 +203,7 @@ end if;
 - `name` 已经是变量的全限定名，所以不需要再解析。
 - 作用域取 `InstNode.parent(comp_node)`，也就是**声明所在的类**。注解里的 `min = p` 这类表达式在那里求值。
 - 检查：不是标量 Real 时报 8007 并忽略；不是连续变量（参数、离散变量）时报 8002。
+- 只支持显式配对，所以这里收集到的未配对迭代变量最终都会在 `finish` 中报 8022。仍然完整地解析它，是为了让错误信息带着全限定名和准确的位置。
 
 ### 4.3 `collectClass`：`tearingPairs`
 
@@ -238,7 +237,7 @@ end if;
 | `parseResidualEquation` | 方程上的 `ResidualEquation(...)` | `enabled, level, nominal, iterationVariable, hold` |
 | `parsePair` | `tearingPairs` 里的 `Pair(...)` | `enabled, level, residualEquation, iterationVariable`；其中 `residualEquation` 允许 `nominal, hold` |
 | `parsePairedIterationVariable` | `iterationVariable(...) = x` | `max, min, nominal, start, hold` |
-| `parseUnpairedIterationVariable` | 声明上的 `IterationVariable(...)` | `enabled, level, max, min, nominal, start, hold` |
+| `parseUnpairedIterationVariable` | 声明上的 `IterationVariable(...)`，结果只用于报错 8022 | `enabled, level, max, min, nominal, start, hold` |
 | `parseIterationVariableAttributes` | 上面两个共用的属性部分 | |
 
 几个规则：
@@ -331,7 +330,7 @@ flatModel.handGuidedTearing := HandGuidedTearing.finish(settings.hgt);
    - 这条方程已经有组件级的 `ResidualEquation` → 8005（`checkUniqueEquation`）。
 3. 残差方程按名字排序（`isNameGreater`），让输出和测试结果稳定，不受哈希顺序影响。
 4. **每个变量只能有一个 HGT 规定**：配对的变量和未配对的变量合在一起检查重复（8005，`checkUniqueVariable`）。
-5. `--hgtOnly` → `checkOnlyPairs`：每个未配对的残差方程和迭代变量各报一条 8022，然后失败。只接受显式配对，不交给后端的 `bindUnpaired` 自动绑定。放在这里检查，是因为这时 `tearingPairs` 的配对也已经加进来了。
+5. **只接受显式配对**（`checkOnlyPairs`）：每个未配对的残差方程和迭代变量各报一条 8022，全部报完再失败。放在这里检查，是因为这时 `tearingPairs` 的配对也已经加进来了，能准确判断哪些项确实没有配对。
 6. 没有任何项 → `NONE()`。
 7. 有任何 `hold` 不是字面量 `false` 的 → 警告 8009（hold 尚未支持）。
 8. `-d=hgtDump` → 打印 `Spec.toString`。
@@ -368,11 +367,11 @@ package F
   model Plant
     parameter Integer lvl = 1;
     Pipe p1, p2;
-    Real z annotation(__OpenModelica_HGT(IterationVariable(level = lvl, min = 0)));
+    Real z;
   equation
     p1.dp + p2.dp = 10;
     p1.m = p2.m;
-    z ^ 2 = p1.m annotation(__OpenModelica_HGT(ResidualEquation(level = lvl)));
+    z ^ 2 = p1.m annotation(__OpenModelica_HGT(ResidualEquation(level = lvl, iterationVariable(min = 0) = z)));
     annotation(__OpenModelica_HGT(tearingPairs(
       Pair(residualEquation = p1.law, iterationVariable(start = 2, nominal = 2) = p1.m))));
   end Plant;
@@ -383,9 +382,8 @@ end F;
 
 ```
 Hand guided tearing:
-  unpaired residual equation $hgt1 (level 1)
+  pair: residual equation $hgt1 (level 1), iteration variable z (level 1, min = 0.0)
   pair: residual equation p1.law (level 1), iteration variable p1.m (level 1, start = 2.0, nominal = 2.0)
-  unpaired iteration variable z (level 1, min = 0.0)
 class F.Plant
   final parameter Integer lvl = 1;
   ...
@@ -398,11 +396,10 @@ class F.Plant
 | `Plant` 类上的 `tearingPairs` | `collectClass`（前缀为空） | 配对 `p1.law ↔ p1.m` 先存进 `pairs`；`iterationVariable` 在 `Plant` 中解析成 `p1.m` |
 | `p1` 中的 `m = k*sqrt(dp)` | `collectEquation`（前缀 `p1`） | 名字 `p1.law`，打上标签；它不是残差，只是有了名字 |
 | `p2` 中的同一条方程 | `collectEquation`（前缀 `p2`） | 名字 `p2.law`，打上标签，不会重名 |
-| `Real z` 上的 `IterationVariable(level = lvl, min = 0)` | `collectVariable` | 未配对变量 `z`；`level = lvl` 求值为 1，**`lvl` 变成 `final parameter`** |
-| `z ^ 2 = p1.m` 上的 `ResidualEquation(level = lvl)` | `collectEquation` | 没写名字，自动命名为 `$hgt1`；成为未配对残差 |
+| `z ^ 2 = p1.m` 上的 `ResidualEquation(level = lvl, iterationVariable(min = 0) = z)` | `collectEquation` | 没写名字，自动命名为 `$hgt1`；和 `z` 配对；`level = lvl` 求值为 1，**`lvl` 变成 `final parameter`** |
 | 展平结束 | `finish` | `pairs` 中 `p1.law` 的名字存在，于是加入；按名字排序，`$hgt1` 排在 `p1.law` 前面 |
 
-后端拿到的就是这三项：一个配对、一对未配对的残差和变量（level 1 上各一个，满足 R5）。
+后端拿到的就是这两个配对。`p2.law` 有名字但没有被任何配对引用，所以只是一个普通方程。
 
 ## 11. 前端的诊断信息
 
@@ -419,7 +416,7 @@ class F.Plant
 | 8008 | 提示 | 模型里有 HGT 注解，但没开 `--handGuidedTearing` | `finish` |
 | 8009 | 警告 | `hold` 尚未支持 | `finish` |
 | 8010 | 错误 | 标签方程在化简过程中被删掉或复制了 | `checkEquations` |
-| 8022 | 错误 | `--hgtOnly` 下有未配对的残差方程或迭代变量 | `checkOnlyPairs`（`finish` 中） |
+| 8022 | 错误 | 有未配对的残差方程或迭代变量（只支持显式配对） | `checkOnlyPairs`（`finish` 中） |
 
 8011–8021 由后端报告，见开发指南 §7。
 
@@ -449,16 +446,16 @@ class F.Plant
 |---|---|
 | `HGTComponentPair1` | 组件级配对、自动命名、带名字的配对、各属性、只有名字的方程 |
 | `HGTSystemPair1` | 系统级配对，分写在两个注解子句里（合并）；数组组件 `ba[2].res` |
-| `HGTUnpaired1` | 子模型中的未配对项，名字带前缀 |
+| `HGTUnpaired1` | OCT TestUnpaired 例子中的未配对项：报 8022，名字带前缀 |
 | `HGTLevel1` | level 由参数给出（变成结构参数）；level 2 上允许依赖连续变量 |
 | `HGTModelon1` | `--acceptModelonHGT`、hold 警告、忽略 `__Modelon` 的其他内容 |
-| `HGTOnly2` | `--hgtOnly`：未配对项报 8022，显式配对不受影响 |
 | `HGTIf1` | 参数选中的 if 分支；保留下来的 if 分支中的注解被忽略 |
 | `HGTNotSupported1` | 数组、for 循环（8007）；基类的 `tearingPairs` 不继承 |
 | `HGTDisabled1` | 没开开关时的提示 8008 |
 | `HGTError1`–`HGTError5` | 参数作迭代变量（8002）、Pair 的方程名不存在（8004）、方程重名（8003）、level 1 上的属性依赖连续变量（8006）、同一变量既配对又未配对（8005） |
 | `HGTError6` | `level = 0`（8001），未知字段（8000） |
 | `HGTError7`、`HGTError8` | 残差和迭代变量的 nominal ≤ 0（8001），后者由参数给出 |
+| `HGTError9` | 未配对项报 8022，显式配对（组件级和 `tearingPairs`）不受影响 |
 
 ## 13. 改代码时要注意的地方
 

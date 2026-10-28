@@ -93,7 +93,7 @@ Tearing 拿到这个块时，再把这个配对解释成"x 是迭代变量，e3 
 
 | 下标 | 含义 | 出现在 |
 |---|---|---|
-| **全局方程/变量下标** | 在 `syst.orderedEqs` 和 `syst.orderedVars` 中的位置 | `matchSystem` 的 `pairs`、`unpaired_*`；块中的 `comp.eqns`/`comp.vars` |
+| **全局方程/变量下标** | 在 `syst.orderedEqs` 和 `syst.orderedVars` 中的位置 | `matchSystem` 的 `pairs`；块中的 `comp.eqns`/`comp.vars` |
 | **标量行**（row） | 数组方程展开后的标量方程；一条方程可以对应多行 | `matchSystem` 中的邻接矩阵、`ass2`、`hgt_rows`；转换靠 `map_eqn_row`（方程 → 行列表）和 `map_row_eqn`（行 → 方程） |
 | **块内局部下标** | 在块的方程列表和变量列表中的位置（从 1 开始） | `componentItems`/`componentPairs` 的输出，`Tearing.handGuidedTearing` 的全部参数和数组 |
 
@@ -118,10 +118,7 @@ end if;
 outDAE := mapEqSystem(outDAE, function matchSystem(spec = spec));
 ```
 
-- **`simulationSpec`** 从规范中去掉三类项：
-  - `initialResiduals` 中的残差方程；
-  - 与它们配对的迭代变量；
-  - 某个 level 上的未配对残差全是初始方程时，这个 level 的未配对迭代变量。
+- **`simulationSpec`** 从规范中去掉只属于初始化系统的配对，也就是残差方程在 `initialResiduals` 中的配对。
 - **`checkPresence`** 只对仿真系统做：
   - 每个残差标签在所有 `orderedEqs` 中必须正好出现 1 次，否则报 8011；
   - 每个迭代变量必须在某个系统的 `orderedVars` 中，否则报 8012；
@@ -135,16 +132,12 @@ outDAE := mapEqSystem(outDAE, function matchSystem(spec = spec));
 
 ```
 indexTags(syst.orderedEqs, eqn_index)     // 标签名 → 全局方程下标
-for res in spec.residuals:
-  有配对：方程和变量都在本系统 → pairs += (v, e)
-          只有一边在本系统     → 报 8013
-  无配对：方程在本系统        → unpaired_eqns += (e, level)
-for var in spec.iterationVariables:
-  在本系统 → unpaired_vars += (v, level)
+for res in spec.residuals:        // 前端只接受显式配对，每个残差都有迭代变量
+  方程和变量都在本系统 → pairs += (v, e)
+  只有一边在本系统     → 报 8013
 ```
 
-- 本系统没有 HGT 项，直接返回，这个系统保持原样。
-- `checkUnpairedCounts`：每个 level 上，未配对残差数必须等于未配对变量数（R5），否则报 8014。
+- 本系统没有配对，直接返回，这个系统保持原样。
 
 #### ② 两套标量邻接矩阵
 
@@ -159,11 +152,7 @@ for var in spec.iterationVariables:
 2. **拿掉并锁定**：`markVar`、`markRow` 把所有 HGT 变量和残差行从匹配中拿掉，并在 `hgt_vars`、`hgt_rows` 中标记为锁定。被拿掉的普通方程或变量就成了未匹配状态。
 3. **强制配对**：`assign(v, eqnRow(e))`，让残差方程"解"它配对的变量。
 4. **修复**：对每个未匹配、未锁定的行调用 `augment` 找增广路径（Kuhn 算法），只走 `m_s` 里可解的边，不经过锁定的行和变量。因此修复时不会拆开 HGT 配对，也不会让普通方程去解 HGT 变量。
-5. **绑定未配对项**：`bindUnpaired`。
-   - 对每个未配对变量，用 `dependentRows` 找出同一 level 上依赖它的未配对残差。依赖可以是直接的，也可以沿着已匹配的方程间接传递（广度优先搜索）。
-   - 用 `bindAugment` 做二分匹配，把变量和残差一一绑定；有变量绑不上就报 8015。
-   - 绑定的结果 `bound` 是 `(变量, 行)` 列表，同样用 `assign` 写进匹配。
-6. **兜底**：仍未匹配的行和变量（`free_rows`、`free_vars`）按顺序一对一配上，记作 `auto_rows`。
+5. **兜底**：仍未匹配的行和变量（`free_rows`、`free_vars`）按顺序一对一配上，记作 `auto_rows`。
    - 这些配对同样是占位。Tearing 中它们会变成自动选出的残差和迭代变量，也就是 OCT 说的 "the automatic algorithm will kick in"。
    - 剩余的行数和变量数不等时，说明系统不是方阵，报内部错误。
    - 开了 `--hgtOnly` 时不做兜底：只要有剩余项就报 8018，列出匹配不上的方程和变量。
@@ -282,7 +271,6 @@ level 越大越靠内层。语义是：外层每迭代一次，内层块就完�
 1. 去掉外层的迭代变量和外层的残差行，剩下的称为"内部"。
 2. 在内部重新匹配：
    - 先强制内层配对，并锁定；
-   - 再用 `hgtAugment` 把内层的未配对残差匹配给内层的未配对变量；
    - 最后匹配其余所有内部方程。匹配失败报 8020（"structurally singular"）。
 3. 对内部方程跑 `hgtTarjan`。
 4. 含有内层项（内层残差，或匹配到内层变量）的每个 SCC 就是一个内层块，返回它的 `(行, 变量)`。
@@ -385,7 +373,6 @@ Nested blocks: 1          ← 外层
 2. **`hgtMatching`**：十几行，看清楚仿真系统和初始化系统的区别。
 3. **`matchSystem`**：按 §5.2 的六段读。脑子里只放 `ass1`/`ass2` 两个数组，这个函数从头到尾就是在改它们。辅助函数可以先当黑盒：
    - `augment`：Kuhn 增广路径；
-   - `bindUnpaired`、`dependentRows`、`bindAugment`：未配对项的二分匹配；
    - `addRing`：加环。
 4. **`componentItems`、`componentPairs`**：看 Tearing 怎么认出块里的 HGT 项，注意从这里开始全是局部下标。
 5. **`Tearing.traverseComponent`** 中 `is_hgt` 那几行：HGT 块的分流点。
@@ -425,7 +412,7 @@ omc HGTPair1.mos
 |---|---|
 | `HGTPair1` | 单个配对，跨 SCC 合并 |
 | `HGTPair2` | 1×1 块 |
-| `HGTSystem1` | 未配对项，`bindUnpaired` |
+| `HGTSystem1` | 系统级配对，跨两个组件 |
 | `HGTLevel1`、`HGTLevel2` | 两层、三层嵌套 |
 | `HGTPlant1`、`HGTAlgebra1` | 自动补全（`auto_rows`、`selectAdditionalTearingVar`） |
 | `HGTOnly1` | `--hgtOnly`：不自动补全，解不出就报 8018 |

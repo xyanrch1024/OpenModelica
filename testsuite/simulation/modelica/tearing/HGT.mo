@@ -38,18 +38,18 @@ package HGT "Hand guided tearing (OCT compatible) test models, steady state"
     annotation(__OpenModelica_HGT(tearingPairs(Pair(residualEquation = b.res, iterationVariable = b.y))));
   end SystemPair;
 
-  model Unpaired "unpaired residual equation and iteration variable"
+  model CrossComponentPair "system level pair of an equation and a variable of two components"
     model Splitter
       Real x;
       parameter Real k = 1.0;
-      Real factor(start = 0.5) annotation(__OpenModelica_HGT(IterationVariable));
+      Real factor(start = 0.5);
       Real x1 = factor * k * x;
       Real x2 = (1 - factor) * k * x;
     end Splitter;
     model Mixer
       Real x1, x2, y;
     equation
-      0 = x1 - x2 * 3 annotation(__OpenModelica_HGT(ResidualEquation));
+      0 = x1 - x2 * 3 annotation(__OpenModelica_HGT(name = ratio));
       y = x1;
     end Mixer;
     Splitter splitter;
@@ -58,7 +58,8 @@ package HGT "Hand guided tearing (OCT compatible) test models, steady state"
     splitter.x = 4;
     splitter.x1 = mixer.x1;
     splitter.x2 = mixer.x2;
-  end Unpaired;
+    annotation(__OpenModelica_HGT(tearingPairs(Pair(residualEquation = mixer.ratio, iterationVariable = splitter.factor))));
+  end CrossComponentPair;
 
   model NonConvex "OCT User's Guide example: level 2 solves x2 for given x1, level 1 solves x1"
     parameter Real f = 10;
@@ -90,15 +91,6 @@ package HGT "Hand guided tearing (OCT compatible) test models, steady state"
     a = 2 * time;
   end Independent;
 
-  model Count "error: different numbers of unpaired equations and variables"
-    Real a;
-    Real b(start = 1) annotation(__OpenModelica_HGT(IterationVariable));
-    Real c annotation(__OpenModelica_HGT(IterationVariable));
-  equation
-    a + b + c = 1 annotation(__OpenModelica_HGT(ResidualEquation));
-    a * b = 0.2;
-    c = b * 2;
-  end Count;
 
   model Pipe "turbulent flow, the hand guided tearing solves it for the pressures"
     parameter Real k = 1;

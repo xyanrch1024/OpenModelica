@@ -4,7 +4,7 @@
 //
 // Level 1 hand guided tearing of pure algebraic loops: a circle/hyperbola system
 // with 4 roots where the pairs and start values select the root, and an inverse
-// problem (unpaired residual equation and bounded unpaired iteration variable)
+// problem (a design spec paired with a bounded iteration variable)
 // with an inner loop that needs an automatically added iteration variable.
 //
 
@@ -21,8 +21,7 @@ val(x, 0); val(y, 0); val(v, 0); val(z, 0); val(k, 0);
 // Hand guided tearing:
 //   pair: residual equation $hgt1 (level 1), iteration variable x (level 1)
 //   pair: residual equation $hgt2 (level 1), iteration variable y (level 1)
-//   unpaired residual equation $hgt3 (level 1)
-//   unpaired iteration variable k (level 1, min = 0.0, max = 5.0)
+//   pair: residual equation $hgt3 (level 1), iteration variable k (level 1, min = 0.0, max = 5.0)
 // Hand guided tearing matching (initialization system):
 //   block of 2 equations: residual equations {$hgt2, $hgt1}, iteration variables {x, y}
 //   block of 3 equations: residual equations {$hgt3}, iteration variables {k}

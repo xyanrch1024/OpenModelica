@@ -1222,10 +1222,6 @@ public constant ErrorTypes.Message HGT_VARIABLE_REMOVED_BACKEND = ErrorTypes.MES
   "The hand guided tearing iteration variable %s was eliminated by the backend optimization, it is no longer an unknown of the system.");
 public constant ErrorTypes.Message HGT_NOT_SAME_SYSTEM = ErrorTypes.MESSAGE(8013, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
   "The residual equation '%s' and the iteration variable %s of a hand guided tearing pair are in different independent equation systems, so the residual equation does not depend on the iteration variable.");
-public constant ErrorTypes.Message HGT_UNPAIRED_COUNT = ErrorTypes.MESSAGE(8014, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
-  "Hand guided tearing level %s has %s unpaired residual equations but %s unpaired iteration variables.");
-public constant ErrorTypes.Message HGT_UNPAIRED_NOT_BOUND = ErrorTypes.MESSAGE(8015, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
-  "The unpaired hand guided tearing iteration variables %s cannot be paired with unpaired residual equations, since no unpaired residual equation of the same level depends on them.");
 public constant ErrorTypes.Message HGT_RESIDUAL_INDEPENDENT = ErrorTypes.MESSAGE(8016, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
   "The hand guided tearing residual equation '%s' does not depend on its iteration variable %s.");
 public constant ErrorTypes.Message HGT_ONLY_STEADY_STATE = ErrorTypes.MESSAGE(8017, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),
@@ -1239,7 +1235,7 @@ public constant ErrorTypes.Message HGT_TEARING_FAILED = ErrorTypes.MESSAGE(8020,
 public constant ErrorTypes.Message HGT_MULTIPLE_RESIDUALS = ErrorTypes.MESSAGE(8021, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
   "The hand guided tearing block of level %s has %s residual equations {%s}, but --hgtAllowMultipleResiduals=%s allows only one.");
 public constant ErrorTypes.Message HGT_UNPAIRED_NOT_ALLOWED = ErrorTypes.MESSAGE(8022, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
-  "The hand guided tearing %s is not paired, but --hgtOnly only supports explicit pairs, given by ResidualEquation(iterationVariable = ...) or tearingPairs(Pair(...)).");
+  "The hand guided tearing %s is not paired. Only explicit pairs are supported, given by ResidualEquation(iterationVariable = ...) or tearingPairs(Pair(...)).");
 
 public constant ErrorTypes.Message MATCH_SHADOWING = ErrorTypes.MESSAGE(5001, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "Local variable '%s' shadows another variable.");

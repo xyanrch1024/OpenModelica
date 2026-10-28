@@ -391,7 +391,7 @@ public uniontype Element
     collected by NFHandGuidedTearing. The residual equations are identified by
     the name in their __OpenModelica_HGTEquation source annotation."
     list<HGTResidual> residuals "Paired and unpaired residual equations.";
-    list<HGTIterationVariable> iterationVariables "Unpaired iteration variables.";
+    list<HGTIterationVariable> iterationVariables "Unpaired iteration variables, always empty since only explicit pairs are supported.";
   end HAND_GUIDED_TEARING;
 
   record FLAT_SM "Flat state machine section"

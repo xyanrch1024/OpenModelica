@@ -14,7 +14,7 @@
 4. [三个收集入口](#4-三个收集入口)
 5. [解析函数](#5-解析函数)
 6. [名字与方程标签](#6-名字与方程标签)
-7. [for、if、when 方程](#7-forifwhen-方程)
+7. [for、if、when 方程与数组](#7-forifwhen-方程与数组)
 8. [finish：收尾检查](#8-finish收尾检查)
 9. [checkEquations 与转换成 DAE](#9-checkequations-与转换成-dae)
 10. [一个完整例子](#10-一个完整例子)
@@ -49,10 +49,12 @@ NFFlatten.flatten                  ← 收集（Collector）
   │   flattenComponent  → collectVariable
   │   flattenClass      → collectClass（tearingPairs）
   │   flattenEquation   → collectEquation（打标签）
-  │   for/if/when       → enterNested / leaveNested
+  │   unrollForLoop     → enterIteration / leaveIteration（每次迭代）
+  │   if/when           → enterNested / leaveNested
   │   结束              → finish → FlatModel.handGuidedTearing
   │
 NFInst：化简、函数求值、标量化……
+  │                                ← NFScalarize：带标签的数组方程总是拆开，元素标签改名（indexEquationTag）
   │                                ← checkEquations：标签方程没被删掉、没被复制
 NFConvertDAE                       ← Spec.toDAE → DAE.HAND_GUIDED_TEARING
   │
@@ -143,9 +145,12 @@ end Spec;
 | `nested` | 当前在几层 for、if、when 里面，大于 0 时不收集 |
 | `equationNames` | 所有起了名字的方程：名字 → 位置，用于检查重名，也用于 `tearingPairs` 查名字 |
 | `residuals` | 残差方程：名字 → `ResidualEquation` |
-| `pairs` | `tearingPairs` 中的配对。它们引用的方程可能还没展平，所以先存下来，在 `finish` 里检查 |
+| `pairs` | `tearingPairs` 中的配对，每个是"按变量元素展开的配对列表 + 变量的维数"。它们引用的方程可能还没展平，所以先存下来，在 `finish` 里检查 |
+| `arrayEquations` | 起了名字的数组方程：名字 → (各元素的名字, 维数)，`finish` 用它展开引用整条数组方程的 `Pair` |
 | `iterationVariables` | 未配对的迭代变量，只为了在 `finish` 中报错而收集 |
 | `nameIndex` | 自动命名 `$hgtN` 用的计数器 |
+| `iterators` | 展开 for 循环时当前的 `(迭代变量名, 值)` 栈，最内层在前（§7.2） |
+| `loopNames` | for 循环中没写名字的方程的自动名字，按前缀和源码位置记录，让所有迭代共用一个名字 |
 
 Collector 是一个记录，但字段大多是 `Pointer` 或 `UnorderedMap`，所以在展平的递归过程中可以原地修改，不需要层层返回。
 
@@ -167,8 +172,8 @@ if not enabled (or nested > 0) then return
 
 ```modelica
 if HandGuidedTearing.hasAnnotation(eq.source) then
-  eq.source := HandGuidedTearing.collectEquation(eq.source,
-    Type.isReal(ty) and Type.isScalar(ty), Equation.scope(eq), prefixString(prefix),
+  eq.source := HandGuidedTearing.collectEquation(eq.source, ty,
+    Equation.scope(eq), prefixString(prefix),
     function flattenExp(prefix = prefix, info = info), settings.hgt);
 end if;
 ```
@@ -176,16 +181,17 @@ end if;
 - `hasAnnotation` 是一个快速检查：方程没有任何注解就直接跳过，不影响没用 HGT 的模型的性能。
 - 返回值是**新的 source**：如果这条方程起了名字或者是残差方程，source 上会多一个标签注释（见 §6）。
 - 参数：
-  - `isScalarReal`：只有标量 Real 方程能作残差，否则报 8007 并忽略 `ResidualEquation`；
+  - `ty`：方程的类型。标量 Real 方程，或者 Real 数组方程（逐元素配对，见 §7.3）能作残差；其他类型报 8007 并忽略 `ResidualEquation`；
   - `scope`：方程所在类的作用域，用来解析注解里的名字；
   - `prefix`：所在组件的名字，用来给方程名加前缀；
   - `flattenFn`：给注解里的表达式补前缀。
 - 流程：
   1. 读出 `name` 和 `ResidualEquation`，可以来自多个注解子句，例如 OMC 和 Modelon 各一个；
-  2. 有 `name` 就用它，没有就自动命名 `$hgtN`；然后加前缀；
-  3. 检查是否重名（8003），记入 `equationNames`；
-  4. 有 `ResidualEquation` 就调用 `parseResidualEquation`，记入 `residuals`；
-  5. 返回加了标签的 source。
+  2. 有 `name` 就用它，没有就自动命名 `$hgtN`；然后加前缀；在 for 循环里再加上迭代值作下标（§7.2）；
+  3. 数组方程：按行优先算出各元素的名字（`bal[1]`、`bal[1,2]`……），并把"名字 → (元素名, 维数)"记进 `arrayEquations`；
+  4. 检查是否重名（8003），名字和所有元素名都记入 `equationNames`；
+  5. 有 `ResidualEquation` 就调用 `parseResidualEquation`，得到每个元素一个 `ResidualEquation`，记入 `residuals`；
+  6. 返回加了标签的 source。数组方程的标签是整条方程的名字，标量化时再改成各元素的名字（§7.3）。
 
 **只起名字、不作残差的方程**，例如 `name = law`，也会被打上标签。后面 `tearingPairs` 要靠名字引用它。
 
@@ -202,7 +208,7 @@ end if;
 
 - `name` 已经是变量的全限定名，所以不需要再解析。
 - 作用域取 `InstNode.parent(comp_node)`，也就是**声明所在的类**。注解里的 `min = p` 这类表达式在那里求值。
-- 检查：不是标量 Real 时报 8007 并忽略；不是连续变量（参数、离散变量）时报 8002。
+- 检查：不是 Real 时报 8007 并忽略；不是连续变量（参数、离散变量）时报 8002。Real 数组变量上的 `IterationVariable` 也属于未配对项，不解析属性，直接留给 `finish` 报 8022。
 - 只支持显式配对，所以这里收集到的未配对迭代变量最终都会在 `finish` 中报 8022。仍然完整地解析它，是为了让错误信息带着全限定名和准确的位置。
 
 ### 4.3 `collectClass`：`tearingPairs`
@@ -250,7 +256,11 @@ end if;
 Absyn.Exp → Inst.instExp(在 scope 中) → Typing.typeExp → flattenFn（补前缀）→ 必须是 CREF
 ```
 
-然后检查：必须是标量 Real（8002），必须是连续变量（8002）。
+然后检查：元素类型必须是 Real（8002），必须是连续变量（8002）。返回值是**元素列表**和维数：
+- 标量变量：一个元素，维数 `{}`；
+- 数组变量或切片（`m`、`m[2:4]`、`w[i, :]`）：用 `ExpandExp.expand` 展开，`Expression.arrayScalarElements` 按行优先取出各元素。
+
+每个元素的下标都用 `ComponentRef.evaluateSubscripts` 求值，所以 for 循环里代入迭代值后的 `p[1 + 1]` 会变成 `p[2]`，和变量的名字对得上。
 
 这一步复用了前端正常的实例化和类型检查，所以 `x`、`sub.x`、`arr[2]` 这些写法都和在方程里写的效果一样，查找规则也完全一致。
 
@@ -258,7 +268,7 @@ Absyn.Exp → Inst.instExp(在 scope 中) → Typing.typeExp → flattenFn（补
 
 | 函数 | 作用 | 规则 |
 |---|---|---|
-| `parseRealAttribute` | `start`、`min`、`max`、`nominal` | 必须是标量 Real 或 Integer，Integer 会转成 Real；**level 1 上不许依赖连续变量**（8006，OCT 的 R7）；可求值的 `nominal` 必须为正（`checkPositive`，8001） |
+| `parseRealAttribute` | `start`、`min`、`max`、`nominal`，返回每个元素一个值 | 元素类型必须是 Real 或 Integer，Integer 会转成 Real；值是标量时用于所有元素，是数组时维数必须和所属的方程或变量相同（否则 8001），逐元素对应；**level 1 上不许依赖连续变量**（8006，OCT 的 R7）；可求值的 `nominal` 必须为正（`checkPositive`，8001） |
 | `parseHold` | `hold` | 必须是 Boolean 参数表达式；保留为表达式 |
 | `evalBoolean` | `enabled` | 用 `evalParameterExp` 求值成 `true` 或 `false` |
 | `evalLevel` | `level` | 求值成 Integer，且必须 ≥ 1（8001） |
@@ -294,26 +304,60 @@ source := ElementSource.addCommentToSource(source, SOME(makeEquationTag(name)));
 
 标签的名字以 `__OpenModelica` 开头，不会和用户的注解冲突；它只存在于编译器内部，不会出现在 `instantiateModel` 的输出里。
 
-## 7. for、if、when 方程
+## 7. for、if、when 方程与数组
 
-用嵌套计数 `nested` 控制：
+### 7.1 if、when 和不展开的 for：嵌套计数
 
-```modelica
-case Equation.FOR()
-  HandGuidedTearing.enterNested(eq, settings.hgt);   // 扫描循环体，有注解就报 8007；nested += 1
-  ... unrollForLoop / splitForLoop ...
-  HandGuidedTearing.leaveNested(settings.hgt);       // nested -= 1
-```
+用嵌套计数 `nested` 控制：进入这些方程之前调用 `enterNested`，离开时调用 `leaveNested`。
 
-- `enterNestedEquations` 只在**最外层**（`nested == 0`）扫描并报告，所以嵌套的循环只报一次警告。
+- `enterNestedEquations` 只在**最外层**（`nested == 0`）扫描并报告 8007，所以嵌套的方程只报一次警告。
 - `nested > 0` 时，`collectEquation` 直接返回，不收集。
-- **when 方程**：同样用 enterNested 和 leaveNested，不支持。
+- **when 方程**：不支持。
 - **if 方程**（`flattenIfEquation`）分情况处理：
   - 条件求值为 true、并且它前面没有保留下来的分支（`listEmpty(bl)`）：这个分支的方程会**替换掉整个 if 方程**，所以按普通方程展平，注解有效。OCT 风格的 `if isSteadyState then ... else ... end if` 就属于这种情况，见测试 `HGTIf1`。
   - 其他被保留下来的分支：用 `flattenIfBranch` 展平，内部调用 enterNested 和 leaveNested，注解被忽略并给出警告。
   - 条件为 false 的分支：直接丢掉，不扫描，也不报警告。
+- **不展开的 for 方程**（关掉标量化时走 `splitForLoop`）：不支持。
 
-**for 方程的支持还没有做**。思路见上一次的讨论：在 `unrollForLoop` 的每次迭代中，用当前的迭代值求注解里的表达式，并生成带下标的名字。
+### 7.2 展开的 for 方程
+
+默认开着标量化，for 方程由 `unrollForLoop` 展开：每次迭代代入迭代变量的值，再展平循环体。HGT 就借这一步：
+
+```modelica
+// NFFlatten.unrollForLoop
+unrolled_body := Equation.replaceIteratorList(body, iter, val);
+HandGuidedTearing.enterIteration(InstNode.name(iter), val, settings.hgt);   // 压栈
+unrolled_body := flattenEquations(unrolled_body, prefix, settings);
+HandGuidedTearing.leaveIteration(settings.hgt);                            // 出栈
+```
+
+`Collector.iterators` 是 `(迭代变量名, 当前值)` 的栈，最内层在前。每次迭代里，`collectEquation` 把这条方程当作一条独立的方程处理：
+- **注解里的表达式**：注解是 `SCode.Mod`，循环展开时不会被代入，所以先用 `substituteIterators` 把 `ResidualEquation` 里所有的迭代变量名替换成当前值的字面量（`Expression.toAbsyn`），再走原来的解析。于是 `iterationVariable = p[i + 1]`、`start = 2 * i`、`level = …` 都按当前迭代求值。同名时内层迭代变量遮住外层的。
+- **名字**：`appendSubscripts` 把迭代值追加成下标：`name = seg` 得到 `seg[1]`、`seg[2]`……，两层循环得到 `seg[1,2]`。没写名字的方程在所有迭代中共用一个自动名字（`generateName` 按前缀和源码位置记在 `loopNames` 里），得到 `$hgt1[1]`、`$hgt1[2]`……
+- `tearingPairs` 可以用 `Pair(residualEquation = seg[2], …)` 引用某一次迭代。用户写的 `seg[1, 2]` 经 `Dump.printComponentRefStr` 打印成 `seg[1,2]`，和生成的名字格式一致。
+
+### 7.3 数组方程和数组变量
+
+**只支持逐元素的显式配对**：数组残差方程与形状完全相同的数组迭代变量（或切片）配对，第 k 个元素对第 k 个元素。
+
+```modelica
+m = k .* sqrt(p[1:3] - p[2:4]) annotation(__OpenModelica_HGT(name = seg,
+  ResidualEquation(iterationVariable(start = {8, 6, 4}) = p[2:4])));
+// seg[1] <-> p[2], seg[2] <-> p[3], seg[3] <-> p[4]
+```
+
+- **形状**：方程和变量的维数必须完全相同（`checkShape`），否则报 8001，信息里给出两边的维数。别的对应关系（例如倒序）用 for 方程写。
+- **属性**：标量用于所有元素，数组必须和变量（残差的 nominal 则和方程）同形状，逐元素对应。`level`、`enabled`、`hold` 只能是标量。
+- **元素的名字**：按行优先在名字后加元素下标：`seg[1]`、`bal[1,2]`。for 循环里的数组方程先加迭代值、再加元素下标：`w[i, :]` 在 i = 2 时得到 `bw[2,1]`、`bw[2,2]`。
+- **`tearingPairs`**：`Pair(residualEquation = bal, iterationVariable = x)` 逐元素配对整条数组方程；`Pair(residualEquation = bal[2], iterationVariable = x[3])` 配单个元素。`parsePair` 先按变量展开成每个元素一个配对，`finish` 再查 `arrayEquations`：是数组方程就检查形状并换成元素名，是标量方程就要求变量也是标量。
+
+**标签怎么到元素上**：展平时数组方程还是一条 `EQUALITY`，只能打一个标签（整条方程的名字）。`NFScalarize.scalarizeEquation` 把它拆成元素方程时：
+- 带 HGT 标签的数组方程**总是**拆开（即使含 `sqrt(数组)` 这类向量化调用，平时这种方程是不拆的）；
+- 第 k 个元素调用 `HandGuidedTearing.indexEquationTag(src, subs)`，把标签改成元素名。`subs` 来自 `elementSubscripts(dims)`，按行优先排列，和 `ExpressionIterator` 展开元素的顺序一致。
+
+这样每个元素标签只出现一次，`checkEquations` 照常工作，后端拿到的就是普通的标量配对，不需要任何改动。测试 `HGTArray1.mos` 里的矩阵方程，每个元素是一个独立的 1×1 块：如果元素顺序错了，残差就不依赖它的迭代变量，会报 8016。
+
+关掉标量化（`-d=-nfScalarize`）时数组方程不会被拆开，带 HGT 注解的数组方程报 8007 并被忽略。
 
 ## 8. finish：收尾检查
 
@@ -339,7 +383,7 @@ flatModel.handGuidedTearing := HandGuidedTearing.finish(settings.hgt);
 
 **checkEquations**（`NFInst.mo`，在标量化之后调用）：统计 `equations` 和 `initialEquations` 中每个标签出现的次数，残差方程的标签必须**正好出现一次**，否则报 8010。
 
-它防范的是：展平之后，前端的化简或者方程展开把用户的方程删掉了，或者复制了（例如一条数组方程被展开成多条，每条都带着同一个标签）。这个检查保证后端看到的标签和规范是一一对应的。
+它防范的是：展平之后，前端的化简或者方程展开把用户的方程删掉了，或者复制了。数组方程的元素标签由 `indexEquationTag` 逐个改名，所以不会出现重复。这个检查保证后端看到的标签和规范是一一对应的。
 
 **转换成 DAE**（`NFConvertDAE.mo`）：
 
@@ -407,12 +451,12 @@ class F.Plant
 |---|---|---|---|
 | 8000 | 警告 | 未知字段，被忽略（只对 OMC 语法） | `checkFields`、`lookupFields` |
 | 8001 | 错误 | 字段的值无效：名字不是标识符、level < 1、不是参数表达式、nominal ≤ 0、Pair 缺字段…… | 各解析函数 |
-| 8002 | 错误 | 不能作迭代变量：不是变量、不是标量 Real、不是连续变量 | `resolveIterationVariable`、`collectVariable` |
+| 8002 | 错误 | 不能作迭代变量：不是变量、不是 Real、不是连续变量 | `resolveIterationVariable`、`collectVariable` |
 | 8003 | 错误 | 方程重名 | `collectEquation` |
 | 8004 | 错误 | `tearingPairs` 引用的方程名不存在 | `finish` |
 | 8005 | 错误 | 同一个方程或变量有多个 HGT 规定 | `finish` |
 | 8006 | 错误 | level 1 上的属性依赖连续变量 | `parseRealAttribute` |
-| 8007 | 警告 | 不支持，被忽略：数组方程或变量、for/if/when 中的注解 | `collectEquation`、`collectVariable`、`enterNestedEquations` |
+| 8007 | 警告 | 不支持，被忽略：非 Real 的方程或变量、没有标量化时的数组方程、when 方程和保留下来的 if 分支中的注解 | `collectEquation`、`collectVariable`、`enterNestedEquations` |
 | 8008 | 提示 | 模型里有 HGT 注解，但没开 `--handGuidedTearing` | `finish` |
 | 8009 | 警告 | `hold` 尚未支持 | `finish` |
 | 8010 | 错误 | 标签方程在化简过程中被删掉或复制了 | `checkEquations` |
@@ -450,12 +494,15 @@ class F.Plant
 | `HGTLevel1` | level 由参数给出（变成结构参数）；level 2 上允许依赖连续变量 |
 | `HGTModelon1` | `--acceptModelonHGT`、hold 警告、忽略 `__Modelon` 的其他内容 |
 | `HGTIf1` | 参数选中的 if 分支；保留下来的 if 分支中的注解被忽略 |
-| `HGTNotSupported1` | 数组、for 循环（8007）；基类的 `tearingPairs` 不继承 |
+| `HGTNotSupported1` | when 方程中的注解（8007）；基类的 `tearingPairs` 不继承 |
+| `HGTFor1` | for 循环：嵌套循环、两个下标的名字、`tearingPairs` 引用某次迭代、自动命名、倒序的下标对应 |
+| `HGTArray1` | 数组方程逐元素配对：切片、矩阵、标量和数组属性、`tearingPairs` 引用整条数组方程和单个元素、for 循环里的数组方程 |
 | `HGTDisabled1` | 没开开关时的提示 8008 |
 | `HGTError1`–`HGTError5` | 参数作迭代变量（8002）、Pair 的方程名不存在（8004）、方程重名（8003）、level 1 上的属性依赖连续变量（8006）、同一变量既配对又未配对（8005） |
 | `HGTError6` | `level = 0`（8001），未知字段（8000） |
 | `HGTError7`、`HGTError8` | 残差和迭代变量的 nominal ≤ 0（8001），后者由参数给出 |
 | `HGTError9` | 未配对项报 8022，显式配对（组件级和 `tearingPairs`）不受影响 |
+| `HGTError10`–`HGTError12` | 数组方程与切片尺寸不同、数组属性尺寸不对、标量方程配数组变量（8001） |
 
 ## 13. 改代码时要注意的地方
 

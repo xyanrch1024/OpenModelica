@@ -135,7 +135,8 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 | 类 | `flattenClass`，`INSTANCED_CLASS` 分支，经 `collectHGTClass` | `collectClass`：只读 `tearingPairs`，配对先存进 `collector.pairs` |
 | 变量 | `flattenSimpleComponent`（注释里有注解时） | `collectVariable`：读 `IterationVariable` |
 | 方程 | `flattenEquations`，`EQUALITY` 分支（先用 `hasAnnotation` 快速判断） | `collectEquation`：读 `name` 和 `ResidualEquation`，返回打了标签的 source |
-| for、when | 在 `enterNested` 和 `leaveNested` 之间 | 嵌套内的注解不收集，最外层报一次警告 8007 |
+| for（展开的） | `unrollForLoop` 每次迭代前后调用 `enterIteration`、`leaveIteration` | 每次迭代是一条独立的方程：注解中的迭代变量代入当前值，名字加上迭代值下标（`seg[1]`、`seg[1,2]`） |
+| when、不展开的 for | 在 `enterNested` 和 `leaveNested` 之间 | 嵌套内的注解不收集，最外层报一次警告 8007 |
 | if | `flattenIfEquation` 按分支处理 | 条件被求值为真、分支直接替代整个 if 方程时（例如由参数选中的稳态分支），注解照常收集；仍保留在 if 方程里的分支经 `flattenIfBranch`（`enterNestedEquations`）跳过并报警告 8007 |
 | 展平结束 | `flatModel.handGuidedTearing := HandGuidedTearing.finish(settings.hgt)` | 见 §3.5 |
 
@@ -166,13 +167,15 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 | `parseResidualEquation` | 解析 `ResidualEquation(...)`，可带 `iterationVariable` 形成配对 |
 | `parsePair` | 解析 `Pair(...)`；`residualEquation = 名字` 通过 `Dump.printComponentRefStr` 取文本 |
 | `parsePairedIterationVariable`、`parseUnpairedIterationVariable` | 解析两种迭代变量写法；配对里的变量继承所在记录的 level。后者解析出的未配对变量只用于报错 8022 |
-| `resolveIterationVariable` | 实例化变量引用，检查它是标量 Real 的连续变量（错误 8002） |
-| `parseRealAttribute` | 解析 start/min/max/nominal：Integer 转成 Real，level 1 上不许依赖连续变量（8006）；编译期能求值的 nominal 必须为正（`checkPositive`，8001），否则缩放时会除以 0 |
+| `resolveIterationVariable` | 实例化变量引用，检查它是 Real 的连续变量（错误 8002）；返回各元素（数组和切片按行优先展开，下标求值）和维数 |
+| `parseRealAttribute` | 解析 start/min/max/nominal，每个元素一个值：标量用于所有元素，数组须与所属方程或变量同形状（8001）；Integer 转成 Real，level 1 上不许依赖连续变量（8006）；编译期能求值的 nominal 必须为正（`checkPositive`，8001），否则缩放时会除以 0 |
 | `evalBoolean`、`evalLevel`、`evalParameterExp` | 求值 `enabled` 和 `level`（level ≥ 1），用 `Structural.markExp` 把相关参数标为结构参数 |
 | `parseHold` | 解析 hold（目前只存储） |
 | `checkFields`、`lookupFields` | 遇到未知字段报警告 8000 |
 
-不支持的情况都是给警告、丢弃该项，然后继续：非标量 Real 的方程或变量（8007），for/when 内以及仍保留下来的 if 分支内的注解（8007）。
+**数组**：Real 数组方程与同形状的数组迭代变量或切片逐元素配对（形状不同报 8001），元素方程按行优先命名为 `bal[1]`、`bal[1,2]`。展平时整条数组方程只打一个标签，`NFScalarize.scalarizeEquation` 总是拆开带标签的数组方程，并用 `indexEquationTag` 把每个元素的标签改成元素名。`tearingPairs` 可以引用整条数组方程（逐元素）或单个元素（`bal[2]`）。详见前端导读 §7。
+
+不支持的情况都是给警告、丢弃该项，然后继续：非 Real 的方程或变量、没有标量化时的数组方程（8007），when 方程、不展开的 for 方程以及仍保留下来的 if 分支内的注解（8007）。
 
 ### 3.5 `finish` 与 `checkEquations`
 
@@ -457,12 +460,12 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 |---|---|---|
 | 8000 | 警告 | 注解中有未知字段 |
 | 8001 | 错误 | 字段值不合法（名字、level、enabled、hold、类型、Pair 缺少某一边等） |
-| 8002 | 错误 | 不能作为迭代变量（不是连续变量、不是变量、不是标量 Real） |
+| 8002 | 错误 | 不能作为迭代变量（不是连续变量、不是变量、不是 Real） |
 | 8003 | 错误 | 方程重名 |
 | 8004 | 错误 | 配对引用的方程名不存在 |
 | 8005 | 错误 | 同一方程或变量有多个 HGT 规范 |
 | 8006 | 错误 | level 1 上的属性依赖连续变量 |
-| 8007 | 警告 | 不支持的情况，已忽略（非标量、for/if/when 内） |
+| 8007 | 警告 | 不支持的情况，已忽略（非 Real、没有标量化时的数组方程、when 或保留下来的 if 分支内） |
 | 8008 | 通知 | 有注解但没打开 `--handGuidedTearing` |
 | 8009 | 警告 | hold 未实现，已忽略 |
 | 8010 | 错误 | 前端化简删除或复制了带标签的方程 |
@@ -501,7 +504,10 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | HGTLevel1 | level 由参数给出（变成结构参数）；level 2 上允许依赖连续变量 |
 | HGTModelon1 | `--acceptModelonHGT`、hold 警告、忽略其他 `__Modelon` 内容 |
 | HGTIf1 | 由参数选中的 if 分支中的注解（`__Modelon`、`hold = false` 不报警告）；保留下来的 if 分支中的注解被忽略（8007） |
-| HGTNotSupported1 | 数组、for 循环（8007）；基类中的 `tearingPairs` 不继承 |
+| HGTNotSupported1 | when 方程中的注解（8007）；基类中的 `tearingPairs` 不继承 |
+| HGTFor1 | for 循环：嵌套、两个下标的名字、`tearingPairs` 引用某次迭代、自动命名、倒序对应 |
+| HGTArray1 | 数组方程逐元素配对：切片、矩阵、标量和数组属性、`tearingPairs` 引用整条数组方程和单个元素、for 里的数组方程 |
+| HGTError10–12 | 数组方程与切片尺寸不同、数组属性尺寸不对、标量方程配数组变量（8001） |
 | HGTSystemPair1 | 跨组件的系统级配对，分写在两个注解子句中（合并）；数组组件 `ba[2].res` |
 | HGTUnpaired1 | OCT TestUnpaired 例子中的未配对项：报 8022，名字带前缀 |
 | HGTError9 | 未配对的残差方程和迭代变量报 8022，显式配对（组件级和 `tearingPairs`）不受影响 |
@@ -523,6 +529,8 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | HGTAlgebra1 | 纯代数：多根选根、反问题、带界的迭代变量、自动补撕裂变量 |
 | HGTOnly1 | `--hgtOnly`：能解的块照常；撕裂卡住和匹配不上的块报 8018；不加 `--hgtOnly` 时同样的模型自动补全后能解 |
 | HGTIf1 | OCT 风格的稳态开关：参数 `isSteadyState` 选中带 HGT 注解的稳态分支 |
+| HGTFor1 | for 循环写的配对与逐段写出的配对结果完全相同 |
+| HGTArray1 | 数组方程配切片与 for 写法结果相同；矩阵方程逐元素配对（元素顺序） |
 | HGTInit1 | initial equation 上的配对只用于初始化系统，仿真系统中没有这个配对 |
 
 运行（需要先装好 omc）：
@@ -548,7 +556,7 @@ cd testsuite/flattening/modelica/scodeinst && ../../../rtest -v HGT*.mo
 
 - 只保证稳态模型；有状态时只给警告 8017。
 - 新后端不支持。
-- for/when 内的注解、运行时才能决定的 if 分支内的注解、数组方程和数组变量都不支持（由参数选中的 if 分支支持）。
+- when 方程、不展开的 for 方程、运行时才能决定的 if 分支内的注解都不支持（展开的 for 方程和由参数选中的 if 分支支持）。数组只支持逐元素的显式配对，且模型必须标量化。
 - `tearingPairs` 不从基类继承。
 - 只能合并同一个 EqSystem 内的块。
 - 嵌套层要求组件中都是标量方程；HpcOm 和 OMSI 不支持嵌套层。

@@ -1,0 +1,99 @@
+// name:      HGTHold1
+// keywords:  tearing, hand guided tearing
+// status:    correct
+//
+// hold keeps the iteration variable of a pair at its start value and drops the
+// residual equation. It is a runtime switch: the residual equation becomes
+// 0 = if hold then x - $START.x else residual, so -override changes it without
+// recompiling, and so does the held value if the start value is a parameter.
+//
+
+loadFile("HGT.mo"); getErrorString();
+setCommandLineOptions("--handGuidedTearing -d=nfScalarize"); getErrorString();
+
+r := simulate(HGT.Hold, stopTime = 0); getErrorString();
+{val(x, 0), val(y, 0)};
+r := simulate(HGT.Hold, stopTime = 0, simflags = "-override=h=true"); getErrorString();
+{val(x, 0), val(y, 0)};
+r := simulate(HGT.Hold, stopTime = 0, simflags = "-override=h=true,x0=2.5"); getErrorString();
+{val(x, 0), val(y, 0)};
+
+r := simulate(HGT.HoldSingle, stopTime = 0); getErrorString();
+val(x, 0);
+r := simulate(HGT.HoldSingle, stopTime = 0, simflags = "-override=h=true"); getErrorString();
+val(x, 0);
+
+r := simulate(HGT.HoldArray, stopTime = 0); getErrorString();
+{val(x[1], 0), val(x[2], 0), val(x[3], 0)};
+r := simulate(HGT.HoldArray, stopTime = 0, simflags = "-override=h=true"); getErrorString();
+{val(x[1], 0), val(x[2], 0), val(x[3], 0)};
+
+// Result:
+// true
+// ""
+// true
+// ""
+// record SimulationResult
+//     resultFile = "HGT.Hold_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.Hold', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// {1.0, 2.0}
+// record SimulationResult
+//     resultFile = "HGT.Hold_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.Hold', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = '-override=h=true'",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// {1.5, 1.5}
+// record SimulationResult
+//     resultFile = "HGT.Hold_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.Hold', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = '-override=h=true,x0=2.5'",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// {2.5, 0.5}
+// record SimulationResult
+//     resultFile = "HGT.HoldSingle_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.HoldSingle', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// 2.0
+// record SimulationResult
+//     resultFile = "HGT.HoldSingle_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.HoldSingle', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = '-override=h=true'",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// 3.0
+// record SimulationResult
+//     resultFile = "HGT.HoldArray_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.HoldArray', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// {2.0, 3.0, 4.0}
+// record SimulationResult
+//     resultFile = "HGT.HoldArray_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGT.HoldArray', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = '-override=h=true'",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// ""
+// {1.0, 2.0, 3.0}
+// endResult

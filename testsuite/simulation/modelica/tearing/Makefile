@@ -6,6 +6,7 @@ HGTArray1.mos \
 HGTBounds1.mos \
 HGTError1.mos \
 HGTFor1.mos \
+HGTHold1.mos \
 HGTIf1.mos \
 HGTInit1.mos \
 HGTNetwork1.mos \

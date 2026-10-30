@@ -59,6 +59,4 @@ end HGTSystemPair1;
 //   c.z = c.q;
 //   c.q = b.x + ba[2].y;
 // end HGTSystemPair1;
-// Warning: The hold attribute of hand guided tearing is not supported yet and is ignored.
-//
 // endResult

@@ -1212,8 +1212,8 @@ public constant ErrorTypes.Message HGT_NOT_SUPPORTED = ErrorTypes.MESSAGE(8007, 
   "The hand guided tearing annotation is ignored: %s.");
 public constant ErrorTypes.Message HGT_DISABLED = ErrorTypes.MESSAGE(8008, ErrorTypes.TRANSLATION(), ErrorTypes.NOTIFICATION(),
   "The model contains hand guided tearing annotations, which are ignored since --handGuidedTearing is not set.");
-public constant ErrorTypes.Message HGT_HOLD_NOT_SUPPORTED = ErrorTypes.MESSAGE(8009, ErrorTypes.TRANSLATION(), ErrorTypes.WARNING(),
-  "The hold attribute of hand guided tearing is not supported yet and is ignored.");
+public constant ErrorTypes.Message HGT_HOLD_MISMATCH = ErrorTypes.MESSAGE(8009, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+  "A hand guided tearing pair is held as a whole, but the residual equation %s has hold = %s and its iteration variable %s has hold = %s.");
 public constant ErrorTypes.Message HGT_EQUATION_LOST = ErrorTypes.MESSAGE(8010, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "The hand guided tearing equation '%s' %s while simplifying the model.");
 public constant ErrorTypes.Message HGT_EQUATION_REMOVED_BACKEND = ErrorTypes.MESSAGE(8011, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),

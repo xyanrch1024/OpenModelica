@@ -639,11 +639,11 @@ public
       return;
     end if;
 
-    s := SPEC(residuals);
+    for r in residuals loop
+      checkHold(r);
+    end for;
 
-    if hasHold(s) then
-      Error.addMessage(Error.HGT_HOLD_NOT_SUPPORTED, {});
-    end if;
+    s := SPEC(residuals);
 
     if Flags.isSet(Flags.HGT_DUMP) then
       print(Spec.toString(s));
@@ -990,29 +990,27 @@ protected
     str := if listEmpty(strl) then "" else " (" + stringDelimitList(strl, ", ") + ")";
   end attrsString;
 
-  function hasHold
-    "True if any item may be held: a hold attribute that is not literally false."
-    input Spec spec;
-    output Boolean hold = false;
+  function checkHold
+    "A pair is held as a whole, so if both the residual equation and its
+     iteration variable have a hold attribute they must be the same."
+    input ResidualEquation residual;
   protected
     IterationVariable var;
+    Expression rh, vh;
   algorithm
-    for r in spec.residuals loop
-      if isHeld(r.hold) then
-        hold := true;
-        return;
-      end if;
+    SOME(var) := residual.iterationVariable;
 
-      if isSome(r.iterationVariable) then
-        SOME(var) := r.iterationVariable;
+    if isHeld(residual.hold) and isHeld(var.hold) then
+      SOME(rh) := residual.hold;
+      SOME(vh) := var.hold;
 
-        if isHeld(var.hold) then
-          hold := true;
-          return;
-        end if;
+      if not Expression.isEqual(rh, vh) then
+        Error.addSourceMessage(Error.HGT_HOLD_MISMATCH,
+          {residual.name, Expression.toString(rh), ComponentRef.toString(var.name), Expression.toString(vh)}, residual.info);
+        fail();
       end if;
-    end for;
-  end hasHold;
+    end if;
+  end checkHold;
 
   function isHeld
     input Option<Expression> hold;

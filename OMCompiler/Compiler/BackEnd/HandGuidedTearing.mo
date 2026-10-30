@@ -39,7 +39,8 @@ encapsulated package HandGuidedTearing
    residual equations with their name in an __OpenModelica_HGTEquation source
    annotation. This package:
      - lower: protects the iteration variables, applies their start and nominal
-       attributes and scales the residual equations by their nominal,
+       attributes, scales the residual equations by their nominal and makes
+       the held ones keep their iteration variable at its start value,
      - hgtMatching: a post-optimization module that forces the tearing pairs
        into the matching, so that each residual equation and its iteration
        variable end up in the same strong component,
@@ -86,7 +87,8 @@ function lower
   "Called by BackendDAECreate.lower. Finds the hand guided tearing specification
    in the DAE, marks the iteration variables as unreplaceable so that they are
    not removed as aliases, applies their start and nominal attributes, and
-   scales the residual equations by their nominal."
+   rewrites the residual equations with a nominal or a hold attribute, see
+   rewriteResidual."
   input list<DAE.Element> elements;
   output Option<BackendDAE.HGTSpec> spec;
   input output list<BackendDAE.Var> vars;
@@ -95,7 +97,7 @@ function lower
 protected
   BackendDAE.HGTSpec s;
   UnorderedMap<String, DAE.HGTIterationVariable> var_map;
-  UnorderedMap<String, DAE.Exp> nominal_map;
+  UnorderedMap<String, DAE.HGTResidual> residual_map;
   list<DAE.HGTIterationVariable> iter_vars;
 algorithm
   spec := findSpec(elements);
@@ -114,16 +116,16 @@ algorithm
 
   vars := list(lowerVariable(v, var_map) for v in vars);
 
-  nominal_map := UnorderedMap.new<DAE.Exp>(stringHashDjb2, stringEq);
+  residual_map := UnorderedMap.new<DAE.HGTResidual>(stringHashDjb2, stringEq);
   for r in s.residuals loop
-    if isSome(r.nominal) then
-      UnorderedMap.add(r.name, Util.getOption(r.nominal), nominal_map);
+    if isSome(r.nominal) or isSome(pairHold(r)) then
+      UnorderedMap.add(r.name, r, residual_map);
     end if;
   end for;
 
-  if not UnorderedMap.isEmpty(nominal_map) then
-    eqns := list(scaleResidual(e, nominal_map) for e in eqns);
-    initialEqns := list(scaleResidual(e, nominal_map) for e in initialEqns);
+  if not UnorderedMap.isEmpty(residual_map) then
+    eqns := list(rewriteResidual(e, residual_map) for e in eqns);
+    initialEqns := list(rewriteResidual(e, residual_map) for e in initialEqns);
   end if;
 
   // The initial equations are gone from the simulation DAE when hgtMatching
@@ -403,13 +405,34 @@ algorithm
   end if;
 end lowerVariable;
 
-function scaleResidual
-  "Rewrites a residual equation lhs = rhs with a nominal as 0 = (lhs - rhs) / nominal."
+function pairHold
+  "The hold attribute of a pair: the one of the residual equation, else the one
+   of its iteration variable (the frontend checks that they are the same if
+   both are given). NONE() if the pair is never held."
+  input DAE.HGTResidual residual;
+  output Option<DAE.Exp> hold;
+algorithm
+  hold := match (residual.hold, residual.iterationVariable.hold)
+    case (SOME(DAE.BCONST(false)), _) then NONE();
+    case (SOME(_), _) then residual.hold;
+    case (_, SOME(DAE.BCONST(false))) then NONE();
+    else residual.iterationVariable.hold;
+  end match;
+end pairHold;
+
+function rewriteResidual
+  "Rewrites a residual equation lhs = rhs with a nominal as 0 = (lhs - rhs) / nominal.
+   A held pair keeps its iteration variable x at its start value instead, which
+   keeps the structure of the system, so that hold can be changed at runtime:
+     0 = if hold then x - $START.x else (lhs - rhs) / nominal"
   input output BackendDAE.Equation eq;
-  input UnorderedMap<String, DAE.Exp> nominals;
+  input UnorderedMap<String, DAE.HGTResidual> residuals;
 protected
   Option<String> name;
-  Option<DAE.Exp> nominal;
+  Option<DAE.HGTResidual> opt_residual;
+  DAE.HGTResidual residual;
+  DAE.ComponentRef var;
+  DAE.Exp res, held;
 algorithm
   name := equationName(eq);
 
@@ -417,23 +440,55 @@ algorithm
     return;
   end if;
 
-  nominal := UnorderedMap.get(Util.getOption(name), nominals);
+  opt_residual := UnorderedMap.get(Util.getOption(name), residuals);
 
-  if isNone(nominal) then
+  if isNone(opt_residual) then
     return;
   end if;
+
+  SOME(residual) := opt_residual;
 
   eq := match eq
     case BackendDAE.EQUATION()
       algorithm
-        eq.scalar := Expression.makeDiv(Expression.expSub(eq.exp, eq.scalar), Util.getOption(nominal));
+        res := Expression.expSub(eq.exp, eq.scalar);
+
+        if isSome(residual.nominal) then
+          res := Expression.makeDiv(res, Util.getOption(residual.nominal));
+        end if;
+
+        res := match pairHold(residual)
+          case NONE() then res;
+          case SOME(DAE.BCONST(true))
+            then holdResidual(residual.iterationVariable.name);
+          case SOME(held)
+            then DAE.IFEXP(held, holdResidual(residual.iterationVariable.name), res);
+        end match;
+
+        eq.scalar := res;
         eq.exp := DAE.RCONST(0.0);
       then
         eq;
 
-    else eq;
+    else
+      algorithm
+        if isSome(pairHold(residual)) then
+          Error.addSourceMessage(Error.HGT_NOT_SUPPORTED,
+            {"hold of the residual equation " + residual.name + ", which is not a scalar equation"}, residual.info);
+        end if;
+      then
+        eq;
   end match;
-end scaleResidual;
+end rewriteResidual;
+
+function holdResidual
+  "x - $START.x, the residual that keeps x at its start value."
+  input DAE.ComponentRef var;
+  output DAE.Exp res;
+algorithm
+  res := Expression.expSub(Expression.crefExp(var),
+    Expression.crefExp(ComponentReference.crefPrefixStart(var)));
+end holdResidual;
 
 // ============================================================================
 // hgtMatching implementation

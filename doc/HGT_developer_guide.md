@@ -73,7 +73,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 
 - `enabled`、`level`、`hold` 必须是参数表达式。`enabled` 和 `level` 在前端求值，并把用到的参数标记为结构参数。**`level` 只能是 1**：嵌套撕裂（level ≥ 2）不支持，见 §4.5。
 - `start`、`min`、`max`、`nominal` 保留为表达式，只能依赖参数（错误 8006）。依赖变量的属性在 OCT 里只用于嵌套层，这里不支持。
-- `hold` 会解析、存储，但未实现，给警告 8009 后忽略；字面量 `hold = false` 等同于默认值，不报警告。
+- `hold` 是运行时开关（§4.8）：为 true 时，配对的迭代变量保持在 start 值，残差方程不再要求成立。一个配对整体 hold，残差和迭代变量上都写了 hold 时必须相同（8009）。字面量 `hold = false` 等同于不写。
 - `__Modelon(...)` 不读取，静默忽略：OCT 模型要把 HGT 注解改写成 `__OpenModelica_HGT(...)`，而且只支持显式配对。
 - `merge_blt_blocks` 和 `allow_multiple_residuals_in_hgt_blocks` 在 OCT 里是编译选项，OMC 也只做成选项（见下表），**不是**注解字段。写在注解里会得到警告 8000（未知字段）。
 
@@ -168,7 +168,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 | `resolveIterationVariable` | 实例化变量引用，检查它是 Real 的连续变量（错误 8002）；返回各元素（数组和切片按行优先展开，下标求值）和维数 |
 | `parseRealAttribute` | 解析 start/min/max/nominal，每个元素一个值：标量用于所有元素，数组须与所属方程或变量同形状（8001）；Integer 转成 Real，不许依赖连续变量（8006）；编译期能求值的 nominal 必须为正（`checkPositive`，8001），否则缩放时会除以 0 |
 | `evalBoolean`、`checkLevel`、`evalParameterExp` | 求值 `enabled`，检查 `level` 只能是 1，用 `Structural.markExp` 把相关参数标为结构参数 |
-| `parseHold` | 解析 hold（目前只存储） |
+| `parseHold` | 解析 hold，必须是 Boolean 参数表达式，保留为表达式 |
 | `checkFields`、`lookupFields` | 遇到未知字段报警告 8000 |
 
 **数组**：Real 数组方程与同形状的数组迭代变量或切片逐元素配对（形状不同报 8001），元素方程按行优先命名为 `bal[1]`、`bal[1,2]`。展平时整条数组方程只打一个标签，`NFScalarize.scalarizeEquation` 总是拆开带标签的数组方程，并用 `indexEquationTag` 把每个元素的标签改成元素名。`tearingPairs` 可以引用整条数组方程（逐元素）或单个元素（`bal[2]`）。详见前端导读 §7。
@@ -184,7 +184,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 3. 残差按名字排序。
 4. `checkUniqueVariable`：一个变量在配对和未配对中合起来只能出现一次（8005）。
 5. `checkOnlyPairs`：每个未配对的残差方程和迭代变量各报一条错误 8022，然后失败。
-6. 有 hold 且不是字面量 `false` 时给警告 8009（`isHeld`）。
+6. `checkHold`：残差和迭代变量都有 hold（不是字面量 `false`，`isHeld`）时，两个表达式必须相同，否则报 8009。
 7. 打开 `-d=hgtDump` 时，用 `Spec.toString` 打印规范，以 `Hand guided tearing:` 开头。
 8. 规范为空时返回 NONE()。
 
@@ -204,7 +204,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 - `HandGuidedTearing.lower` 做四件事：
   1. `findSpec` 找到规范元素（会递归进 `DAE.COMP`）。
   2. 对所有配对的迭代变量调用 `lowerVariable`：设为不可替换（`setVarUnreplaceable`），有 start 或 nominal 就写进变量属性。
-  3. 对带 nominal 的残差方程调用 `scaleResidual`，把 `lhs = rhs` 改写成 `0 = (lhs - rhs)/nominal`。这对 `eqns` 和 `ieqns` 都做。
+  3. 对带 nominal 或 hold 的残差方程调用 `rewriteResidual`：nominal 把 `lhs = rhs` 改写成 `0 = (lhs - rhs)/nominal`，hold 再包上一层开关（§4.8）。这对 `eqns` 和 `ieqns` 都做。
   4. 记下 `ieqns` 中带标签的方程名，存进 `initialResiduals`。仿真 DAE 在后优化之前就清空了 `shared.initialEqs`（`Initialization.removeInitializationStuff`），所以只能在这里记。
 - 识别 HGT 方程只靠 §3.3 的标签：
   - `equationName` 从方程 source 的注释中读出 `__OpenModelica_HGTEquation`；
@@ -315,7 +315,7 @@ OCT 的 level ≥ 2（嵌套撕裂：外层每迭代一次，内层块就完整�
 
 | 公开函数 | 作用 |
 |---|---|
-| `lower` | 读入规范，保护迭代变量，应用 start/nominal，缩放残差 |
+| `lower` | 读入规范，保护迭代变量，应用 start/nominal，改写带 nominal 或 hold 的残差 |
 | `iterationVariableBounds` | 只依赖参数的 min/max，供 SimCode 使用 |
 | `isActive`、`equationName`、`isTaggedEquation`、`anyTaggedEquation` | 判断 HGT 是否活跃、读取方程标签 |
 | `hgtMatching` | 后端优化模块（§4.3） |
@@ -332,6 +332,23 @@ OCT 的 level ≥ 2（嵌套撕裂：外层每迭代一次，内层块就完整�
 - `iterationVariableBounds(shared)` 返回每个带 min 或 max 的迭代变量 `(cref, min, max)`。
 - `checkBound` 只保留**只依赖** `shared.globalKnownVars`（参数和常量）的界；依赖其他变量的界（例如 `fixed = false` 的参数）给警告 8019 后丢弃。
 - 界**不写进**变量的 min/max 属性，以免生成范围检查 assert。它们只在非线性求解器里使用（§5、§6）。
+
+### 4.8 hold
+
+OCT 的 hold（R10）：为 true 时迭代变量保持不动、残差方程不再要求成立，典型用法是设计工况和校核工况之间切换。这里按**配对**实现：一个配对的 hold 取残差上的，没写就取迭代变量上的（`pairHold`），两个都写时前端保证相同。
+
+`rewriteResidual` 把被 hold 的残差方程改写成
+
+```
+0 = if hold then x - $START.x else (lhs - rhs) / nominal
+```
+
+- 方程和变量都还在，结构不变：`hgtMatching`、`Tearing.handGuidedTearing`、SimCode 和运行时都不用改。
+- hold 不是结构参数，可以用 `-override` 在运行时切换，不用重新编译。`hold = true` 字面量直接写成 `x - $START.x`。
+- 保持值是 x 的 start：HGT 里写的 start 优先（`lowerVariable` 已写进变量属性），否则用声明的 start。普通变量的 start 不能 `-override`，要在运行时改保持值，就把 start 写成参数，例如 `iterationVariable(start = x0, hold = h) = x`。
+- `$START.x` 求导为 0，所以被 hold 的残差对 x 的导数是 1，雅可比矩阵不会奇异。
+- 只处理标量方程 `BackendDAE.EQUATION`（数组方程已由 `-d=nfScalarize` 拆开）；其他种类的方程上的 hold 给警告 8007 后忽略。
+- 和 OCT 的区别：OCT 可以分别 hold 一个配对的变量和另一个配对的残差，这里不行；按配对 hold，方程数一定平衡。
 
 ## 5. SimCode 与模板
 
@@ -432,7 +449,7 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | 8006 | 错误 | 属性依赖连续变量（必须是参数表达式） |
 | 8007 | 警告 | 不支持的情况，已忽略（非 Real、没有标量化时的数组方程、when 或保留下来的 if 分支内） |
 | 8008 | 通知 | 有注解但没打开 `--handGuidedTearing` |
-| 8009 | 警告 | hold 未实现，已忽略 |
+| 8009 | 错误 | 同一配对的残差和迭代变量的 hold 不同 |
 | 8010 | 错误 | 前端化简删除或复制了带标签的方程 |
 
 **后端（SYMBOLIC）**
@@ -468,11 +485,12 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | HGTError8 | 迭代变量的 nominal 由值为负的参数给出（8001） |
 | HGTLevel1 | 由参数给出的 level 2：嵌套撕裂不支持（8001） |
 | HGTModelon1 | `__Modelon` 的 HGT 注解被静默忽略 |
-| HGTIf1 | 由参数选中的 if 分支中的注解（`hold = false` 不报警告）；保留下来的 if 分支中的注解被忽略（8007） |
+| HGTIf1 | 由参数选中的 if 分支中的注解；保留下来的 if 分支中的注解被忽略（8007） |
 | HGTNotSupported1 | when 方程中的注解（8007）；基类中的 `tearingPairs` 不继承 |
 | HGTFor1 | for 循环：嵌套、两个下标的名字、`tearingPairs` 引用某次迭代、自动命名、倒序对应 |
 | HGTArray1 | 数组方程逐元素配对：切片、矩阵、标量和数组属性、`tearingPairs` 引用整条数组方程和单个元素、for 里的数组方程 |
 | HGTError10–12 | 数组方程与切片尺寸不同、数组属性尺寸不对、标量方程配数组变量（8001） |
+| HGTError13 | 残差和迭代变量的 hold 不同（8009） |
 | HGTSystemPair1 | 跨组件的系统级配对，分写在两个注解子句中（合并）；数组组件 `ba[2].res` |
 | HGTUnpaired1 | OCT TestUnpaired 例子中的未配对项：报 8022，名字带前缀 |
 | HGTError9 | 未配对的残差方程和迭代变量报 8022，显式配对（组件级和 `tearingPairs`）不受影响 |
@@ -495,6 +513,7 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | HGTFor1 | for 循环写的配对与逐段写出的配对结果完全相同 |
 | HGTArray1 | 数组方程配切片与 for 写法结果相同；矩阵方程逐元素配对（元素顺序） |
 | HGTInit1 | initial equation 上的配对只用于初始化系统，仿真系统中没有这个配对 |
+| HGTHold1 | hold 用 `-override` 在运行时切换；保持值由参数给出；1×1 配对；数组配对的每个元素 |
 
 运行（需要先装好 omc）：
 
@@ -528,7 +547,7 @@ cd testsuite/flattening/modelica/scodeinst && ../../../rtest -v HGT*.mo
 **未实现**
 
 - 嵌套撕裂（level ≥ 2，B2.2）和依赖变量的自适应属性（B2.3）：不支持，`level` 只能是 1，属性必须是参数表达式。
-- hold（R10）及交互式 FMU：目前给警告 8009 后忽略。
+- 交互式 FMU（OCT 的 FMUProblem）：不支持。hold 只能用 `-override` 在仿真开始前设置。
 - 稳态专用求解路径：已决定暂不做。
 
 ## 10. 常见改动的入口
@@ -541,5 +560,4 @@ cd testsuite/flattening/modelica/scodeinst && ../../../rtest -v HGT*.mo
 | 改变分块规则 | `HandGuidedTearing.matchSystem` |
 | 改变块内撕裂 | `Tearing.handGuidedTearing`、`hgtInnerEquations` |
 | 实现自适应属性 | `HandGuidedTearing.checkBound` → `SimCodeUtil.createHGTAttributes` → `CodegenC.tpl` 中 min/max 的计算位置（需要在每次求解前重新计算） |
-| 实现 hold | 前端已经存储了 hold；后端可以把被 hold 的残差替换成 `x - 固定值`（设计讨论见 HGT_design.md） |
 | 修改运行时求解行为 | C：`nonlinearSystem.c`、`nonlinearSolverHomotopy.c`；Rust：`openmodelica_simulation_runtime/src/nls.rs`、`openmodelica_nls/src/lib.rs`，两边要保持一致 |

@@ -369,7 +369,7 @@ flatModel.handGuidedTearing := HandGuidedTearing.finish(settings.hgt);
 4. **每个变量只能有一个 HGT 规定**：配对的变量和未配对的变量合在一起检查重复（8005，`checkUniqueVariable`）。
 5. **只接受显式配对**（`checkOnlyPairs`）：每个未配对的残差方程和迭代变量各报一条 8022，全部报完再失败。放在这里检查，是因为这时 `tearingPairs` 的配对也已经加进来了，能准确判断哪些项确实没有配对。
 6. 没有任何项 → `NONE()`。
-7. **hold 按配对**（`checkHold`）：残差和迭代变量都写了 hold（不是字面量 `false`）时，两个表达式必须相同 → 否则 8009。hold 怎么生效见开发指南 §4.8。
+7. **hold 按配对**（`checkHold`）：残差和迭代变量都写了 hold 时，两个表达式必须相同，字面量 `false` 也算 → 否则 8009，全部报完再失败。hold 怎么生效见开发指南 §4.8。
 8. `-d=hgtDump` → 打印 `Spec.toString`。
 
 ## 9. checkEquations 与转换成 DAE
@@ -496,7 +496,7 @@ class F.Plant
 | `HGTError7`、`HGTError8` | 残差和迭代变量的 nominal ≤ 0（8001），后者由参数给出 |
 | `HGTError9` | 未配对项报 8022，显式配对（组件级和 `tearingPairs`）不受影响 |
 | `HGTError10`–`HGTError12` | 数组方程与切片尺寸不同、数组属性尺寸不对、标量方程配数组变量（8001） |
-| `HGTError13` | 残差和迭代变量的 `hold` 不同（8009） |
+| `HGTError13` | 残差和迭代变量的 `hold` 不同（8009）：两个参数不同、一边是字面量 `false` |
 
 ## 13. 改代码时要注意的地方
 

@@ -639,9 +639,9 @@ public
       return;
     end if;
 
-    for r in residuals loop
-      checkHold(r);
-    end for;
+    if not List.fold(residuals, checkHold, true) then
+      fail();
+    end if;
 
     s := SPEC(residuals);
 
@@ -992,36 +992,27 @@ protected
 
   function checkHold
     "A pair is held as a whole, so if both the residual equation and its
-     iteration variable have a hold attribute they must be the same."
+     iteration variable have a hold attribute they must be the same, also if
+     one of them is a literal false."
     input ResidualEquation residual;
+    input output Boolean ok;
   protected
     IterationVariable var;
     Expression rh, vh;
   algorithm
     SOME(var) := residual.iterationVariable;
 
-    if isHeld(residual.hold) and isHeld(var.hold) then
+    if isSome(residual.hold) and isSome(var.hold) then
       SOME(rh) := residual.hold;
       SOME(vh) := var.hold;
 
       if not Expression.isEqual(rh, vh) then
         Error.addSourceMessage(Error.HGT_HOLD_MISMATCH,
           {residual.name, Expression.toString(rh), ComponentRef.toString(var.name), Expression.toString(vh)}, residual.info);
-        fail();
+        ok := false;
       end if;
     end if;
   end checkHold;
-
-  function isHeld
-    input Option<Expression> hold;
-    output Boolean held;
-  algorithm
-    held := match hold
-      case SOME(Expression.BOOLEAN(value = false)) then false;
-      case SOME(_) then true;
-      else false;
-    end match;
-  end isHeld;
 
   function checkOnlyPairs
     "The residual equations and iteration variables must be paired explicitly,

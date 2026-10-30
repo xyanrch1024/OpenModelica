@@ -73,7 +73,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 
 - `enabled`、`level`、`hold` 必须是参数表达式。`enabled` 和 `level` 在前端求值，并把用到的参数标记为结构参数。**`level` 只能是 1**：嵌套撕裂（level ≥ 2）不支持，见 §4.5。
 - `start`、`min`、`max`、`nominal` 保留为表达式，只能依赖参数（错误 8006）。依赖变量的属性在 OCT 里只用于嵌套层，这里不支持。
-- `hold` 是运行时开关（§4.8）：为 true 时，配对的迭代变量保持在 start 值，残差方程不再要求成立。一个配对整体 hold，残差和迭代变量上都写了 hold 时必须相同（8009）。字面量 `hold = false` 等同于不写。
+- `hold` 是运行时开关（§4.8）：为 true 时，配对的迭代变量保持在 start 值，残差方程不再要求成立。一个配对整体 hold，残差和迭代变量上都写了 hold 时必须相同，字面量 `false` 也算（8009）。只有一边写了 `hold = false`，等同于不写。
 - `__Modelon(...)` 不读取，静默忽略：OCT 模型要把 HGT 注解改写成 `__OpenModelica_HGT(...)`，而且只支持显式配对。
 - `merge_blt_blocks` 和 `allow_multiple_residuals_in_hgt_blocks` 在 OCT 里是编译选项，OMC 也只做成选项（见下表），**不是**注解字段。写在注解里会得到警告 8000（未知字段）。
 
@@ -184,7 +184,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 3. 残差按名字排序。
 4. `checkUniqueVariable`：一个变量在配对和未配对中合起来只能出现一次（8005）。
 5. `checkOnlyPairs`：每个未配对的残差方程和迭代变量各报一条错误 8022，然后失败。
-6. `checkHold`：残差和迭代变量都有 hold（不是字面量 `false`，`isHeld`）时，两个表达式必须相同，否则报 8009。
+6. `checkHold`：残差和迭代变量都写了 hold 时（包括字面量 `false`），两个表达式必须相同，否则报 8009；所有配对都检查完再失败。
 7. 打开 `-d=hgtDump` 时，用 `Spec.toString` 打印规范，以 `Hand guided tearing:` 开头。
 8. 规范为空时返回 NONE()。
 
@@ -490,7 +490,7 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | HGTFor1 | for 循环：嵌套、两个下标的名字、`tearingPairs` 引用某次迭代、自动命名、倒序对应 |
 | HGTArray1 | 数组方程逐元素配对：切片、矩阵、标量和数组属性、`tearingPairs` 引用整条数组方程和单个元素、for 里的数组方程 |
 | HGTError10–12 | 数组方程与切片尺寸不同、数组属性尺寸不对、标量方程配数组变量（8001） |
-| HGTError13 | 残差和迭代变量的 hold 不同（8009） |
+| HGTError13 | 残差和迭代变量的 hold 不同（8009）：两个参数不同、一边是字面量 `false` |
 | HGTSystemPair1 | 跨组件的系统级配对，分写在两个注解子句中（合并）；数组组件 `ba[2].res` |
 | HGTUnpaired1 | OCT TestUnpaired 例子中的未配对项：报 8022，名字带前缀 |
 | HGTError9 | 未配对的残差方程和迭代变量报 8022，显式配对（组件级和 `tearingPairs`）不受影响 |

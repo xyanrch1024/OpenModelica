@@ -19,6 +19,7 @@
 4. [方案二：编译期改写](#4-方案二编译期改写)
 5. [两个方案的比较](#5-两个方案的比较)
 6. [建议](#6-建议)
+7. [附录：OCT 的 Python 脚本](#7-附录oct-的-python-脚本)
 
 ---
 
@@ -48,6 +49,54 @@ end Valve;
 
 设计工况下被 hold 的是配对 1 的**变量** m 和配对 2 的**残差** `set`：这就是交叉 hold。
 
+### 1.1 一个配对的两边可以一个为 true、一个为 false
+
+在 OCT 中，同一个配对的迭代变量和残差的 hold 是**独立**的。把上例中每一边的 hold 都显式写出来，就能看得更清楚：
+
+```modelica
+model ValveExplicit
+  parameter Boolean design = true;
+  parameter Real k = 1, dp = 4, u_set = 0.5;
+  Real m(start = 2), u(start = 0.5);
+equation
+  // 配对 1：变量 m 被 hold（design = true），残差 valve 不 hold
+  m = u * k * sqrt(dp) annotation(__OpenModelica_HGT(name = valve,
+    ResidualEquation(hold = false, iterationVariable(hold = design) = m)));
+  // 配对 2：残差 set 被 hold（design = true），变量 u 不 hold
+  u = u_set annotation(__OpenModelica_HGT(name = set,
+    ResidualEquation(hold = design, iterationVariable(hold = false) = u)));
+end ValveExplicit;
+```
+
+`design = true` 时：
+
+| 配对 | 迭代变量 | 变量的 hold | 残差 | 残差的 hold | 含义 |
+|---|---|---|---|---|---|
+| 1 | m | **true** | `valve` | **false** | m 固定；`valve` 仍要成立，只能靠别的变量（u）满足 |
+| 2 | u | **false** | `set` | **true** | `set` 去掉；u 仍是未知量，只能由别的方程（`valve`）决定 |
+
+合起来：被 hold 的变量 {m} 和被 hold 的残差 {set} 各一个，方程数平衡；剩下的未知量 u 由剩下的方程 `valve` 求出。每个配对单独看都是"一边 true、一边 false"，两个配对互相补上。
+
+四种组合在 OCT 中的含义：
+
+| 变量的 hold | 残差的 hold | 这个配对 | 方程数 |
+|---|---|---|---|
+| false | false | 正常求解 | 不变 |
+| true | true | 整对去掉：变量固定，残差不要（[HGT_hold.md](HGT_hold.md) 现在支持的就是这种） | 不变 |
+| true | false | 变量固定，但残差还在：要由**别的配对**释放出来的变量满足 | 少一个未知量，必须有别处 hold 一条残差 |
+| false | true | 残差去掉，但变量还在：要由**别的配对**的残差决定 | 少一条方程，必须有别处 hold 一个变量 |
+
+后两种必须成对出现（可以分布在不同配对、不同块中），整个模型被 hold 的变量和残差个数相等，否则 OCT 求解时报错。例如只有配对 1（变量 true、残差 false），没有配对 2，就是 0 条残差被 hold、1 个变量被 hold，不平衡。
+
+hold 也可以是字面量。例如永远按设计工况算：
+
+```modelica
+m = u * k * sqrt(dp) annotation(__Modelon(name = valve,
+  ResidualEquation(hold = false, iterationVariable(hold = true) = m)));
+u = u_set annotation(__Modelon(name = set,
+  ResidualEquation(hold = true, iterationVariable(hold = false) = u)));
+```
+
 ## 2. 现在的实现的问题
 
 现在按**配对** hold（[HGT_hold.md](HGT_hold.md) §4）：一个配对的 hold 取残差上的，没写就取迭代变量上的，然后整对 hold。所以上例中：
@@ -60,6 +109,14 @@ end Valve;
 | `set` | 被去掉 | 被去掉 |
 
 两个配对都被整对 hold 了，没有报错，也没有警告。从 OCT 迁移来的、用了交叉 hold 的模型会**静默算错**。
+
+§1.1 那种两边都显式写出、一边 true 一边 false 的写法（`ValveExplicit`），现在会报错 8009（同一配对的残差和迭代变量的 hold 不同），所以不会算错，但也不能用。两种写法在现在的实现中的结果：
+
+| 写法 | 例子 | 现在的结果 |
+|---|---|---|
+| 两边都写，表达式相同 | `hold = h`、`iterationVariable(hold = h)` | 整对 hold，和 OCT 一致 |
+| 两边都写，不同（含一边 `false`） | §1.1 `ValveExplicit` | 报错 8009 |
+| 只写一边 | §1 `Valve` | 当成整对 hold，和 OCT **不一致**，没有提示 |
 
 **临时措施**（和下面两个方案无关，应该先做，约半小时）：一个配对只有一边写了 hold（不是字面量 `false`）时给警告，说明"只写一边的 hold 目前按整对处理，和 OCT 不同"；或者直接报错，要求两边都写。
 
@@ -257,3 +314,72 @@ p.holdIterationVariables(["m"]); p.holdResiduals(["set"])
 3. **长期**（要 OCT 那种交互式稳态工作流时）：方案一，随交互式 FMU 一起做。
 
 两个方案可以并存：方案二服务于普通仿真和普通 FMU，方案一服务于交互式 FMU。交互模式下编译器跳过方案二的改写，把 hold 信息原样导出给外层求解器。
+
+## 7. 附录：OCT 的 Python 脚本
+
+下面的脚本在 OCT 中演示 §1.1 的 `ValveExplicit`（注解换成 `__Modelon`，`design` 默认 false，`dp` 改成由 `p_in - p_out` 算出，`m` 的 start 改成 1 以便和保持值区分）。它同时演示 OCT 的 hold 是"保持当前值"：被 hold 的 m 保持上一次的解或用户设的值，不是 start。
+
+只核对过这些名字：编译选项 `interactive_fmu`；`oct.steadystate.nlesol` 的 `FMUProblem`、`Solver`；`holdIterationVariables` / `releaseIterationVariables`（按下标）；`printInfo`。函数的参数细节、初始化之后改参数要不要重新初始化，没有核对，要对照所用的 OCT 版本调整。
+
+```modelica
+model ValveDesign
+  parameter Boolean design = false;
+  parameter Real k = 1, p_in = 5, p_out = 1, u_set = 1;
+  Real dp;
+  Real m(start = 1);
+  Real u(start = 0.5);
+equation
+  dp = p_in - p_out;
+  m = k * u * sqrt(dp) annotation(__Modelon(name = valve,
+    ResidualEquation(hold = false, iterationVariable(hold = design) = m)));
+  u = u_set annotation(__Modelon(name = set,
+    ResidualEquation(hold = design, iterationVariable(hold = false) = u)));
+end ValveDesign;
+```
+
+```python
+from pymodelica import compile_fmu
+from pyfmi import load_fmu
+from oct.steadystate.nlesol import FMUProblem, Solver
+
+fmu = compile_fmu("ValveDesign", "ValveDesign.mo",
+                  compiler_options={"interactive_fmu": True,
+                                    "hand_guided_tearing": True})
+model = load_fmu(fmu)
+problem = FMUProblem(model)        # 未核对：构造参数
+solver = Solver(problem)
+problem.printInfo("all")
+
+# 1. 校核：给定开度 u_set = 1，求流量
+model.set("design", False)         # 未核对：初始化之后改参数是否需要 reset
+solver.solve()
+print("校核:", model.get(["m", "u"]))           # m = 2.0, u = 1.0
+
+# 2. 设计：m 被 hold，保持上一次的解 2.0（不是 start 1.0）；set 被去掉
+model.set("design", True)
+model.set("p_in", 9)                            # dp = 8
+solver.solve()
+problem.printInfo("parametricHold")
+print("设计:", model.get(["m", "u"]))           # m = 2.0, u = 2/sqrt(8) = 0.7071
+
+# 3. 设计：把 m 设成给定值再求解
+model.set("m", 3.0)
+solver.solve()
+print("设计, m=3:", model.get(["m", "u"]))      # m = 3.0, u = 3/sqrt(8) = 1.0607
+
+# 4. 不用参数，直接用 API hold m（下标从 printInfo("all") 查）
+model.set("design", False)
+idx_m = 0                                       # 假设 m 是第 0 个迭代变量
+problem.holdIterationVariables([idx_m])
+#   只 hold 变量还不够，还要去掉一条残差方程数才平衡；
+#   残差的 API 名字没有核对，也可以继续用残差上的 parametric hold。
+problem.releaseIterationVariables([idx_m])
+```
+
+| 步骤 | p_in | m | u | m 的来源 |
+|---|---|---|---|---|
+| 1 校核 | 5 | 2.0 | 1.0 | 求解得到 |
+| 2 设计 | 9 | 2.0 | 0.7071 | 保持第 1 步的解 |
+| 3 设计 | 9 | 3.0 | 1.0607 | 用户设的值 |
+
+同样的模型在现在的 OMC 中：注解换成 `__OpenModelica_HGT` 后报错 8009（§2）；即使改成只写一边，也会被当成整对 hold，而且保持值是 start（第 2 步得到 m = 1.0）。方案一实现之后，结果应和上表一致。

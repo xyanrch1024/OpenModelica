@@ -27,71 +27,70 @@
 
 OCT 中 hold 可以分别写在迭代变量和残差方程上（R10）。被 hold 的迭代变量不再是未知量，被 hold 的残差不再是方程。只要被 hold 的变量和残差个数相等，方程组仍然平衡，**它们不必属于同一个配对**。
 
-典型用法是设计工况和校核工况之间的切换。下面是一个阀门的例子：
+### 1.1 OCT 的官方例子
+
+OCT 用户手册 "Specification of Hand Guided Tearing" 一章的例子 `twoEqSteadyStateParaHold`（模型在 `ExampleModels.mo` 中，运行脚本是 `parametric_hold_IV.py`）。手册的原话是："parameters for parametric holding is specified for the iteration variables and residuals as follows"：
 
 ```modelica
-model Valve
-  parameter Boolean design = false;
-  parameter Real k = 1, dp = 4, u_set = 0.5;
-  Real m(start = 2), u(start = 0.5);
+model twoEqSteadyStateParaHold
+  Real x (start = 1);
+  Real T (start = 400);
+  parameter Boolean testHold1 = false;
+  parameter Boolean testHold2 = false;
 equation
-  m = u * k * sqrt(dp) annotation(__OpenModelica_HGT(name = valve,
-    ResidualEquation(iterationVariable(hold = design) = m)));
-  u = u_set annotation(__OpenModelica_HGT(name = set,
-    ResidualEquation(iterationVariable = u, hold = design)));
-end Valve;
+  0 = 120*x - 75*(0.12*exp(12581*(T - 298)/(298*T)))*(1 - x)
+    annotation(__Modelon(ResidualEquation(hold = testHold1,
+      iterationVariable(hold = testHold2)=x), name = LongEq));
+  0 = -x*(873 - T) + 11.0*(T - 300)
+    annotation(__Modelon(ResidualEquation(hold = testHold2,
+      iterationVariable(hold = testHold1)=T), name = LongEq2));
+end twoEqSteadyStateParaHold;
 ```
 
-| 工况 | 已知 | 求解 | 用到的方程 |
-|---|---|---|---|
-| 校核（`design = false`） | 开度 `u = u_set` | 流量 m | `valve`、`set` |
-| 设计（`design = true`） | 流量 m（保持在给定值） | 开度 u | 只用 `valve`；`set` 被去掉 |
+这是一个两方程的稳态问题（一阶反应的转化率 x 和温度 T）。注意每个配对的残差和迭代变量绑定的是**不同**的参数：
 
-设计工况下被 hold 的是配对 1 的**变量** m 和配对 2 的**残差** `set`：这就是交叉 hold。
-
-### 1.1 一个配对的两边可以一个为 true、一个为 false
-
-在 OCT 中，同一个配对的迭代变量和残差的 hold 是**独立**的。最灵活的写法是：每个迭代变量、每条残差各绑定一个 Boolean 参数，默认都是 false，**运行时**再决定 hold 哪些：
-
-```modelica
-model ValveRuntimeHold
-  parameter Boolean hold_m = false     "hold 迭代变量 m";
-  parameter Boolean hold_valve = false "hold 残差 valve";
-  parameter Boolean hold_u = false     "hold 迭代变量 u";
-  parameter Boolean hold_set = false   "hold 残差 set";
-  parameter Real k = 1, p_in = 5, p_out = 1, u_set = 1;
-  Real dp;
-  Real m(start = 1), u(start = 0.5);
-equation
-  dp = p_in - p_out;
-  m = k * u * sqrt(dp) annotation(__Modelon(name = valve,
-    ResidualEquation(hold = hold_valve, iterationVariable(hold = hold_m) = m)));
-  u = u_set annotation(__Modelon(name = set,
-    ResidualEquation(hold = hold_set, iterationVariable(hold = hold_u) = u)));
-end ValveRuntimeHold;
-```
-
-模型中没有写死任何 true/false，同一个编译好的 FMU 可以在运行时切换成不同的工况：
-
-| 运行时设为 true 的参数 | 被 hold 的变量 | 被 hold 的残差 | 未知量 → 方程 | 工况 |
+| 配对 | 残差 | 残差的 hold | 迭代变量 | 变量的 hold |
 |---|---|---|---|---|
-| （无） | ∅ | ∅ | m → `valve`，u → `set` | 校核：给定开度 u_set，求流量 |
-| `hold_m`、`hold_set` | {m} | {set} | u → `valve` | 设计：给定流量 m，反算开度（**交叉 hold**） |
-| `hold_u`、`hold_set` | {u} | {set} | m → `valve` | 给定开度 u（当前值，不用 u_set），求流量（整对 hold 配对 2） |
-| `hold_m`、`hold_valve` | {m} | {valve} | u → `set` | m 给定，u = u_set（整对 hold 配对 1） |
-| `hold_u`、`hold_valve` | {u} | {valve} | m → `set`？ | **结构奇异**：`set` 不含 m，解不出 m，求解前报错 |
-| 只有 `hold_m` | {m} | ∅ | 1 个未知量，2 条方程 | **个数不平衡**，求解前报错 |
+| 1 | `LongEq` | `testHold1` | x | `testHold2` |
+| 2 | `LongEq2` | `testHold2` | T | `testHold1` |
 
-第二行就是"一个配对的两边一个为 true、一个为 false"：
+按参数看：
+
+| 参数 | 被 hold 的变量 | 被 hold 的残差 |
+|---|---|---|
+| `testHold1` | T（配对 2 的变量） | `LongEq`（配对 1 的残差） |
+| `testHold2` | x（配对 1 的变量） | `LongEq2`（配对 2 的残差） |
+
+每个参数都 hold 一个配对的**变量**和**另一个**配对的**残差**：这就是交叉 hold。模型中没有写死任何 true/false，运行时设置两个参数就切换工况：
+
+| 运行时设为 true | 被 hold 的变量 | 被 hold 的残差 | 未知量 → 方程 | 含义 |
+|---|---|---|---|---|
+| （无） | ∅ | ∅ | x、T → `LongEq`、`LongEq2` | 两个方程联立求 x 和 T |
+| `testHold1` | {T} | {`LongEq`} | x → `LongEq2` | 给定温度 T，由 `LongEq2` 求 x |
+| `testHold2` | {x} | {`LongEq2`} | T → `LongEq` | 给定转化率 x，由 `LongEq` 求 T |
+| 两个都设 | {x, T} | {`LongEq`、`LongEq2`} | 不用解 | x、T 都给定 |
+
+数值（按方程算出，没有在 OCT 上运行）：
+
+| 工况 | 给定 | 解 |
+|---|---|---|
+| 都不 hold，从 start（x = 1，T = 400）出发 | | x = 0.96387，T = 346.164（唯一的稳态） |
+| `testHold1`，T 设为 330 | T = 330 | x = 11·30/543 = 0.60773 |
+| `testHold2`，x 设为 0.8 | x = 0.8 | T = 328.988 |
+| `testHold2`，x 保持 start 1 | x = 1 | **无解**：x = 1 时 `LongEq` = 120 − 0，和 T 无关 |
+
+最后一行说明**保持值是"当前值"还是"start"有实际影响**：OCT 中被 hold 的 x 保持当前值（用户设的值，或上一次的解 0.96387），能解；如果像现在的 OMC 一样保持 start 1，`LongEq` 就恒等于 120，解不出 T。
+
+### 1.2 一个配对两边的四种组合
+
+在 OCT 中，同一个配对的迭代变量和残差的 hold 是**独立**的，官方例子中每个配对都是"一边 `testHold1`、一边 `testHold2`"。设 `testHold1` = true、`testHold2` = false 时：
 
 | 配对 | 变量的 hold | 残差的 hold | 含义 |
 |---|---|---|---|
-| 1 | `hold_m` = **true** | `hold_valve` = **false** | m 固定；`valve` 仍要成立，只能靠别的变量（u）满足 |
-| 2 | `hold_u` = **false** | `hold_set` = **true** | `set` 去掉；u 仍是未知量，只能由别的方程（`valve`）决定 |
+| 1 | x：**false** | `LongEq`：**true** | `LongEq` 去掉；x 仍是未知量，只能由别的方程（`LongEq2`）决定 |
+| 2 | T：**true** | `LongEq2`：**false** | T 固定；`LongEq2` 仍要成立，只能靠别的变量（x）满足 |
 
-两个配对互相补上：被 hold 的变量 {m} 和残差 {set} 各一个，方程数平衡。
-
-四种组合在 OCT 中的含义：
+两个配对互相补上，方程数平衡。四种组合在 OCT 中的含义：
 
 | 变量的 hold | 残差的 hold | 这个配对 | 方程数 |
 |---|---|---|---|
@@ -104,24 +103,22 @@ end ValveRuntimeHold;
 
 ## 2. 现在的实现的问题
 
-现在按**配对** hold（[HGT_hold.md](HGT_hold.md) §4）：一个配对的 hold 取残差上的，没写就取迭代变量上的，然后整对 hold。所以上例中：
-
-| | 期望（OCT 语义） | 现在 OMC 的结果 |
-|---|---|---|
-| m | 保持在 2 | 保持在 2 |
-| u | 由 `valve` 算出 | 也保持在 start 0.5 |
-| `valve` | 保留，用来解 u | 被去掉 |
-| `set` | 被去掉 | 被去掉 |
-
-两个配对都被整对 hold 了，没有报错，也没有警告。从 OCT 迁移来的、用了交叉 hold 的模型会**静默算错**。
-
-§1.1 那种每一边绑定各自参数的写法（`ValveRuntimeHold`），现在会报错 8009（同一配对的残差和迭代变量的 hold 表达式不同），所以不会算错，但也不能用。两种写法在现在的实现中的结果：
+现在按**配对** hold（[HGT_hold.md](HGT_hold.md) §4）：一个配对的 hold 取残差上的，没写就取迭代变量上的，两边都写时必须是同一个表达式。对 OCT 的写法：
 
 | 写法 | 例子 | 现在的结果 |
 |---|---|---|
 | 两边都写，表达式相同 | `hold = h`、`iterationVariable(hold = h)` | 整对 hold，和 OCT 一致 |
-| 两边都写，表达式不同 | §1.1 `ValveRuntimeHold` | 报错 8009 |
-| 只写一边 | §1 `Valve` | 当成整对 hold，和 OCT **不一致**，没有提示 |
+| 两边都写，表达式不同 | §1.1 官方例子 `twoEqSteadyStateParaHold` | **报错 8009**，官方例子不能用 |
+| 只写一边 | 配对 1 只写 `iterationVariable(hold = h)`，配对 2 只写 `hold = h` | 当成整对 hold，和 OCT **不一致**，没有提示 |
+
+第三种最危险。例如把官方例子改成每个配对只写一边：
+
+```modelica
+0 = 120*x - ... annotation(__Modelon(ResidualEquation(hold = testHold1, iterationVariable = x), name = LongEq));
+0 = -x*(873 - T) + ... annotation(__Modelon(ResidualEquation(iterationVariable(hold = testHold1) = T), name = LongEq2));
+```
+
+OCT 中 `testHold1` = true 的意思是"T 固定，去掉 `LongEq`，由 `LongEq2` 求 x"；现在的 OMC 却把两个配对都整对 hold：x、T 都固定在 start，两条方程都去掉，没有报错，也没有警告。从 OCT 迁移来的这类模型会**静默算错**。
 
 **临时措施**（和下面两个方案无关，应该先做，约半小时）：一个配对只有一边写了 hold（不是字面量 `false`）时给警告，说明"只写一边的 hold 目前按整对处理，和 OCT 不同"；或者直接报错，要求两边都写。
 
@@ -142,12 +139,12 @@ end ValveRuntimeHold;
 
 ```xml
 <HandGuidedTearing version="1">
-  <IterationVariable name="m" hold="design" nominal="1" min="0"/>
-  <IterationVariable name="u" nominal="1"/>
-  <Residual name="$res.valve" residualName="valve" nominal="1"/>
-  <Residual name="$res.set"   residualName="set"   hold="design"/>
-  <Pair residual="$res.valve" iterationVariable="m"/>
-  <Pair residual="$res.set"   iterationVariable="u"/>
+  <IterationVariable name="x" hold="testHold2"/>
+  <IterationVariable name="T" hold="testHold1"/>
+  <Residual name="$res.LongEq"  residualName="LongEq"  hold="testHold1"/>
+  <Residual name="$res.LongEq2" residualName="LongEq2" hold="testHold2"/>
+  <Pair residual="$res.LongEq"  iterationVariable="x"/>
+  <Pair residual="$res.LongEq2" iterationVariable="T"/>
 </HandGuidedTearing>
 ```
 
@@ -195,23 +192,24 @@ class FMUProblem:
 
 **按块分解（可选，提速用）**：有了 `dep[E, U]`，每次求解前可以对子问题做 Tarjan 分块，先解前面的小块再解后面的。交叉 hold 改变了因果关系，分块结果也随之改变，但这是在**运行时**按当前 hold 状态重新算的。
 
-### 3.5 阀门例子
+### 3.5 官方例子
 
-FMU 接口：输入 {m, u}，输出 {valve, set}。依赖：valve 依赖 {m, u}，set 依赖 {u}。
+FMU 接口：输入 {x, T}，输出 {`LongEq`, `LongEq2`}。依赖：两条残差都依赖 {x, T}。
 
 | 工况 | H_v | H_r | U | E | 结构检查 | 结果 |
 |---|---|---|---|---|---|---|
-| 校核 | ∅ | ∅ | {m, u} | {valve, set} | valve–m、set–u | u = u_set，m 由 valve 算出 |
-| 设计 | {m} | {set} | {u} | {valve} | valve–u | m 保持当前值，u 由 valve 反算 |
-| 用 API 只 hold m | {m} | ∅ | {u} | {valve, set} | 个数 1 ≠ 2 | 报错，提示再 hold 一条残差 |
+| 都不 hold | ∅ | ∅ | {x, T} | {LongEq, LongEq2} | 完全匹配 | x = 0.96387，T = 346.164 |
+| `testHold1` | {T} | {LongEq} | {x} | {LongEq2} | LongEq2–x | T 保持当前值，x 由 `LongEq2` 求出 |
+| `testHold2` | {x} | {LongEq2} | {T} | {LongEq} | LongEq–T | x 保持当前值，T 由 `LongEq` 求出 |
+| 用 API 只 hold x | {x} | ∅ | {T} | {LongEq, LongEq2} | 个数 1 ≠ 2 | 报错，提示再 hold 一条残差 |
 
 ```python
-p = FMUProblem("Valve.fmu")
-p.set("design", False); Solver(p).solve()       # 校核：给定开度，算流量
-p.set("m", 2.0); p.set("design", True)
-Solver(p).solve()                               # 设计：给定流量 2.0，反算开度
+p = FMUProblem("twoEqSteadyStateParaHold.fmu")
+Solver(p).solve()                                    # x = 0.96387, T = 346.164
+p.set("testHold1", True); p.set("T", 330.0)
+Solver(p).solve()                                    # T 给定 330，x = 0.60773
 # 不用参数，直接用 API：
-p.holdIterationVariables(["m"]); p.holdResiduals(["set"])
+p.holdIterationVariables(["x"]); p.holdResiduals(["LongEq2"])
 ```
 
 ### 3.6 工作量
@@ -236,25 +234,38 @@ p.holdIterationVariables(["m"]); p.holdResiduals(["set"])
 
 关键观察：同一个 hold 表达式 h 下，设被 hold 的变量集合为 V_h，被 hold 的残差集合为 R_h。只要 |V_h| = |R_h|，把 R_h 中的每条残差换成某个 `v − v.start`（v ∈ V_h），**哪条残差配哪个变量都不影响解**：换上去的方程集合总是 {v − v.start : v ∈ V_h}，不同的对应只是雅可比矩阵的行排列不同。所以用户不需要指定对应关系。
 
-阀门例子改写后：
+官方例子按参数分组：
+
+| 组 | V_h | R_h | 个数 |
+|---|---|---|---|
+| `testHold1` | {T} | {`LongEq`} | 1 = 1 ✓ |
+| `testHold2` | {x} | {`LongEq2`} | 1 = 1 ✓ |
+
+改写后：
 
 ```
-0 = m - u * k * sqrt(dp)                          // valve：不 hold，保留
-0 = if design then m - m.start else u - u_set     // set：换成固定 m 的方程
+LongEq:   0 = if testHold1 then T - T.start
+                           else 120*x - 75*(0.12*exp(12581*(T - 298)/(298*T)))*(1 - x)
+LongEq2:  0 = if testHold2 then x - x.start
+                           else -x*(873 - T) + 11.0*(T - 300)
 ```
 
-`design = true` 时 m 固定，u 由 `valve` 解出，正是期望的语义。
+- 每条残差都换成了**另一个配对**的变量的固定方程：`LongEq` 的位置固定 T，`LongEq2` 的位置固定 x。
+- 两个配对本来就在同一个块中（两条方程都含 x 和 T），不需要额外合并。
+- `testHold1` = true 时 T 固定、x 由 `LongEq2` 求出，正是期望的语义。
+
+但方案二的保持值是 **start**：`testHold2` = true 时 x 固定在 start 1，`LongEq` 恒等于 120，**解不出**（§1.1 最后一行）。要用这个工况，只能改模型，把 start 换成参数（例如 `Real x(start = x0)`），再用 `-override=testHold2=true,x0=0.8` 运行。OCT 保持的是当前值，不需要改模型。
 
 ### 4.2 步骤
 
 | 步骤 | 位置 | 内容 |
 |---|---|---|
-| 1. 分组、检查个数 | 前端 `NFHandGuidedTearing.finish` | 去掉按配对的规则（`checkHold` 和 8009）；按 hold 表达式（`Expression.isEqual`）分组得到 V_h、R_h；个数不等时报新错误，例如"hold = design 固定了 2 个迭代变量，但只去掉了 1 条残差"。同一配对两边都写同一个 h 的情况自然落在同一组，行为和现在一样 |
+| 1. 分组、检查个数 | 前端 `NFHandGuidedTearing.finish` | 去掉按配对的规则（`checkHold` 和 8009）；按 hold 表达式（`Expression.isEqual`）分组得到 V_h、R_h；个数不等时报新错误，例如"hold = testHold1 固定了 2 个迭代变量，但只去掉了 1 条残差"。同一配对两边都写同一个 h 的情况自然落在同一组，行为和现在一样 |
 | 2. 定对应关系 | 后端 `HandGuidedTearing.lower` | 同一配对的变量优先配给自己的残差，其余按名字顺序配对 |
 | 3. 改写 | 后端 `rewriteResidual` | R_h 中第 k 条残差改写成 `if h then V_h[k] − V_h[k].start else 原残差`（原残差照旧除以 nominal） |
-| 4. 合并块 | 后端 `hgtMatching` | 交叉 hold 一般跨块：上例中 `set` 本来自成一块，hold 后 u 要由 `valve` 决定，求解顺序变了。所以同一组涉及的所有配对要强制放进同一个块，复用已有的 `addRing`（相当于对这一组局部打开 `--hgtMergeBLTBlocks`） |
-| 5. 结构检查 | 后端，撕裂之后 | 对每个 h，把 R_h 那几行换成 V_h 的单位行，检查撕裂后的系统在结构上非奇异（迭代变量 × 残差的依赖关系有完全匹配）。上例要求 `valve` 依赖 u，否则 hold 后解不出 u，编译期报错 |
-| 6. 测试和文档 | | 阀门例子两种工况、个数不等、结构奇异、同一配对两边 hold（回归）、C 和 Rust 运行时 |
+| 4. 合并块 | 后端 `hgtMatching` | 交叉 hold 一般跨块：例如被 hold 的残差和被 hold 的变量本来分属先后两个块时，hold 后求解顺序会变。所以同一组涉及的所有配对要强制放进同一个块，复用已有的 `addRing`（相当于对这一组局部打开 `--hgtMergeBLTBlocks`） |
+| 5. 结构检查 | 后端，撕裂之后 | 对每个 h，把 R_h 那几行换成 V_h 的单位行，检查撕裂后的系统在结构上非奇异（迭代变量 × 残差的依赖关系有完全匹配）。官方例子中，`testHold1` 组要求 `LongEq2` 依赖 x，`testHold2` 组要求 `LongEq` 依赖 T，都满足 |
+| 6. 测试和文档 | | 官方例子的各工况（保持值写成参数）、个数不等、结构奇异、同一配对两边 hold（回归）、C 和 Rust 运行时 |
 
 ### 4.3 工作量
 
@@ -271,7 +282,7 @@ p.holdIterationVariables(["m"]); p.holdResiduals(["set"])
 
 - **块变大**：同一组的配对永远合在一个块里，不 hold 时也是，非线性系统变大，可能变慢、更难收敛。
 - **组合检查不完整**：多个 hold 参数同时为 true 的组合，编译期只能逐个参数检查（参数很少时可以枚举全部组合），其余组合到运行时才发现奇异。
-- **和 OCT 仍有差距**：要事先在注解中绑定参数，没有 API hold；保持值是 start；只能在两次运行之间切换。
+- **和 OCT 仍有差距**：要事先在注解中绑定参数，没有 API hold；保持值是 start（官方例子的 `testHold2` 工况因此解不出，要改模型）；只能在两次运行之间切换。
 
 ## 5. 两个方案的比较
 
@@ -322,74 +333,62 @@ p.holdIterationVariables(["m"]); p.holdResiduals(["set"])
 
 ## 7. 附录：OCT 的 Python 脚本
 
-下面的脚本在 OCT 中运行 §1.1 的 `ValveRuntimeHold`：模型中不写任何 true/false，所有 hold 都在运行时通过参数设置。它同时演示 OCT 的 hold 是"保持当前值"：被 hold 的变量保持上一次的解或用户设的值，不是 start。
-
-只核对过这些名字：编译选项 `interactive_fmu`；`oct.steadystate.nlesol` 的 `FMUProblem`、`Solver`；`holdIterationVariables` / `releaseIterationVariables`（按下标）；`printInfo`。函数的参数细节、初始化之后改参数要不要重新初始化，没有核对，要对照所用的 OCT 版本调整。
+手册中运行官方例子的脚本 `parametric_hold_IV.py` 开头如下（原文，只摘到能看到的部分）：
 
 ```python
+import os
 from pymodelica import compile_fmu
 from pyfmi import load_fmu
-from oct.steadystate.nlesol import FMUProblem, Solver
+from oct.steadystate.nlesol import FMUProblem
 
-fmu = compile_fmu("ValveRuntimeHold", "ValveRuntimeHold.mo",
-                  compiler_options={"interactive_fmu": True,
-                                    "hand_guided_tearing": True})
+compiler_opts = {"interactive_fmu": True,
+                 "expose_scalar_equation_blocks_in_interactive_fmu": True,
+                 ...}
+```
+
+注意它打开了 `expose_scalar_equation_blocks_in_interactive_fmu`：连解不出来的单个标量方程也暴露给外部求解器。
+
+下面的后续部分是**按文档推测**写的，演示 §1.1 的各工况和"保持当前值"。只核对过这些名字：`FMUProblem`、`Solver`（在 `oct.steadystate.nlesol` 中）、`holdIterationVariables` / `releaseIterationVariables`（按下标）、`printInfo`；函数的参数细节、初始化之后改参数要不要重新初始化，没有核对，以手册中 `parametric_hold_IV.py` 的实际内容为准。
+
+```python
+from oct.steadystate.nlesol import Solver
+
+fmu = compile_fmu("twoEqSteadyStateParaHold", "ExampleModels.mo",   # 未核对：模型的全名
+                  compiler_options=compiler_opts)
 model = load_fmu(fmu)
 problem = FMUProblem(model)        # 未核对：构造参数
 solver = Solver(problem)
 problem.printInfo("all")
 
-def set_hold(**holds):
-    """运行时设置 hold 参数，没给的一律设成 False。"""
-    for name in ["hold_m", "hold_valve", "hold_u", "hold_set"]:
-        model.set(name, holds.get(name, False))   # 未核对：初始化之后改参数是否需要 reset
-
-# 1. 校核：都不 hold，给定开度 u_set = 1，求流量
-set_hold()
+# 1. 都不 hold：两个方程联立
 solver.solve()
-print("校核:", model.get(["m", "u"]))           # m = 2.0, u = 1.0
+print(model.get(["x", "T"]))                  # x = 0.96387, T = 346.164
 
-# 2. 设计（交叉 hold）：hold 变量 m 和残差 set
-#    m 保持上一次的解 2.0（不是 start 1.0），u 由 valve 反算
-set_hold(hold_m=True, hold_set=True)
-model.set("p_in", 9)                            # dp = 8
+# 2. testHold1：T 固定，去掉 LongEq，由 LongEq2 求 x
+model.set("testHold1", True)                  # 未核对：初始化之后改参数是否需要 reset
+model.set("T", 330.0)                         # T 保持这个值，不是 start 400
 solver.solve()
 problem.printInfo("parametricHold")
-print("设计:", model.get(["m", "u"]))           # m = 2.0, u = 2/sqrt(8) = 0.7071
+print(model.get(["x", "T"]))                  # x = 0.60773, T = 330
 
-# 3. 设计：把 m 设成给定值再求解
-model.set("m", 3.0)
+# 3. testHold2：x 固定，去掉 LongEq2，由 LongEq 求 T
+model.set("testHold1", False)
+model.set("testHold2", True)
+model.set("x", 0.8)
 solver.solve()
-print("设计, m=3:", model.get(["m", "u"]))      # m = 3.0, u = 3/sqrt(8) = 1.0607
+print(model.get(["x", "T"]))                  # x = 0.8, T = 328.988
 
-# 4. 给定开度：hold 变量 u 和残差 set，u 保持当前值 1.0607，求流量
-set_hold(hold_u=True, hold_set=True)
-model.set("p_in", 5)                            # dp = 4
-solver.solve()
-print("给定开度:", model.get(["m", "u"]))       # m = 1.0607*2 = 2.1213, u = 1.0607
-
-# 5. 错误的组合：只 hold m，方程数不平衡，求解前报错
-set_hold(hold_m=True)
-try:
-    solver.solve()
-except Exception as e:
-    print("不平衡:", e)
-
-# 6. 不用参数，直接用 API hold m（下标从 printInfo("all") 查）
-set_hold()
-idx_m = 0                                       # 假设 m 是第 0 个迭代变量
-problem.holdIterationVariables([idx_m])
-#   只 hold 变量还不够，还要去掉一条残差方程数才平衡；
-#   残差的 API 名字没有核对，也可以继续用残差上的参数 hold_set。
-problem.releaseIterationVariables([idx_m])
+# 4. 不用参数，直接用 API hold x（下标从 printInfo("all") 查）
+model.set("testHold2", False)
+problem.holdIterationVariables([0])           # 假设 x 是第 0 个迭代变量
+#   只 hold 变量还不够，还要去掉一条残差，方程数才平衡
+problem.releaseIterationVariables([0])
 ```
 
-| 步骤 | 设为 true 的 hold 参数 | p_in | m | u | 说明 |
-|---|---|---|---|---|---|
-| 1 校核 | （无） | 5 | 2.0 | 1.0 | 都求解 |
-| 2 设计 | `hold_m`、`hold_set` | 9 | 2.0 | 0.7071 | m 保持第 1 步的解 |
-| 3 设计 | `hold_m`、`hold_set` | 9 | 3.0 | 1.0607 | m 是用户设的值 |
-| 4 给定开度 | `hold_u`、`hold_set` | 5 | 2.1213 | 1.0607 | u 保持第 3 步的解 |
-| 5 | `hold_m` | | | | 不平衡，报错 |
+| 步骤 | 设为 true 的参数 | 给定 | x | T |
+|---|---|---|---|---|
+| 1 | （无） | | 0.96387 | 346.164 |
+| 2 | `testHold1` | T = 330 | 0.60773 | 330 |
+| 3 | `testHold2` | x = 0.8 | 0.8 | 328.988 |
 
-同样的模型在现在的 OMC 中：注解换成 `__OpenModelica_HGT` 后报错 8009（§2）；即使改成只写一边，也会被当成整对 hold，而且保持值是 start（第 2 步得到 m = 1.0），也没有运行时的个数和结构检查。方案一实现之后，结果应和上表一致。
+同一个模型在现在的 OMC 中（注解换成 `__OpenModelica_HGT`）：每个配对两边的 hold 是不同的参数，报错 8009（§2）。方案二实现后，第 1、2 步可以算（第 2 步要把 T 的 start 写成参数才能给 330），第 3 步要把 x 的 start 写成参数，否则保持在 1 解不出；方案一实现后，结果应和上表一致。

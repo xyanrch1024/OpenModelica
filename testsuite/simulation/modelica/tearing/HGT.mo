@@ -215,7 +215,7 @@ package HGT "Hand guided tearing (OCT compatible) test models, steady state"
     x .^ 2 = c annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable(nominal = c) = x)));
   end MatrixPair;
 
-  model Hold "OCT twoEqSteadyStateParaHold: h keeps x at x0 instead of solving x * y = 2"
+  model Hold "a held pair: h keeps x at x0 instead of solving x * y = 2"
     parameter Boolean h = false;
     parameter Real x0 = 1.5;
     Real x(start = 1), y(start = 1);

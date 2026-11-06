@@ -57,7 +57,7 @@
 
 - `NonConvex` / `NonConvexNHGT`（p. 175–177）：两层嵌套，level 2 给定 x1 求 x2，level 1 求 x1。
 - `Test`（p. 179–182）：两层嵌套，并在 level 2 用 `iterationVariable(max=20-x1)=x2` 设置自适应边界。
-- `twoEqSteadyStateParaHold`（p. 125）：`hold` 与 `name` 和 `ResidualEquation` 写在一起。
+- `twoEqSteadyStateParaHold`（p. 125，脚本 `parametric_hold_IV.py`）：两个配对，每个配对的残差和迭代变量分别绑定 `testHold1`、`testHold2` 两个不同的参数（交叉 hold，见 HGT_cross_hold.md）；`hold` 与 `name` 和 `ResidualEquation` 写在一起。
 - `TestUnpaired`（p. 158）：组件之间的未配对迭代变量和残差，配合 `merge_blt_blocks=true` 使用。
 - 系统级 `tearingPairs` 示例（p. 172）。
 

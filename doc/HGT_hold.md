@@ -41,7 +41,27 @@ OCT 手册（设计文档 [HGT_design.md](HGT_design.md) 的 R10，出自手册�
 
 - `hold` 绑定一个 Boolean 参数，默认 false；可以写在残差方程上，也可以写在迭代变量上。
 - 为 true 时，在**交互式 FMU 的稳态求解器**（Python 的 `FMUProblem`）中，被 hold 的迭代变量不参与求解（保持当前值），被 hold 的残差也不参与求解。
-- 典型用法是"设计工况 / 校核工况"切换：设计工况下某个量（例如流量）是给定的，那条方程不要；校核工况下由那条方程求出这个量。官方例子是 `twoEqSteadyStateParaHold`（手册第 125 页）。
+- 典型用法是"设计工况 / 校核工况"切换：设计工况下某个量是给定的，那条方程不要；校核工况下由那条方程求出这个量。
+
+OCT 手册 "Specification of Hand Guided Tearing" 一章的官方例子 `twoEqSteadyStateParaHold`（运行脚本 `parametric_hold_IV.py`）：
+
+```modelica
+model twoEqSteadyStateParaHold
+  Real x (start = 1);
+  Real T (start = 400);
+  parameter Boolean testHold1 = false;
+  parameter Boolean testHold2 = false;
+equation
+  0 = 120*x - 75*(0.12*exp(12581*(T - 298)/(298*T)))*(1 - x)
+    annotation(__Modelon(ResidualEquation(hold = testHold1,
+      iterationVariable(hold = testHold2)=x), name = LongEq));
+  0 = -x*(873 - T) + 11.0*(T - 300)
+    annotation(__Modelon(ResidualEquation(hold = testHold2,
+      iterationVariable(hold = testHold1)=T), name = LongEq2));
+end twoEqSteadyStateParaHold;
+```
+
+每个配对的残差和迭代变量绑定的是**不同**的参数：`testHold1` hold 变量 T 和**另一个**配对的残差 `LongEq`，`testHold2` hold 变量 x 和残差 `LongEq2`。这是**交叉 hold**，现在的实现不支持：两边的 hold 表达式不同，报错 8009。怎样支持见 [HGT_cross_hold.md](HGT_cross_hold.md)。本文的实现只覆盖"一个配对两边同时 hold"的情况，§9 的例子就是这种。
 
 OMC 没有交互式 FMU，所以这里把 hold 做成编译出来的模型中的**运行时开关**：效果相当于 OCT 在 `FMUProblem` 里 hold 之后再求解一次。差别见 §11。
 
@@ -248,7 +268,7 @@ resultVars[0] = (h) ? seedVars[0]                         /* d(x - $START.x)/dx 
 `testsuite/simulation/modelica/tearing/HGT.mo` 中的 `Hold`：
 
 ```modelica
-model Hold "OCT twoEqSteadyStateParaHold: h keeps x at x0 instead of solving x * y = 2"
+model Hold "a held pair: h keeps x at x0 instead of solving x * y = 2"
   parameter Boolean h = false;
   parameter Real x0 = 1.5;
   Real x(start = 1), y(start = 1);
@@ -295,10 +315,11 @@ C 和 Rust 两个 omc 都跑过全部 HGT 测试。
 | 粒度 | 迭代变量和残差可以分开 hold，`FMUProblem` 也能按名字 hold/release | 按配对；两边都写时必须相同 |
 | 保持值 | 变量的当前值（用户设的值或上一次的解） | 变量的 start 值；要改就把 start 写成参数 |
 | 切换 | 交互式 FMU 中改参数后重新求解 | 两次运行之间用 `-override` |
+| 官方例子 `twoEqSteadyStateParaHold`（§2） | 支持 | 报错 8009（交叉 hold，见 [HGT_cross_hold.md](HGT_cross_hold.md)） |
 
 说明：
 
-- **保持值**：hold 是参数，一次运行里不会切换，运行开始时变量的"当前值"就是 start，所以在 OMC 的用法下两者结果相同。只有在同一次运行中途从不 hold 切到 hold 时才会不同，而 OMC 不支持这种切换。
+- **保持值**：hold 是参数，一次运行里不会切换，运行开始时变量的"当前值"就是 start，所以在 OMC 的用法下两者结果相同。但 OCT 的用户通常先 `set` 一个值再 hold，这在 OMC 中只能把 start 写成参数再 `-override`。这个差别有实际影响：官方例子中如果 x 保持在 start 1，`LongEq` 恒等于 120，解不出 T（见 [HGT_cross_hold.md](HGT_cross_hold.md) §1.1）。
 - **按配对**：这是有意的限制。分开 hold 时，被 hold 的变量和残差个数必须相等，还要决定被 hold 的残差由哪个变量的固定方程顶替；没有交互式 FMU 那一层，这样做只会让结构变得难以预测。
 - **非标量方程**：hold 只支持标量方程，其他种类给警告 8007 后忽略。
 - OCT 那边"普通仿真时 hold 是否生效"手册没有明说，上表是根据"在 `FMUProblem` 中被保持"推断的。

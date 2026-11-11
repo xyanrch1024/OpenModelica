@@ -10,6 +10,7 @@
 - [HGT_hold.md](HGT_hold.md)：按配对、编译期改写的 hold 方案（实现已撤销，保留为设计记录；现在 hold 只解析，给警告 8009 后忽略）
 - [HGT_steady_state_runtime.md](HGT_steady_state_runtime.md)：交互式 FMU 和 Python 稳态接口的设计，方案一以它为基础
 - [HGT_matching_and_tearing.md](HGT_matching_and_tearing.md)：`hgtMatching` 和撕裂，方案二要改这里
+- [HGT_hold_runtime.md](HGT_hold_runtime.md)：第三个方案，在现有仿真运行时中按实际 hold 组合做替换、个数检查和结构检查
 
 ## 目录
 

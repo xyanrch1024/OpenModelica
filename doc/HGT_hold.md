@@ -1,5 +1,7 @@
 # HGT 的 hold 实现说明
 
+> **状态：本文描述的实现已经撤销。** 实现提交 8658422c 和修复提交 8c54d7e9 已被 revert，代码、测试（`HGTHold1.mos`、`HGTError13.mo`、`HGT.mo` 中的 `Hold*` 模型）都已恢复到实现之前的状态：现在 `hold` 只解析、存储，给警告 8009（`HGT_HOLD_NOT_SUPPORTED`）后忽略。本文保留下来，作为"按配对、编译期改写残差"这一方案的设计记录；文中的函数名、测试和错误号指的是撤销前的代码，可以用 `git show 8658422c` 查看。交叉 hold 的方案见 [HGT_cross_hold.md](HGT_cross_hold.md)。
+
 本文讲解手动引导撕裂（HGT）注解中 `hold` 属性的含义和实现：语法、前端检查、后端怎样改写残差方程、生成的代码，以及和 OCT 的差别。
 
 - 前端：`OMCompiler/Compiler/NFFrontEnd/NFHandGuidedTearing.mo`（`parseHold`、`checkHold`）

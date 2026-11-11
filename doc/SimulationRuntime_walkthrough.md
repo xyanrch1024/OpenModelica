@@ -5,7 +5,7 @@
 - 运行时代码：`OMCompiler/SimulationRuntime/c/`
 - FMI 导出：`OMCompiler/SimulationRuntime/fmi/export/openmodelica/`
 - Rust 运行时：`OMCompiler/SimulationRuntime/rust/`
-- 例子用的是 `testsuite/simulation/modelica/tearing/HGT.mo` 中的 `HGT.Hold`（x + y = 3，x·y = 2，带 hold 的 HGT 配对），编译后的文件名前缀为 `Hold`。
+- 例子是一个小模型 `Hold`：x + y = 3，x·y = 2，用 HGT 把 x·y = 2 配给 x（`ResidualEquation(iterationVariable = x, nominal = 2)`），编译后的文件名前缀为 `Hold`。它最初来自 hold 实现时的测试模型 `HGT.Hold`，hold 实现已撤销，这里只用它演示运行时的结构。
 
 文中的行号对应当前分支，函数名不会变，行号可能会漂移。
 
@@ -127,7 +127,7 @@ void residualFunc4(RESIDUAL_USERDATA* userData, const double* xloc, double* res,
   ...
   (data->localData[0]->realVars[0] /* x */) = xloc[0];   /* 迭代变量 */
   Hold_eqFunction_1(data, threadData);                    /* 内部方程：y = 3 - x */
-  res[0] = h ? x - x.start : 0.5 * (x * y) - 1.0;         /* 残差（HGT 改写后） */
+  res[0] = 0.5 * (x * y) - 1.0;                           /* 残差：(x*y - 2)/2，nominal = 2 */
 }
 ```
 
@@ -467,7 +467,7 @@ HGT 的大部分工作在编译器里完成，运行时只多了一点：
 | `nonlinearSolverHomotopy.c` | Newton 迭代点投影到界内 |
 | Rust `nls.rs` | 以上逻辑的 Rust 版 |
 
-hold 不需要运行时支持：它在生成的残差表达式中（§3.2 的 `res[0] = h ? ... : ...`），见 [HGT_hold.md](HGT_hold.md)。
+hold 现在不支持（只解析，给警告 8009 后忽略）。已撤销的按配对实现（[HGT_hold.md](HGT_hold.md)）也不需要运行时支持：它把开关编译进生成的残差表达式。
 
 ## 14. 读代码的顺序与调试
 

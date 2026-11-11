@@ -5,7 +5,7 @@
 相关文档：
 
 - [HGT_developer_guide.md](HGT_developer_guide.md)：HGT 的整体实现
-- [HGT_hold.md](HGT_hold.md)：现在的 hold 实现（编译期改写残差）
+- [HGT_hold.md](HGT_hold.md)：按配对、编译期改写残差的 hold 方案（实现已撤销；现在 hold 只解析，给警告 8009 后忽略）
 - [HGT_matching_and_tearing.md](HGT_matching_and_tearing.md)：后端的匹配与撕裂
 - [HGT_design.md](HGT_design.md)：OCT 规范要点（R1–R11）
 
@@ -63,7 +63,7 @@
 | 部分 | 现在 |
 |---|---|
 | 运行时 | 仿真运行时：初始化后时间积分；HGT 块在每一步由通用非线性求解器（homotopy、hybrid、KINSOL）各自求解 |
-| hold | 编译期把残差改写成 `if hold then x - $START.x else ...`；按配对；保持 start 值；两次运行之间用 `-override` 切换（见 [HGT_hold.md](HGT_hold.md)） |
+| hold | 不支持：只解析，给警告 8009 后忽略。曾经实现过按配对的编译期改写（[HGT_hold.md](HGT_hold.md)），已撤销 |
 | 残差 nominal | 除进方程；默认被求解器按雅可比矩阵的自动缩放抵消 |
 | min/max | 起点投影加解检查（`hgtBounds`），迭代中间不保证在界内 |
 | FMU 中的求解器 | 只带 hybrid、homotopy 和 CVODE（`RuntimeSources.mo`），**没有 KINSOL** |
@@ -124,7 +124,7 @@
 | 合并 | 实际 hold 集合 = API 设的 hold ∪ parametric hold |
 | 结构奇异 | 平衡但结构奇异（例如 hold 掉的变量正好是某条释放残差唯一依赖的变量）时，Newton 的雅可比矩阵奇异；第一版报错，给出秩亏的行列 |
 
-和现在 [HGT_hold.md](HGT_hold.md) 的区别：那里是按配对、保持 start、两次运行之间切换；这里是 OCT 的完整语义。
+和 [HGT_hold.md](HGT_hold.md) 中已撤销的方案的区别：那里是按配对、保持 start、两次运行之间切换；这里是 OCT 的完整语义。
 
 ### 6.3 状态
 
@@ -304,7 +304,7 @@ for k in 1..maxIter:
 
 | | 现在（仿真运行时） | 稳态运行时 |
 |---|---|---|
-| hold | 按配对；保持 start；两次运行之间用 `-override` | 变量和残差可以分开、跨块；保持当前值；同一会话里随时 hold / release |
+| hold | 不支持，给警告 8009 后忽略 | 变量和残差可以分开、跨块；保持当前值；同一会话里随时 hold / release |
 | 求解 | 每个块各自求解，要走时间积分 | 一次全局 Newton，没有积分器 |
 | 残差 nominal | 除进方程，基本被自动缩放抵消 | 求解器真正使用，支持 auto / manual / hybrid |
 | min/max | 起点投影加解检查 | 每一步都投影，1×1 可以用 Brent |

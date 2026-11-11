@@ -7,7 +7,7 @@
 
 相关文档：
 
-- [HGT_hold.md](HGT_hold.md)：现在的 hold 实现（按配对、编译期改写）
+- [HGT_hold.md](HGT_hold.md)：按配对、编译期改写的 hold 方案（实现已撤销，保留为设计记录；现在 hold 只解析，给警告 8009 后忽略）
 - [HGT_steady_state_runtime.md](HGT_steady_state_runtime.md)：交互式 FMU 和 Python 稳态接口的设计，方案一以它为基础
 - [HGT_matching_and_tearing.md](HGT_matching_and_tearing.md)：`hgtMatching` 和撕裂，方案二要改这里
 
@@ -95,7 +95,7 @@ end twoEqSteadyStateParaHold;
 | 变量的 hold | 残差的 hold | 这个配对 | 方程数 |
 |---|---|---|---|
 | false | false | 正常求解 | 不变 |
-| true | true | 整对去掉：变量固定，残差不要（[HGT_hold.md](HGT_hold.md) 现在支持的就是这种） | 不变 |
+| true | true | 整对去掉：变量固定，残差不要（[HGT_hold.md](HGT_hold.md) 中已撤销的按配对实现支持的就是这种） | 不变 |
 | true | false | 变量固定，但残差还在：要由**别的配对**释放出来的变量满足 | 少一个未知量，必须有别处 hold 一条残差 |
 | false | true | 残差去掉，但变量还在：要由**别的配对**的残差决定 | 少一条方程，必须有别处 hold 一个变量 |
 
@@ -103,24 +103,16 @@ end twoEqSteadyStateParaHold;
 
 ## 2. 现在的实现的问题
 
-现在按**配对** hold（[HGT_hold.md](HGT_hold.md) §4）：一个配对的 hold 取残差上的，没写就取迭代变量上的，两边都写时必须是同一个表达式。对 OCT 的写法：
+现在的 OMC **不支持 hold**：前端解析并存储 `hold`，只要有一个 hold 不是字面量 `false`，就给警告 8009（"The hold attribute of hand guided tearing is not supported yet and is ignored."），然后按"都不 hold"求解。
 
 | 写法 | 例子 | 现在的结果 |
 |---|---|---|
-| 两边都写，表达式相同 | `hold = h`、`iterationVariable(hold = h)` | 整对 hold，和 OCT 一致 |
-| 两边都写，表达式不同 | §1.1 官方例子 `twoEqSteadyStateParaHold` | **报错 8009**，官方例子不能用 |
-| 只写一边 | 配对 1 只写 `iterationVariable(hold = h)`，配对 2 只写 `hold = h` | 当成整对 hold，和 OCT **不一致**，没有提示 |
+| 不写 hold，或只写字面量 `false` | | 正常求解，没有警告 |
+| 写了参数或 `true` | §1.1 官方例子 `twoEqSteadyStateParaHold` | 警告 8009，hold 被忽略，按"都不 hold"求解（x = 0.96387，T = 346.164），不管 `testHold1`、`testHold2` 设成什么 |
 
-第三种最危险。例如把官方例子改成每个配对只写一边：
+所以现在不会静默算错（总有警告），但 hold 完全不起作用。
 
-```modelica
-0 = 120*x - ... annotation(__Modelon(ResidualEquation(hold = testHold1, iterationVariable = x), name = LongEq));
-0 = -x*(873 - T) + ... annotation(__Modelon(ResidualEquation(iterationVariable(hold = testHold1) = T), name = LongEq2));
-```
-
-OCT 中 `testHold1` = true 的意思是"T 固定，去掉 `LongEq`，由 `LongEq2` 求 x"；现在的 OMC 却把两个配对都整对 hold：x、T 都固定在 start，两条方程都去掉，没有报错，也没有警告。从 OCT 迁移来的这类模型会**静默算错**。
-
-**临时措施**（和下面两个方案无关，应该先做，约半小时）：一个配对只有一边写了 hold（不是字面量 `false`）时给警告，说明"只写一边的 hold 目前按整对处理，和 OCT 不同"；或者直接报错，要求两边都写。
+曾经有过一版按**配对**的实现（[HGT_hold.md](HGT_hold.md)，已撤销）：一个配对的 hold 取残差上的，没写就取迭代变量上的，两边都写时必须是同一个表达式。它对官方例子报错（两边的表达式不同），而且只写一边时会把交叉 hold 静默当成整对 hold。撤销的原因之一就是它和 OCT 的交叉 hold 语义不一致。下面两个方案都按 OCT 的语义来设计。
 
 ## 3. 方案一：交互式稳态求解器
 
@@ -149,7 +141,7 @@ OCT 中 `testHold1` = true 的意思是"T 固定，去掉 `LongEq`，由 `LongEq
 ```
 
 - `Pair` 只作参考（日志、初值），求解时不依赖它。
-- 交互模式下编译器不做 `if hold` 改写，也不检查"两边 hold 必须相同"（8009）。
+- 交互模式下 hold 由外层求解器处理，编译器不再对 hold 给警告 8009。
 
 **(2) 残差对迭代变量的依赖关系**：FMI 2.0 的 `<ModelStructure><Outputs>` 本来就记录每个输出依赖哪些输入。残差是输出、迭代变量是输入，所以这就是全局雅可比矩阵的稀疏结构，用于结构检查和按块分解。OMC 已经会为普通 FMU 生成 ModelStructure，需要确认它在"HGT 块只求值"的路径下也正确。
 
@@ -218,7 +210,7 @@ p.holdIterationVariables(["x"]); p.holdResiduals(["LongEq2"])
 
 | 内容 | 工作量 |
 |---|---|
-| 编译器：hold 按变量、残差分别导出；交互模式下不改写、不检查 8009 | 0.5 天 |
+| 编译器：hold 按变量、残差分别导出；交互模式下不给警告 8009 | 0.5 天 |
 | 确认 ModelStructure 的依赖关系在"只求值"路径下正确，必要时补上 | 1–2 天 |
 | 求解器：hold 集合、个数检查、二部图结构检查、取子雅可比矩阵 | 2 天 |
 | 诊断信息（`printInfo('held')`、列出不匹配的项） | 0.5 天 |
@@ -230,7 +222,7 @@ p.holdIterationVariables(["x"]); p.holdResiduals(["LongEq2"])
 
 ### 4.1 思路
 
-沿用现在的做法：把 hold 编译进残差表达式，用参数在运行时切换。区别是不再按配对，而是**按 hold 表达式分组**。
+沿用 [HGT_hold.md](HGT_hold.md)（已撤销）的做法：把 hold 编译进残差表达式，用参数在运行时切换。区别是不再按配对，而是**按 hold 表达式分组**。
 
 关键观察：同一个 hold 表达式 h 下，设被 hold 的变量集合为 V_h，被 hold 的残差集合为 R_h。只要 |V_h| = |R_h|，把 R_h 中的每条残差换成某个 `v − v.start`（v ∈ V_h），**哪条残差配哪个变量都不影响解**：换上去的方程集合总是 {v − v.start : v ∈ V_h}，不同的对应只是雅可比矩阵的行排列不同。所以用户不需要指定对应关系。
 
@@ -260,9 +252,9 @@ LongEq2:  0 = if testHold2 then x - x.start
 
 | 步骤 | 位置 | 内容 |
 |---|---|---|
-| 1. 分组、检查个数 | 前端 `NFHandGuidedTearing.finish` | 去掉按配对的规则（`checkHold` 和 8009）；按 hold 表达式（`Expression.isEqual`）分组得到 V_h、R_h；个数不等时报新错误，例如"hold = testHold1 固定了 2 个迭代变量，但只去掉了 1 条残差"。同一配对两边都写同一个 h 的情况自然落在同一组，行为和现在一样 |
+| 1. 分组、检查个数 | 前端 `NFHandGuidedTearing.finish` | 把"hold 不支持"的警告 8009 去掉；按 hold 表达式（`Expression.isEqual`）分组得到 V_h、R_h；个数不等时报新错误，例如"hold = testHold1 固定了 2 个迭代变量，但只去掉了 1 条残差"。同一配对两边都写同一个 h 的情况自然落在同一组，行为和现在一样 |
 | 2. 定对应关系 | 后端 `HandGuidedTearing.lower` | 同一配对的变量优先配给自己的残差，其余按名字顺序配对 |
-| 3. 改写 | 后端 `rewriteResidual` | R_h 中第 k 条残差改写成 `if h then V_h[k] − V_h[k].start else 原残差`（原残差照旧除以 nominal） |
+| 3. 改写 | 后端 `lower`（现在只有 `scaleResidual`，可以恢复已撤销的 `rewriteResidual` 再扩展） | R_h 中第 k 条残差改写成 `if h then V_h[k] − V_h[k].start else 原残差`（原残差照旧除以 nominal） |
 | 4. 合并块 | 后端 `hgtMatching` | 交叉 hold 一般跨块：例如被 hold 的残差和被 hold 的变量本来分属先后两个块时，hold 后求解顺序会变。所以同一组涉及的所有配对要强制放进同一个块，复用已有的 `addRing`（相当于对这一组局部打开 `--hgtMergeBLTBlocks`） |
 | 5. 结构检查 | 后端，撕裂之后 | 对每个 h，把 R_h 那几行换成 V_h 的单位行，检查撕裂后的系统在结构上非奇异（迭代变量 × 残差的依赖关系有完全匹配）。官方例子中，`testHold1` 组要求 `LongEq2` 依赖 x，`testHold2` 组要求 `LongEq` 依赖 T，都满足 |
 | 6. 测试和文档 | | 官方例子的各工况（保持值写成参数）、个数不等、结构奇异、同一配对两边 hold（回归）、C 和 Rust 运行时 |
@@ -308,7 +300,7 @@ LongEq2:  0 = if testHold2 then x - x.start
 | 改动位置 | 编译器少量（导出信息）+ Python 求解器 | 前端、`lower`、`hgtMatching`、新的结构检查 |
 | 运行时改动 | C 和 Rust 运行时都不用改；求解器在 Python 中 | 不用改；开关在生成的代码中 |
 | 性能影响 | 不 hold 时没有影响 | 不 hold 时块也变大 |
-| 和现在的 hold 的关系 | 交互模式下取代编译期改写；普通仿真仍用现在的实现 | 扩展现在的实现 |
+| 和现在的关系（hold 不支持） | 只在交互模式下支持 hold；普通仿真中 hold 仍被忽略 | 普通仿真和普通 FMU 中都支持 hold；可以复用 [HGT_hold.md](HGT_hold.md) 中已撤销实现的改写代码 |
 | 风险 | 交互式 FMU 本身的风险（只求值的代码生成、FMI 调用开销） | 合并块带来的收敛问题；结构检查只覆盖部分组合 |
 
 ### 5.3 优缺点小结
@@ -391,4 +383,4 @@ problem.releaseIterationVariables([0])
 | 2 | `testHold1` | T = 330 | 0.60773 | 330 |
 | 3 | `testHold2` | x = 0.8 | 0.8 | 328.988 |
 
-同一个模型在现在的 OMC 中（注解换成 `__OpenModelica_HGT`）：每个配对两边的 hold 是不同的参数，报错 8009（§2）。方案二实现后，第 1、2 步可以算（第 2 步要把 T 的 start 写成参数才能给 330），第 3 步要把 x 的 start 写成参数，否则保持在 1 解不出；方案一实现后，结果应和上表一致。
+同一个模型在现在的 OMC 中（注解换成 `__OpenModelica_HGT`）：hold 被忽略，给警告 8009（§2），三步都按"都不 hold"求解，得到同一个解。方案二实现后，第 1、2 步可以算（第 2 步要把 T 的 start 写成参数才能给 330），第 3 步要把 x 的 start 写成参数，否则保持在 1 解不出；方案一实现后，结果应和上表一致。

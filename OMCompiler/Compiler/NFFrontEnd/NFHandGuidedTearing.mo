@@ -639,11 +639,11 @@ public
       return;
     end if;
 
-    if not List.fold(residuals, checkHold, true) then
-      fail();
-    end if;
-
     s := SPEC(residuals);
+
+    if hasHold(s) then
+      Error.addMessage(Error.HGT_HOLD_NOT_SUPPORTED, {});
+    end if;
 
     if Flags.isSet(Flags.HGT_DUMP) then
       print(Spec.toString(s));
@@ -990,29 +990,40 @@ protected
     str := if listEmpty(strl) then "" else " (" + stringDelimitList(strl, ", ") + ")";
   end attrsString;
 
-  function checkHold
-    "A pair is held as a whole, so if both the residual equation and its
-     iteration variable have a hold attribute they must be the same, also if
-     one of them is a literal false."
-    input ResidualEquation residual;
-    input output Boolean ok;
+  function hasHold
+    "True if any item may be held: a hold attribute that is not literally false."
+    input Spec spec;
+    output Boolean hold = false;
   protected
     IterationVariable var;
-    Expression rh, vh;
   algorithm
-    SOME(var) := residual.iterationVariable;
-
-    if isSome(residual.hold) and isSome(var.hold) then
-      SOME(rh) := residual.hold;
-      SOME(vh) := var.hold;
-
-      if not Expression.isEqual(rh, vh) then
-        Error.addSourceMessage(Error.HGT_HOLD_MISMATCH,
-          {residual.name, Expression.toString(rh), ComponentRef.toString(var.name), Expression.toString(vh)}, residual.info);
-        ok := false;
+    for r in spec.residuals loop
+      if isHeld(r.hold) then
+        hold := true;
+        return;
       end if;
-    end if;
-  end checkHold;
+
+      if isSome(r.iterationVariable) then
+        SOME(var) := r.iterationVariable;
+
+        if isHeld(var.hold) then
+          hold := true;
+          return;
+        end if;
+      end if;
+    end for;
+  end hasHold;
+
+  function isHeld
+    input Option<Expression> hold;
+    output Boolean held;
+  algorithm
+    held := match hold
+      case SOME(Expression.BOOLEAN(value = false)) then false;
+      case SOME(_) then true;
+      else false;
+    end match;
+  end isHeld;
 
   function checkOnlyPairs
     "The residual equations and iteration variables must be paired explicitly,

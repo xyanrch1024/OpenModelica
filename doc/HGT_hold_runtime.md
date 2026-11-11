@@ -1,6 +1,6 @@
 # HGT hold 的运行时方案（在现有仿真运行时中实现）
 
-本文是设计文档，**还没有实现**。它重新设计 hold：编译器只做准备，**hold 的选择、个数检查和结构检查都在运行时完成**，而且就在现有的 C 仿真运行时（和 Rust 运行时）中做，不依赖交互式 FMU 和 Python。
+本文是设计文档，**还没有实现**。它重新设计 hold：编译器只做准备，**hold 的选择、个数检查和结构检查都在运行时完成**，而且就在现有的 C 仿真运行时中做，不依赖交互式 FMU 和 Python。Rust 运行时（`--simCodeTarget=C+Rust`）暂时不做，见 §11。
 
 相关文档：
 
@@ -97,9 +97,9 @@
 
 ### 4.3 SimCode 与代码生成
 
-对每个带 hold 的非线性系统，`NONLINEAR_SYSTEM_DATA` 中新增一组静态数据（`initializeStaticDataNLS<N>` 中设置）：
+对每个带 hold 的非线性系统，生成一组静态数据（`initializeStaticDataNLS<N>` 中设置）。为了让 `NONLINEAR_SYSTEM_DATA` 的布局变化最小（Rust 运行时要镜像这个结构，见 §11），这些数据放进一个单独的结构 `HGT_HOLD_DATA`，`NONLINEAR_SYSTEM_DATA` 末尾只加一个指针 `hgtHold`，没有 hold 的系统为 `NULL`：
 
-| 字段 | 内容 |
+| `HGT_HOLD_DATA` 的字段 | 内容 |
 |---|---|
 | `hgtNHoldVars`、`hgtHoldVarIdx[]` | 可能被 hold 的迭代变量在本系统迭代向量中的下标 |
 | `hgtNHoldRes`、`hgtHoldResIdx[]` | 可能被 hold 的残差在本系统残差向量中的下标 |
@@ -240,7 +240,7 @@ result[r] = seed[v] / sys->nominal[v];      /* 对每个 (r, v) ∈ hgtHoldMap *
 
 ## 10. 诊断信息
 
-运行时的新消息（C 和 Rust 文字相同）：
+运行时的新消息：
 
 | 情况 | 消息 |
 |---|---|
@@ -259,12 +259,16 @@ result[r] = seed[v] / sys->nominal[v];      /* 对每个 (r, v) ∈ hgtHoldMap *
 
 ## 11. Rust 运行时
 
-`--simCodeTarget=C+Rust` 时生成的 C 代码不变，所以：
+**暂时不做**。第一版只在 C 运行时中实现，但有两件事必须现在就处理，否则会影响 Rust 运行时的所有模型：
 
-- `abi.rs` 中 `NONLINEAR_SYSTEM_DATA` 的镜像加上 §4.3 的字段（顺序必须和 C 一致）；
-- `nls.rs` 实现 §5 的激活、个数检查、结构检查；
-- 导出 C ABI 的 `hgtApplyHoldResidual`、`hgtApplyHoldJacobian`，供生成的代码调用；
-- 诊断文字和 C 相同，测试结果两边比对。
+| 事项 | 原因 | 做法 |
+|---|---|---|
+| 结构布局 | Rust 运行时的 `abi.rs` 按 C 的布局镜像 `NONLINEAR_SYSTEM_DATA`，生成的 C 代码按 C 的 `sizeof` 访问系统数组。C 中加了字段而 Rust 没加，**所有**带非线性系统的模型都会访问错位 | `abi.rs` 的镜像同步加上 `hgtHold` 指针（只加一个字段，Rust 运行时总把它当作 `NULL`） |
+| 带 hold 的模型 | Rust 运行时不处理 hold，带 hold 的模型如果照常编译，hold 会被静默忽略 | `--simCodeTarget=C+Rust` 且模型中有不是字面量 `false` 的 hold 时，编译期报错（或警告后忽略 hold，和以前的 8009 一样），明确说明 Rust 运行时还不支持 hold |
+
+如果钩子采用"在生成的残差函数末尾调用"的方式（§4.3），生成代码中会出现对 `hgtApplyHoldResidual` 的调用，Rust 运行时没有这个符号会链接失败；上面第二项在编译期就挡住了带 hold 的模型，所以不会走到这一步。如果钩子采用"运行时替换函数指针"的方式，生成代码不变，也就没有这个问题。
+
+以后要支持时：`nls.rs` 实现 §5 的激活、个数检查和结构检查，导出 `hgtApplyHoldResidual`、`hgtApplyHoldJacobian`（或实现指针替换），诊断文字和 C 相同，测试两边比对。估计 2–3 天。
 
 ## 12. 和其他方案的比较
 
@@ -279,10 +283,10 @@ result[r] = seed[v] / sys->nominal[v];      /* 对每个 (r, v) ∈ hgtHoldMap *
 | API hold（不用参数） | 不能 | 不能 | 可以加运行时选项（阶段 2） | 能 |
 | 跨块 | 不涉及 | 编译期合并 | 编译期合并带 hold 的配对 | 运行时重新分块 |
 | 普通仿真、普通 FMU | 能 | 能 | 能 | 不能 |
-| 运行时改动 | 无 | 无 | C 和 Rust 运行时各加一部分 | 新的 Python 包 |
+| 运行时改动 | 无 | 无 | C 运行时加一部分（Rust 运行时以后再做） | 新的 Python 包 |
 | 工作量 | （已撤销） | 3–5 天 | 约 2–2.5 周 | 交互式 FMU 5–6 周 + 5–6 天 |
 
-本文的方案在现有运行时中做到了和 OCT 最接近的语义（交叉 hold、按实际组合检查、保持值可以给定），代价是要改运行时（C 和 Rust 各一份），以及带 hold 的配对在编译期被合并成一个块。
+本文的方案在现有运行时中做到了和 OCT 最接近的语义（交叉 hold、按实际组合检查、保持值可以给定），代价是要改 C 运行时（Rust 运行时以后再做），以及带 hold 的配对在编译期被合并成一个块。
 
 ## 13. 分阶段计划与工作量
 
@@ -290,9 +294,10 @@ result[r] = seed[v] / sys->nominal[v];      /* 对每个 (r, v) ∈ hgtHoldMap *
 |---|---|---|
 | **1. 编译器** | 前端去掉 8009 警告；`hgtMatching` 合并带 hold 的配对；强制非线性系统；SimCode 字段、hold 标志函数、钩子调用；稀疏模式补上 (r, v) 并保证生成；导出原始结构和名字 | 4–5 天 |
 | **2. C 运行时** | `NONLINEAR_SYSTEM_DATA` 新字段；激活、个数检查、二部图结构检查；`hgtApplyHoldResidual`、`hgtApplyHoldJacobian`；保持值；诊断 | 3–4 天 |
-| **3. Rust 运行时** | 同上的移植 | 2–3 天 |
-| **4. 测试和文档** | 官方例子各工况（含 `-override` 保持值、`-iif` 接上次的解、数值奇异）；个数不平衡；结构奇异；同一配对两边同一参数（回归）；C 和 Rust 比对 | 1–2 天 |
-| **合计** | | **约 2–2.5 周** |
+| **3. Rust 运行时的兼容** | `abi.rs` 镜像加 `hgtHold` 指针；`C+Rust` 目标遇到 hold 时编译期报错 | 0.5 天 |
+| **4. 测试和文档** | 官方例子各工况（含 `-override` 保持值、`-iif` 接上次的解、数值奇异）；个数不平衡；结构奇异；同一配对两边同一参数（回归）；不带 hold 的模型在 Rust 运行时上回归 | 1–2 天 |
+| **合计** | | **约 2 周** |
+| 以后：Rust 运行时支持 hold | §11 | 2–3 天 |
 | 可选：运行时选项 | `-hgtHoldVars=x,T`、`-hgtHoldResiduals=LongEq`：不用参数、按名字 hold（相当于 OCT 的 `holdIterationVariables`），只要编译器把所有 HGT 项都按"可能被 hold"处理 | 2–3 天 |
 
 ## 14. 风险与待确认的问题

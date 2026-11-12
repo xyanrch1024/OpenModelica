@@ -52,18 +52,37 @@ def maximum_matching(residuals, variables, dependencies):
     allowed = set(variables)
     var_to_res = {}
 
-    def augment(r, visited):
-        for v in sorted(dependencies[r] & allowed):
-            if v in visited:
-                continue
-            visited.add(v)
-            if v not in var_to_res or augment(var_to_res[v], visited):
-                var_to_res[v] = r
-                return True
+    def candidates(r):
+        return iter(sorted(dependencies[r] & allowed))
+
+    def augment(root):
+        # depth-first search for an augmenting path with an explicit stack, so
+        # that long chains of thousands of items do not hit the recursion limit:
+        # path[k] is the residual at depth k, chosen[k] the variable it tries
+        visited = set()
+        path, its, chosen = [root], [candidates(root)], []
+        while path:
+            for v in its[-1]:
+                if v in visited:
+                    continue
+                visited.add(v)
+                if v not in var_to_res:
+                    for r, w in zip(path, chosen + [v]):
+                        var_to_res[w] = r
+                    return True
+                chosen.append(v)
+                path.append(var_to_res[v])
+                its.append(candidates(var_to_res[v]))
+                break
+            else:
+                path.pop()
+                its.pop()
+                if chosen:
+                    chosen.pop()
         return False
 
     for r in residuals:
-        augment(r, set())
+        augment(r)
 
     res_to_var = {r: v for v, r in var_to_res.items()}
     return Matching(
@@ -112,27 +131,40 @@ def blocks(matching, dependencies, variables):
     result = []
     counter = [0]
 
-    def strongconnect(v):
-        index[v] = low[v] = counter[0]
+    def strongconnect(root):
+        # Tarjan's algorithm with an explicit stack instead of recursion
+        work = [(root, iter(edges[root]))]
+        index[root] = low[root] = counter[0]
         counter[0] += 1
-        stack.append(v)
-        on_stack.add(v)
-        for w in edges[v]:
-            if w not in index:
-                strongconnect(w)
-                low[v] = min(low[v], low[w])
-            elif w in on_stack:
-                low[v] = min(low[v], index[w])
-        if low[v] == index[v]:
-            component = []
-            while True:
-                w = stack.pop()
-                on_stack.discard(w)
-                component.append(w)
-                if w == v:
+        stack.append(root)
+        on_stack.add(root)
+        while work:
+            v, it = work[-1]
+            for w in it:
+                if w not in index:
+                    index[w] = low[w] = counter[0]
+                    counter[0] += 1
+                    stack.append(w)
+                    on_stack.add(w)
+                    work.append((w, iter(edges[w])))
                     break
-            component.sort()
-            result.append(([var_to_res[w] for w in component], component))
+                elif w in on_stack:
+                    low[v] = min(low[v], index[w])
+            else:
+                work.pop()
+                if work:
+                    u = work[-1][0]
+                    low[u] = min(low[u], low[v])
+                if low[v] == index[v]:
+                    component = []
+                    while True:
+                        w = stack.pop()
+                        on_stack.discard(w)
+                        component.append(w)
+                        if w == v:
+                            break
+                    component.sort()
+                    result.append(([var_to_res[w] for w in component], component))
 
     for v in variables:
         if v not in index:

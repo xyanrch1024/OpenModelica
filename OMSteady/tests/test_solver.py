@@ -133,3 +133,37 @@ def test_residual_scalings(scaling):
     p = two_eq_steady_state_para_hold()
     assert Solver(p, residual_scaling=scaling).solve().success
     assert p.get("T") == pytest.approx(346.16370, abs=1e-4)
+
+
+def _chain(n):
+    """r_0: x_0 = 1, r_i: x_i = x_{i-1} + 1: n blocks of one item, solved in a
+    chain of length n (deeper than the Python recursion limit)."""
+    from omsteady import FunctionProblem
+    names = ["x%d" % i for i in range(n)]
+    residuals = {"r0": lambda v: v["x0"] - 1}
+    depends = {"r0": ["x0"]}
+    for i in range(1, n):
+        residuals["r%d" % i] = (lambda i: lambda v: v[names[i]] - v[names[i - 1]] - 1)(i)
+        depends["r%d" % i] = [names[i - 1], names[i]]
+    return FunctionProblem(variables={x: 0.0 for x in names}, residuals=residuals, depends=depends)
+
+
+def test_long_chain_blocks():
+    n = 1500
+    p = _chain(n)
+    sol = Solver(p, blocks=True).solve()
+    assert sol.success, sol.message
+    assert len(sol.blocks) == n and sol.blocks[0] == (["r0"], ["x0"])
+    assert p.get("x%d" % (n - 1)) == pytest.approx(n, abs=1e-6)
+
+
+def test_long_augmenting_path():
+    from omsteady import structure
+    n = 3000
+    # r_0 depends on x_0, r_i on x_{i-1} and x_i. Matching r_1 ... r_{n-1} first
+    # gives r_i the variable x_{i-1}, so r_0 needs an augmenting path through all
+    # of them.
+    deps = [{0}] + [{i - 1, i} for i in range(1, n)]
+    m = structure.maximum_matching(list(range(1, n)) + [0], list(range(n)), deps)
+    assert m.perfect
+    assert m.residual_to_variable[0] == 0 and m.residual_to_variable[n - 1] == n - 1

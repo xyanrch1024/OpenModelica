@@ -1,0 +1,23 @@
+// name:      HGTInteractiveOnly1
+// keywords:  tearing, hand guided tearing, interactive FMU
+// status:    correct
+// teardown_command: rm -rf HGT.Only* HGT_Only* HGTInteractive.TwoEq* HGTInteractive_TwoEq*
+//
+// --interactiveFMU with --hgtOnly (the default): the FMU may not solve
+// algebraic loops itself (error 8023). With --hgtOnly=false the loop of
+// OnlyStuck stays inside the FMU.
+//
+
+loadFile("HGT.mo"); getErrorString();
+loadFile("HGTInteractive.mo"); getErrorString();
+setCommandLineOptions("--handGuidedTearing --interactiveFMU"); getErrorString();
+buildModelFMU(HGT.OnlySolvable, version = "2.0", fmuType = "me"); getErrorString();
+buildModelFMU(HGTInteractive.TwoEq, version = "2.0", fmuType = "me"); getErrorString();
+buildModelFMU(HGT.OnlyStuck, version = "2.0", fmuType = "me"); getErrorString();
+buildModelFMU(HGT.Loop, version = "2.0", fmuType = "me"); getErrorString();
+
+setCommandLineOptions("--hgtOnly=false"); getErrorString();
+buildModelFMU(HGT.OnlyStuck, version = "2.0", fmuType = "me"); getErrorString();
+
+// Result:
+// endResult

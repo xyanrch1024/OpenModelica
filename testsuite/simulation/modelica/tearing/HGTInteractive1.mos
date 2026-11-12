@@ -1,0 +1,20 @@
+// name:      HGTInteractive1
+// keywords:  tearing, hand guided tearing, interactive FMU
+// status:    correct
+// teardown_command: rm -rf TwoEq.fmu TwoEq_tmp.xml TwoEq.xml TwoEq.log TwoEq_info.json
+//
+// --interactiveFMU: the iteration variables become the inputs iter_N, the
+// residual equations the outputs res_N, and the hold attributes the Boolean
+// parameters iter_N_hold and res_N_hold. See doc/HGT_interactive_fmu_phase1.md.
+//
+
+loadFile("HGTInteractive.mo"); getErrorString();
+setCommandLineOptions("--handGuidedTearing --interactiveFMU -d=hgtDump"); getErrorString();
+buildModelFMU(HGTInteractive.TwoEq, version = "2.0", fmuType = "me", fileNamePrefix = "TwoEq"); getErrorString();
+
+system("unzip -cqq TwoEq.fmu modelDescription.xml > TwoEq_tmp.xml"); getErrorString();
+system("sed -n \"/<ModelVariables>/,/<\\/ModelStructure>/p\" TwoEq_tmp.xml > TwoEq.xml"); getErrorString();
+readFile("TwoEq.xml"); getErrorString();
+
+// Result:
+// endResult

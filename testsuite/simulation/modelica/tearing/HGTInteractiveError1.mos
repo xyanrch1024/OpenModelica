@@ -1,0 +1,23 @@
+// name:      HGTInteractiveError1
+// keywords:  tearing, hand guided tearing, interactive FMU
+// status:    correct
+// teardown_command: rm -rf HGTInteractive.Dynamic* HGTInteractive_Dynamic* HGTInteractive.TwoEq* HGTInteractive_TwoEq*
+//
+// --interactiveFMU: models with states, --handGuidedTearing missing, the
+// C+Rust target, and a warning without FMU export.
+//
+
+loadFile("HGTInteractive.mo"); getErrorString();
+setCommandLineOptions("--handGuidedTearing --interactiveFMU"); getErrorString();
+buildModelFMU(HGTInteractive.Dynamic, version = "2.0", fmuType = "me"); getErrorString();
+r := simulate(HGTInteractive.TwoEq, stopTime = 0); getErrorString();
+val(res_0, 0); val(res_1, 0);
+
+setCommandLineOptions("--simCodeTarget=C+Rust"); getErrorString();
+buildModelFMU(HGTInteractive.TwoEq, version = "2.0", fmuType = "me"); getErrorString();
+
+setCommandLineOptions("--simCodeTarget=C --handGuidedTearing=false"); getErrorString();
+buildModelFMU(HGTInteractive.TwoEq, version = "2.0", fmuType = "me"); getErrorString();
+
+// Result:
+// endResult

@@ -135,7 +135,7 @@
 ### 7.1 选项
 
 - `--interactiveFMU`（config flag）：必须和 `--handGuidedTearing` 一起用，只影响 `buildModelFMU`。
-- 第一版要求 `--hgtOnly`，见 §7.3。
+- `--hgtOnly` 不是必需的；加上时 FMU 内部不允许留下代数环（见 [HGT_interactive_fmu_phase1.md](HGT_interactive_fmu_phase1.md) §3.7）。
 
 ### 7.2 后端
 
@@ -149,7 +149,7 @@
 
 `Tearing.handGuidedTearing` 在用户的项不够时会自动补迭代变量和残差。交互模式下有两种做法：
 
-- 第一版：要求 `--hgtOnly`，不会有自动补的项，接口上只有用户写的配对，名字稳定。
+- 第一版：接口上只有用户写的配对，名字稳定。剩下的代数环默认在 FMU 内部求解；加 `--hgtOnly` 时编译期报错（[HGT_interactive_fmu_phase1.md](HGT_interactive_fmu_phase1.md) §3.7）。
 - 以后：把自动补的项也暴露出来，名字自动生成（例如 `$hgtAuto.<变量名>`、`$hgtAutoRes<n>`），在配对表中标记为自动。
 
 ### 7.4 SimCode 与代码生成
@@ -319,14 +319,14 @@ for k in 1..maxIter:
 | 阶段 | 内容 | 工作量 |
 |---|---|---|
 | **1. 第一版** | | **5–6 周** |
-| 1a 编译器 | `--interactiveFMU`；`lower` 跳过改写；只求值的代码生成；初始化合并；要求 `--hgtOnly`、无状态 | 2 周 |
+| 1a 编译器 | `--interactiveFMU`；`lower` 跳过改写；只求值的代码生成；初始化合并；无状态；`--hgtOnly` 下不允许 FMU 内部有代数环 | 2 周 |
 | 1b FMU 包装 | 迭代变量输入、残差输出；VendorAnnotations 配对表 | 1 周 |
 | 1c Python 包 | `FMUProblem`、`Solver`（差分雅可比、缩放、界、线搜索）、hold API、日志 | 1.5–2 周 |
 | 1d 测试和文档 | Python 测试接进 testsuite；用户文档和例子 | 0.5–1 周 |
 | **2. 完整版** | | **再加 4–7 周** |
 | 2a 方向导数 | FMIDER 接 `fmi2GetDirectionalDerivative` | 1–2 周 |
 | 2b 带状态的模型 | 状态变成迭代变量，`der(x) = 0` 变成残差 | 1–2 周 |
-| 2c 自动补的项 | 去掉 `--hgtOnly` 的要求，暴露自动补的迭代变量和残差 | 0.5 周 |
+| 2c 自动补的项 | 把 FMU 内部剩下的代数环也变换成输入和输出，暴露给外层求解器 | 0.5 周 |
 | 2d 求解器增强 | Brent、按块分解、诊断信息 | 1 周 |
 | 2e Rust 运行时 | Rust 运行时版本的交互式 FMU | 1–2 周 |
 
@@ -358,7 +358,7 @@ for k in 1..maxIter:
 | 求解器放在哪里：S1 / S2 / S3 | S1（Python） |
 | FMI 版本 | FMI 2.0 Model Exchange；FMI 3 以后再说 |
 | 第一版是否支持带状态的模型 | 不支持，放到 2b |
-| 自动补的迭代变量 | 第一版要求 `--hgtOnly` |
+| 自动补的迭代变量 | 第一版不暴露：默认留在 FMU 内部求解，`--hgtOnly` 时报错 |
 | 交互式 FMU 是否同时支持 Rust 运行时 | 第一版只做 C 运行时 |
 | Python 包的位置和名字 | 仓库中的 `OMSteady/`，包名 `omsteady` |
 

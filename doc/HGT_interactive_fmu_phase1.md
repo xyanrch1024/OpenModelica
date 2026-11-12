@@ -32,7 +32,7 @@
 |---|---|---|
 | 编译选项 | `--interactiveFMU` | 暴露标量块的选项（OCT 的 `expose_scalar_equation_blocks_in_interactive_fmu`） |
 | 模型 | 没有状态、没有事件的稳态模型 | 带状态（`der(x) = 0` 作残差）、带事件 |
-| 暴露的项 | 用户写的 HGT 配对 | 自动撕裂出来的迭代变量和残差 |
+| 暴露的项 | 用户写的 HGT 配对；剩下的代数环默认由 FMU 内部求解，加 `--hgtOnly` 时编译期报错（§3.7） | 自动撕裂出来的迭代变量和残差 |
 | FMI | 2.0 Model Exchange | FMI 3、Co-Simulation |
 | 运行时 | C 运行时 | Rust 运行时（`C+Rust` 目标下报错） |
 | 雅可比矩阵 | 差分；FMU 已有的方向导数能用就用（§9） | 专门优化 |
@@ -76,7 +76,7 @@ end twoEqSteadyStateParaHold_interactive;
 - **输出对输入的依赖关系自动得到。** 现有的 `SimCodeUtil.createFMIModelStructure` 从符号雅可比矩阵算出 `<ModelStructure><Outputs>` 的 `dependencies`，残差是输出、迭代变量是输入，所以"每条残差依赖哪些迭代变量"（包括跨块的间接依赖）直接出现在 `modelDescription.xml` 中，不用另外计算。
 - **方向导数自动可用。** FMU 已经为"输出对输入"生成 FMIDER 雅可比矩阵，`fmi2GetDirectionalDerivative` 给出的就是残差对迭代变量的导数。
 - **初始化系统和仿真系统自然一致**：变换在创建初始化系统之前做，两边用的是同一个变换后的模型。没有状态时，FMU 初始化之后的每次求值都只是把方程算一遍。
-- **用户给的迭代变量不够时也能工作**：剩下的代数环留在 FMU 内部，由 FMU 自己的求解器解（和 OCT"只暴露部分块"的行为类似）。所以第一阶段**不需要**强制 `--hgtOnly`。
+- **用户给的迭代变量不够时**：默认剩下的代数环留在 FMU 内部，由 FMU 自己的求解器解（和 OCT"只暴露部分块"的行为类似）；加了 `--hgtOnly` 时不自动撕裂、不补迭代变量，FMU 内部只要还有代数环就编译期报错（§3.7）。
 - hold、nominal、界都不进入方程，只作为元数据导出（§4）。
 
 OCT 文档对 `interactive_fmu` 的描述是"DAE 系统被转换成交互式 FMU，残差方程和迭代变量变成顶层的输出和输入"，和这个做法一致。
@@ -148,6 +148,45 @@ Hand guided tearing (interactive):
   input x, output $res.LongEq = 0.0 - (120.0 * x - ...)
   input T, output $res.LongEq2 = ...
 ```
+
+### 3.7 `--hgtOnly`：FMU 内部不允许留下代数环
+
+变换之后，用户的配对已经是输入和输出。模型里如果还有代数环（用户没写配对的环，或者撕开用户的配对后仍然解不出的方程），默认由 FMU 内部的求解器解（§2）。加 `--hgtOnly` 时不这样做：
+
+- 不自动撕裂，不自动补迭代变量和残差；
+- FMU 内部不能有任何非线性系统、线性系统或混合系统；
+- 只要还有，就编译期报错，列出这些系统的方程和变量，提示用户给它们写 HGT 配对。
+
+这样外层求解器看到的就是模型中全部的代数未知量，求解完全由它控制，没有藏在 FMU 里的迭代。
+
+**检查的位置**：SimCode 生成之后（`SimCodeUtil`），检查仿真系统和初始化系统的方程列表中有没有 `SES_NONLINEAR`、`SES_LINEAR`、`SES_MIXED`。放在 SimCode 而不是 BLT 上检查，是因为它反映实际生成的代码：单条方程解不出显式形式时（例如由 `z + sin(z) = y` 求 z），后端会生成 1×1 的非线性系统，这样也能查出来。
+
+**新错误**（下一个空号 8023）：
+
+```
+HGT_INTERACTIVE_LOOP: With --interactiveFMU and --hgtOnly the FMU may not solve algebraic
+loops, but the equations {%s} form a %s system for the variables {%s}. Give them hand guided
+tearing pairs or compile without --hgtOnly.
+```
+
+**例子**：`HGT.mo` 中的 `OnlyStuck`
+
+```modelica
+Real x(start = 1), y, z(start = 1);
+equation
+  y = exp(x);
+  z + sin(z) = y;
+  z * x = 2 annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = x)));
+```
+
+变换后 x 是输入，`$res = z*x − 2` 是输出，`y = exp(x)` 显式可解，但 `z + sin(z) = y` 解不出 z，后端生成一个 1×1 的非线性系统：
+
+| 选项 | 结果 |
+|---|---|
+| 不加 `--hgtOnly` | 可以编译，FMU 每次求值时内部迭代求 z |
+| 加 `--hgtOnly` | 报错：方程 `{z + sin(z) = y}` 是关于 `{z}` 的非线性系统。用户要再写一个配对，例如 `z + sin(z) = y` 配 z，之后外层求解器同时迭代 x 和 z |
+
+线性系统也一并报错，因为 `--hgtOnly` 的含义就是"只用用户给的项"。如果以后觉得太严，可以放宽成只对非线性系统报错。
 
 ## 4. FMU 的接口
 
@@ -245,6 +284,7 @@ Solver(p).solve()                      # 报错：1 个未知量，2 条残差
 |---|---|---|
 | 编译器 | `-d=hgtDump` 的变换结果；`modelDescription.xml` 中的输入、输出、依赖关系、配对表 | `testsuite/simulation/modelica/tearing/HGTInteractive1.mos`（基准输出） |
 | 编译器 | 报错：有状态；没开 `--handGuidedTearing`；`C+Rust` 目标 | `HGTInteractiveError1.mos` |
+| 编译器 | `--hgtOnly`：`OnlyStuck` 报 8023；`OnlySolvable`、官方例子通过；不加 `--hgtOnly` 时 `OnlyStuck` 能编译，FMU 内部解 z | `HGTInteractiveOnly1.mos` |
 | 回归 | 不加 `--interactiveFMU` 时，现有的全部 HGT 测试不变 | 现有测试 |
 | FMU 求值 | 迭代变量设为已知解时残差为 0；设成别的值时残差和手算一致 | `OMSteady/tests/test_fmu.py`（pytest） |
 | 求解 | `HGT.mo` 中的稳态模型（`Loop`、`Chain`、`Bound`、`Multi`、`CrossSCC` 等）：交互式求解的结果和普通仿真一致 | `OMSteady/tests/test_solve.py` |
@@ -259,7 +299,7 @@ Python 测试通过一个 `.mos` 包装接进 testsuite（环境中没有 FMPy �
 
 | 里程碑 | 内容 | 工作量 |
 |---|---|---|
-| M1 编译器 | 选项和检查；`lowerInteractive`；后续模块跳过已变换的配对；`hgtDump` | 3–4 天 |
+| M1 编译器 | 选项和检查；`lowerInteractive`；后续模块跳过已变换的配对；`--hgtOnly` 下的代数环检查（§3.7）；`hgtDump` | 4–5 天 |
 | M2 元数据 | SimCode 字段；`VendorAnnotations` 模板；确认 ModelStructure 的依赖关系和方向导数正确 | 2–3 天 |
 | M3 FMU 求值验证 | 用 FMPy 手工验证官方例子和几个 `HGT.mo` 模型的残差 | 1 天 |
 | M4 omsteady | `FMUProblem`、结构检查、`Solver`（Newton、缩放、界）、hold API、`printInfo` | 6–8 天 |

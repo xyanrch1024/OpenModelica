@@ -50,17 +50,17 @@
 
 | 变换 | 结果 |
 |---|---|
-| 新增**顶层输入** `iter_N`，x 改由方程 `x = iter_N` 算出 | 迭代变量的值由外面给，不再需要方程来解它 |
+| x 本身变成**顶层输入**，并以别名 `iter_N` 导出（同一个值引用） | 迭代变量的值由外面给，不再需要方程来解它 |
 | 新增**顶层输出** `res_N` | |
 | e 改写成 `res_N = lhs − rhs` | 这条方程现在用来算 `res_N`，不再约束 x |
 | 新增 Boolean 参数 `iter_N_hold`、`res_N_hold` | hold 标志，由注解中的 hold 绑定 |
 
-每个配对加了两个未知量（`res_N`、x 仍是未知量但由 `x = iter_N` 算出）和两条方程（`x = iter_N`、改写后的 e），系统仍然平衡。变换后的模型是一个普通的 Modelica 模型：给定输入（迭代变量），算出输出（残差）。例如官方例子变换后相当于：
+每个配对去掉一个未知量（x 成了输入），加上一个未知量（`res_N`），方程数不变，系统仍然平衡。变换后的模型是一个普通的 Modelica 模型：给定输入（迭代变量），算出输出（残差）。例如官方例子变换后相当于：
 
 ```modelica
 model twoEqSteadyStateParaHold_interactive
-  input Real iter_0(start = 1) "x";
-  input Real iter_1(start = 400) "T";
+  input Real x(start = 1);        // 以别名 iter_0 导出
+  input Real T(start = 400);      // 以别名 iter_1 导出
   output Real res_0 "LongEq";
   output Real res_1 "LongEq2";
   parameter Boolean testHold1 = false;
@@ -69,10 +69,7 @@ model twoEqSteadyStateParaHold_interactive
   parameter Boolean iter_1_hold = testHold1;
   parameter Boolean res_0_hold = testHold1;
   parameter Boolean res_1_hold = testHold2;
-  Real x, T;
 equation
-  x = iter_0;
-  T = iter_1;
   res_0 = 0 - (120*x - 75*(0.12*exp(12581*(T - 298)/(298*T)))*(1 - x));
   res_1 = 0 - (-x*(873 - T) + 11.0*(T - 300));
 end twoEqSteadyStateParaHold_interactive;
@@ -103,7 +100,9 @@ OCT 文档对 `interactive_fmu` 的描述是"DAE 系统被转换成交互式 FMU
 
 ### 3.2 前端（`NFFrontEnd/NFHandGuidedTearing.mo`）
 
-- 交互模式下不给"hold 不支持"的警告 8009；其余不变。变量上和残差上的 hold 已经分别存储并传到 `DAE.HAND_GUIDED_TEARING`。
+- 交互模式下不给"hold 不支持"的警告 8009。变量上和残差上的 hold 已经分别存储并传到 `DAE.HAND_GUIDED_TEARING`。
+- 交互模式下**保留 `enabled = false` 的配对**：OCT 的交互式 FMU 中，`enabled = false` 的配对仍然导出成 `iter_N`/`res_N`（§4.1）。现在的前端在求值 `enabled` 后直接丢掉这样的配对，交互模式下改成保留并标记，普通模式不变。
+- 为每条残差方程保存源码文本（方程加注解），用作 `res_N` 的 `description`。
 
 ### 3.3 后端：变换（`BackEnd/HandGuidedTearing.mo`）
 
@@ -111,10 +110,10 @@ OCT 文档对 `interactive_fmu` 的描述是"DAE 系统被转换成交互式 FMU
 
 | 步骤 | 内容 | 用到的已有函数 |
 |---|---|---|
-| 1 | 找到规范，建立"方程名 → 配对"和"变量名 → 配对"两张表 | `findSpec`、`equationName` |
+| 1 | 找到规范，建立"方程名 → 配对"和"变量名 → 配对"两张表；交互模式下 `enabled = false` 的配对也在规范中（§3.2） | `findSpec`、`equationName` |
 | 2 | 按配对编号 N = 0, 1, …（顺序同前端：按残差名排序），命名规则见 §4.1 | |
-| 3 | 第 N 个配对的迭代变量 x：新建输入 `iter_N`（Real，`DAE.INPUT()`，不可替换，start、nominal、min、max 取 x 的 HGT 属性，没写就取 x 的属性），x 变成普通未知量，加方程 `x = iter_N` | `BackendVariable.setVarDirection`、`setVarStartValue`、`setVarNominalValue` |
-| 3' | 第 N 个配对的残差方程 e：新建输出 `res_N`（Real，`DAE.OUTPUT()`，不可替换，nominal 取残差的 nominal），把方程改写成 `res_N = lhs − rhs`（**不除以 nominal**） | `BackendVariable.setVarUnreplaceable`、`Expression.expSub` |
+| 3 | 第 N 个配对的迭代变量 x：方向改成 `DAE.INPUT()`，不可替换；HGT 的 start、nominal 写进 x 的属性；再登记一个别名变量 `iter_N`，和 x 共用值引用（放进别名变量集合，FMU 导出时生成同一个 `valueReference` 的别名） | `BackendVariable.setVarDirection`、`setVarStartValue`、`setVarNominalValue` |
+| 3' | 第 N 个配对的残差方程 e：新建输出 `res_N`（Real，`DAE.OUTPUT()`，不可替换；nominal 取残差的 nominal，没写时为 0，和 OCT 一致），把方程改写成 `res_N = lhs − rhs`（**不除以 nominal**）；`description` 是方程的源码文本加注解（§4.1） | `BackendVariable.setVarUnreplaceable`、`Expression.expSub` |
 | 3'' | 新建两个 Boolean 参数 `iter_N_hold`、`res_N_hold`：hold 是字面量或没写（取 false）时是普通参数；hold 是参数表达式时，绑定为这个表达式（§4.2） | |
 | 4 | 初始方程上的配对同样处理（没有状态时一般没有） | |
 | 5 | 模型有状态时报错：第一阶段不支持 | `BackendVariable.isStateVar` |
@@ -127,8 +126,8 @@ OCT 文档对 `interactive_fmu` 的描述是"DAE 系统被转换成交互式 FMU
 - **标签**：改写后的方程保留源信息即可；`checkPresence`（8011/8012）在交互模式下不运行，因为迭代变量已经不是未知量。
 - **优化模块中的保护**：`iter_N` 是输入、`res_N` 是输出且都不可替换，现有的别名消除不会删掉它们；HGT 原有的"带标签的方程不删除"的保护继续有效。
 - **数组和 for**：前端已经把它们展开成标量配对，这里逐个处理，每个元素一个编号 N；描述里写展开后的名字（例如 `seg[2]`）。
-- **x 和 `iter_N`**：x 保留原名，结果和 `fmi2GetReal("x")` 照常可用；别名消除可能把 x 处理成 `iter_N` 的别名，没有关系，`iter_N` 不可替换，一定留下来。
-- **min/max 不能生成范围检查**：`iter_N` 的 min/max 只用于导出到 `modelDescription.xml`，供外层求解器投影；要确认运行时不会对它们生成越界断言（§9），否则外层迭代中间值越界会让求值失败。
+- **x 和 `iter_N`**：x 是输入本身，`iter_N` 只是别名，两者是同一个值。`ModelStructure` 中的依赖关系引用的是 x 的编号，不是 `iter_N` 的（OCT 的 FMU 中也是这样，§4.1）。
+- **min/max 不能生成范围检查**：HGT 的 min/max 只用于导出到 x 的属性，供外层求解器投影；要确认运行时不会对它们生成越界断言（§9），否则外层迭代中间值越界会让求值失败。
 - **不加选项时零影响**：`lowerInteractive` 只在 `--interactiveFMU` 下调用。
 
 ### 3.4 SimCode（`SimCode/SimCode.mo`、`SimCodeUtil.mo`）
@@ -137,7 +136,7 @@ OCT 文档对 `interactive_fmu` 的描述是"DAE 系统被转换成交互式 FMU
 
 - `iter_N`、`res_N` 是普通的输入、输出变量，nominal、min、max 是它们的标准属性；
 - `iter_N_hold`、`res_N_hold` 是普通的参数，绑定的表达式由现有的 `updateBoundParameters` 计算，**任意参数表达式都可以**，不再有"只能是常数或单个参数"的限制；
-- 变量的 `description` 写原来的名字：`iter_N` 写迭代变量名（例如 `"x"`），`res_N` 写 HGT 方程名（例如 `"LongEq"`），供诊断和 `printInfo` 使用。
+- `iter_N` 是 x 的别名，`description` 是 x 的名字；`res_N` 的 `description` 是方程的源码文本加注解（§4.1），供诊断和 `printInfo` 使用。
 
 要确认的只有一点：现有的 FMI 导出会把带非字面量绑定的参数导出成 `causality="calculatedParameter"`，把字面量参数导出成 `causality="parameter" variability="fixed" initial="exact"`（§4.2），和 OCT 的 FMU 一致。不一致的话在模板中对这些变量单独处理。
 
@@ -200,36 +199,35 @@ equation
 
 ### 4.1 变量和命名约定
 
-第 N 个配对（N 从 0 开始，迭代变量和残差用同一个 N）：
+以下约定对照了一个真实的 OCT 交互式 FMU（`TetraSystem.Systems.BaseModels.SteadyState.HP_Cycle`，FMI 2.0，`variableNamingConvention="structured"`）。第 N 个配对（N 从 0 开始，**迭代变量和残差用同一个 N**）：
 
-| 变量 | 类型、因果 | 内容 |
+| 变量 | OCT 中看到的 | 本设计 |
 |---|---|---|
-| `iter_N` | Real，`causality="input"` | 迭代变量的值；`start`、`nominal`、`min`、`max` 是迭代变量的 HGT 属性；`description` 是原来的变量名 |
-| `res_N` | Real，`causality="output"` | 残差 lhs − rhs；`nominal` 是残差的 nominal；`description` 是 HGT 方程名 |
-| `iter_N_hold` | Boolean 参数 | 迭代变量是否被 hold |
-| `res_N_hold` | Boolean 参数 | 残差是否被 hold |
-| 原来的迭代变量 x | 不变 | x = iter_N，结果中照常可见 |
-| 残差对迭代变量的依赖 | `<ModelStructure><Outputs><Unknown index="res_N" dependencies="iter_…">` | |
+| `iter_N` | 值引用不连续（`iter_0` 3124、`iter_10` 953、`iter_11` 954），`description` 是迭代变量名，属性只有 `relativeQuantity`，有的有 `start` | 原来的迭代变量 x 是 FMI 输入；`iter_N` 是 x 的别名，同一个值引用。start、nominal、min、max 在 x 上 |
+| `res_N` | 新的变量，值引用连续（7720 + N）；`causality="output" variability="continuous" initial="calculated"`；`nominal="0"` | 同左；给了残差 nominal 时写这个值，没给时写 0 |
+| `res_N` 的 `description` | 方程的源码文本加注解，残差形式写成 `a - b = 0`，例如 `EXV_Opening.value - EXV_Opening.setPoint = 0 annotation(__Modelon(ResidualEquation(iterationVariable(hold = EXV_Opening.fixed or (EXV_Opening.isOff or false)) = EXV_Opening.scaledValue,hold = true,enabled = false)))` | 同左 |
+| `iter_N_hold`、`res_N_hold` | Boolean，见 §4.2 | 同左 |
+| 依赖关系 | `<ModelStructure><Outputs>` 中 `res_0`（第 10371 个变量）的依赖是 `"8"`，类型 `fixed`；`iter_0` 自己是第 1670 个变量，不在依赖里 | 依赖引用 x（基础变量）的编号；求解器通过值引用把 `iter_N` 对应到 x |
 
-官方例子 `twoEqSteadyStateParaHold`（配对按残差名排序：`LongEq` 是 0，`LongEq2` 是 1）：
+官方例子 `twoEqSteadyStateParaHold`（本设计的编号按残差名排序：`LongEq` 是 0，`LongEq2` 是 1）：
 
 | 变量 | 内容 |
 |---|---|
-| `iter_0` | x 的值，start 1 |
-| `iter_1` | T 的值，start 400 |
-| `res_0` | `LongEq` 的残差 |
+| x（别名 `iter_0`） | 输入，start 1 |
+| T（别名 `iter_1`） | 输入，start 400 |
+| `res_0` | `LongEq` 的残差，`description` 是 `0 = 120*x - … annotation(…)` |
 | `res_1` | `LongEq2` 的残差 |
-| `iter_0_hold` | = `testHold2` |
-| `iter_1_hold` | = `testHold1` |
-| `res_0_hold` | = `testHold1` |
-| `res_1_hold` | = `testHold2` |
+| `iter_0_hold` | 计算参数，= `testHold2` |
+| `iter_1_hold` | 计算参数，= `testHold1` |
+| `res_0_hold` | 计算参数，= `testHold1` |
+| `res_1_hold` | 计算参数，= `testHold2` |
 
 ### 4.2 hold 变量的两种形式
 
 | 注解中的 hold | 生成的参数 | `modelDescription.xml` | 怎么改 |
 |---|---|---|---|
 | 没写，或字面量 `true`/`false` | `parameter Boolean res_0_hold = true;` | `causality="parameter" variability="fixed" initial="exact"`，`<Boolean start="true"/>` | 初始化之前直接 `fmi2SetBoolean` |
-| 参数表达式，例如 `hold = testHold1` | `parameter Boolean res_0_hold = testHold1;` | `causality="calculatedParameter"` | 改 `testHold1`；`res_0_hold` 的值由 FMU 计算，要在 FMI 允许读取计算参数的阶段读（初始化之后），不能只看 XML 中的 start |
+| 参数表达式，例如 `hold = testHold1`，或者 OCT 库中的 `hold = EXV_Opening.fixed or (EXV_Opening.isOff or false)` | `parameter Boolean iter_0_hold = …;` | `causality="calculatedParameter"`，`<Boolean />` 没有 start | 改表达式中的参数；值由 FMU 计算，要在初始化之后读，不能看 XML |
 
 两点好处：
 
@@ -240,18 +238,20 @@ equation
 
 ### 4.2' 和 OCT 的兼容性
 
-截图中的 OCT FMU 用的就是 `iter_N`、`res_N`、`iter_N_hold`、`res_N_hold` 这套命名，以及"字面量 hold 是固定参数、绑定参数的 hold 是计算参数"的区分。下面几点还没有确认，最好拿一个真实的 OCT 交互式 FMU 的 `modelDescription.xml` 对照：
-
-| 问题 | 本设计的选择 |
+| 项目 | 状态 |
 |---|---|
-| 原来的变量 x 和 `iter_N` 是什么关系（别名、改名，还是两个变量） | 两个变量，x = iter_N |
-| 迭代变量和残差是不是用同一个 N | 同一个 N（只支持显式配对，一一对应） |
-| 编号顺序 | 按残差名排序 |
-| 没写 hold 时是否也有 hold 变量 | 有，取 false |
-| nominal、min、max 放在哪里 | `iter_N`、`res_N` 的标准属性 |
-| 还有没有其他约定（例如说明配对或块的信息） | 没有 |
+| 命名 `iter_N`、`res_N`、`iter_N_hold`、`res_N_hold` | 已确认 |
+| 迭代变量和残差共用同一个 N | 已确认（`iter_0` 是 `EXV_Opening.scaledValue`，`res_0` 的注解中迭代变量正是它） |
+| `res_N` 是连续输出，`initial="calculated"` | 已确认 |
+| `res_N` 的 `description` 是方程文本加注解 | 已确认 |
+| 没给残差 nominal 时 `nominal="0"` | 已确认；给了 nominal 时的写法还没看到 |
+| 字面量 hold 是固定参数，参数表达式的 hold 是计算参数 | 已确认，hold 表达式可以是 `or` 等组合 |
+| `enabled = false` 的配对仍然导出 | 已确认；它在交互式 FMU 中的确切含义（是否只影响普通撕裂）还要确认 |
+| `iter_N` 是原变量的别名，原变量是 FMI 输入 | **推断**：值引用不连续，且依赖里引用的是第 8 个变量而不是 `iter_0`。确认方法：第 8 个变量的值引用是否为 3124、`causality` 是否为 `input` |
+| 编号的顺序 | 未确认；本设计按残差名排序 |
+| 没写 hold 时是否也生成 hold 变量 | 未确认；本设计生成，取 false |
 
-如果完全一致，`omsteady` 就能直接求解 OCT 生成的交互式 FMU，反过来 OCT 的 `FMUProblem` 也可能直接用 OMC 生成的 FMU。
+如果全部一致，`omsteady` 就能直接求解 OCT 生成的交互式 FMU，反过来 OCT 的 `FMUProblem` 也可能直接用 OMC 生成的 FMU。
 
 ### 4.2'' 在当前运行时上做全局求解时
 
@@ -275,7 +275,7 @@ fmi2Instantiate → fmi2SetupExperiment → fmi2EnterInitializationMode
 
 | 模块 | 内容 |
 |---|---|
-| `problem.py` | `FMUProblem`：加载 FMU，按命名约定找出 `iter_N`、`res_N`、`iter_N_hold`、`res_N_hold`（§4.1），读 ModelStructure；`set`/`get` 接受原来的变量名，按 `iter_N` 的 `description` 映射到输入；`set`/`get`；`holdIterationVariables`/`releaseIterationVariables`、`holdResiduals`/`releaseResiduals`（按名字或下标）；`printInfo('all' / 'held' / 'parametricHold')`；`residuals(u)`、`jacobian(u)` |
+| `problem.py` | `FMUProblem`：加载 FMU，按命名约定找出 `iter_N`、`res_N`、`iter_N_hold`、`res_N_hold`（§4.1），读 ModelStructure；`iter_N` 通过值引用对应到基础变量（输入）和它在 `ModelStructure` 中的编号；`set`/`get` 接受原来的变量名，也接受 `iter_N`；`set`/`get`；`holdIterationVariables`/`releaseIterationVariables`、`holdResiduals`/`releaseResiduals`（按名字或下标）；`printInfo('all' / 'held' / 'parametricHold')`；`residuals(u)`、`jacobian(u)` |
 | `structure.py` | 个数检查；在"释放的残差 × 释放的变量"上做二部图最大匹配；出错时给出没有匹配上的残差和变量 |
 | `solver.py` | `Solver(problem, **options).solve()`：阻尼 Newton、线搜索、残差缩放、界投影；返回 `Solution(success, iterations, residual_norm, message)` |
 | `__init__.py` | 导出 `FMUProblem`、`Solver` |
@@ -303,7 +303,7 @@ Solver(p).solve()                      # 都不 hold
 print(p.get(["x", "T"]))               # x = 0.96387, T = 346.164
 
 p.set("testHold1", True)               # T 固定，去掉 LongEq
-p.set("T", 330.0)                      # 按描述映射到输入 iter_1
+p.set("T", 330.0)                      # T 就是输入，别名 iter_1
 Solver(p).solve()
 print(p.get(["x", "T"]))               # x = 0.60773, T = 330
 
@@ -356,6 +356,8 @@ Python 测试通过一个 `.mos` 包装接进 testsuite（环境中没有 FMPy �
 | 变换后的输入会不会被前面的模块特殊处理 | 迭代变量在前端是普通变量，到后端才改成输入；要确认 `BackendDAECreate` 之后没有模块依赖"输入一定是顶层声明的 input"。M1 中验证 |
 | `createFMIModelStructure` 对新建的输出是否生效 | 它从符号雅可比矩阵得到依赖关系，要确认后端新建的输出变量和输入变量被计入。不行的话在 M2 中补上 |
 | 方向导数的正确性 | FMIDER 是否覆盖"输出对输入"，以及对新变量是否正确；不可用时求解器退回差分，不阻塞第一阶段 |
+| 别名导出 | 要确认 OMC 的 FMU 导出会把 `iter_N` 生成为和 x 同一个值引用的别名，而且 x 的 `causality="input"`。不行的话退回到"新建输入 `iter_N`，x = iter_N"的做法 |
+| `enabled = false` 的语义 | OCT 中这样的配对仍然导出；要确认它在交互式 FMU 中有没有别的效果（例如默认 hold），再决定 OMC 怎么处理 |
 | 改参数要 `fmi2Reset` | OMC 的 FMU 中普通参数在初始化之后不能改；`omsteady` 在 `set` 参数后重新初始化并恢复迭代变量的值。每次切换工况多一次初始化，可以接受 |
 | 迭代变量的 min/max 不再进入模型 | 界只由外层求解器保证；FMU 内部的方程在迭代变量取界外的值时可能触发断言（例如 `log` 的参数为负），所以求解器必须先投影再求值 |
 | 伪根约束 | 原来撕裂时为反解非线性函数生成的解检查，在变换后内部方程仍按同样的方式求解，约束仍然生成；断言失败时 FMU 求值报错，求解器要把它当作"这一步不可接受"并缩短步长 |

@@ -1,6 +1,6 @@
 # HGT 稳态求解器方案：第一阶段实施文档
 
-本文是稳态求解器方案（[HGT_steady_state_runtime.md](HGT_steady_state_runtime.md)）**第一阶段**的实施文档：做什么、不做什么、编译器和 Python 两边各改哪里、怎么验收。**还没有实现。**
+本文是稳态求解器方案（[HGT_steady_state_runtime.md](HGT_steady_state_runtime.md)）**第一阶段**的实施文档：做什么、不做什么、编译器和 Python 两边各改哪里、怎么验收。**编译器部分（§3）和 `omsteady`（§5）已实现**；和最初设计不同的地方见 §3.3 的“实现说明”。
 
 相关文档：
 
@@ -50,7 +50,7 @@
 
 | 变换 | 结果 |
 |---|---|
-| x 本身变成**顶层输入**，并以别名 `iter_N` 导出（同一个值引用） | 迭代变量的值由外面给，不再需要方程来解它 |
+| 新建**顶层输入** `iter_N`（带 x 的属性），加方程 `x = iter_N`；别名消除之后 x 是 `iter_N` 的别名（同一个值引用） | 迭代变量的值由外面给，不再需要方程来解它 |
 | 新增**顶层输出** `res_N` | |
 | e 改写成 `res_N = lhs − rhs` | 这条方程现在用来算 `res_N`，不再约束 x |
 | 新增 Boolean 参数 `iter_N_hold`、`res_N_hold` | hold 标志，由注解中的 hold 绑定 |
@@ -59,8 +59,10 @@
 
 ```modelica
 model twoEqSteadyStateParaHold_interactive
-  input Real x(start = 1);        // 以别名 iter_0 导出
-  input Real T(start = 400);      // 以别名 iter_1 导出
+  input Real iter_0(start = 1) "x";
+  input Real iter_1(start = 400) "T";
+  Real x = iter_0;                // 别名消除后是 iter_0 的别名
+  Real T = iter_1;
   output Real res_0 "LongEq";
   output Real res_1 "LongEq2";
   parameter Boolean testHold1 = false;
@@ -112,7 +114,7 @@ OCT 文档对 `interactive_fmu` 的描述是"DAE 系统被转换成交互式 FMU
 |---|---|---|
 | 1 | 找到规范，建立"方程名 → 配对"和"变量名 → 配对"两张表（`enabled = false` 的配对已被前端丢掉，不在规范中） | `findSpec`、`equationName` |
 | 2 | 按配对编号 N = 0, 1, …（顺序同前端：按残差名排序），命名规则见 §4.1 | |
-| 3 | 第 N 个配对的迭代变量 x：方向改成 `DAE.INPUT()`，不可替换；HGT 的 start、nominal 写进 x 的属性；再登记一个别名变量 `iter_N`，和 x 共用值引用（放进别名变量集合，FMU 导出时生成同一个 `valueReference` 的别名） | `BackendVariable.setVarDirection`、`setVarStartValue`、`setVarNominalValue` |
+| 3 | 第 N 个配对的迭代变量 x：新建顶层输入 `iter_N`（复制 x 的属性，再写入 HGT 的 start、nominal、min、max；不可替换；`description` 是 x 的名字），放进已知变量；加方程 `x = iter_N`，x 本身不变 | `BackendVariable.copyVarNewName`、`setVarStartValue`、`setVarNominalValue`、`setVarMinMax` |
 | 3' | 第 N 个配对的残差方程 e：新建输出 `res_N`（Real，`DAE.OUTPUT()`，不可替换；nominal 取残差的 nominal，没写时为 0，和 OCT 一致），把方程改写成 `res_N = lhs − rhs`（**不除以 nominal**）；`description` 是方程的源码文本加注解（§4.1） | `BackendVariable.setVarUnreplaceable`、`Expression.expSub` |
 | 3'' | 新建两个 Boolean 参数 `iter_N_hold`、`res_N_hold`：hold 是字面量或没写（取 false）时是普通参数；hold 是参数表达式时，绑定为这个表达式（§4.2） | |
 | 4 | 初始方程上的配对同样处理（没有状态时一般没有） | |
@@ -139,7 +141,15 @@ OCT 文档对 `interactive_fmu` 的描述是"DAE 系统被转换成交互式 FMU
 - **标签**：改写后的方程保留源信息即可；`checkPresence`（8011/8012）在交互模式下不运行，因为迭代变量已经不是未知量。
 - **优化模块中的保护**：`iter_N` 是输入、`res_N` 是输出且都不可替换，现有的别名消除不会删掉它们；HGT 原有的"带标签的方程不删除"的保护继续有效。
 - **数组和 for**：前端已经把它们展开成标量配对，这里逐个处理，每个元素一个编号 N；描述里写展开后的名字（例如 `seg[2]`）。
-- **x 和 `iter_N`**：x 是输入本身，`iter_N` 只是别名，两者是同一个值。`ModelStructure` 中的依赖关系引用的是 x 的编号，不是 `iter_N` 的（OCT 的 FMU 中也是这样，§4.1）。
+- **x 和 `iter_N`**：`iter_N` 是输入，x 经别名消除成为它的别名（同一个值引用，`causality` 是 local），两者是同一个值。`ModelStructure` 中的依赖关系引用的是 `iter_N` 的编号。
+
+**实现说明**（和最初设计的差别）：最初设计让 x 本身变成输入、`iter_N` 做别名。实际做法是 §9 中列出的备选方案：新建输入 `iter_N`，加 `x = iter_N`。原因是 x 常常是组件里的变量（例如 `pipe1.pb`），带层级的名字不能成为 FMI 的顶层输入；这样做对所有配对是同一条路径。`omsteady` 两种形式都接受（按值引用找输入，`p.set("x")` 按 `description` 对应到 `iter_N`）。另外：
+
+- 后端变换之后把规范设成 `NONE()`，`hgtMatching`、HGT 撕裂、`componentItems`、`iterationVariableBounds` 自然不做事；方程上的 HGT 标签仍在，带标签方程的保护照旧。
+- 变换在 `HandGuidedTearing.lowerInteractive` 中，由 `lower` 在 `--interactiveFMU` 下调用；`lower` 多了一个参数（已知变量列表），用来放 `iter_N` 和 hold 参数。
+- 有状态（方程中有 `der`）时报 8024；没开 `--handGuidedTearing`、`--simCodeTarget=C+Rust` 也报 8024；不是 FMU 导出（`simulate`、`buildModel`）时给警告 8025。
+- `res_N` 的 `description` 不是源码原文，而是后端看到的方程（前端已经化简过，例如 `75*0.12` 写成 `9.0`）加上原来的注解，所以前端（§3.2）不需要保存源码文本。
+- 代数环检查（8023）先查仿真系统，有环就不再查初始化系统（没有状态时两者一般相同，避免同一个环报两次）。
 - **min/max 不能生成范围检查**：HGT 的 min/max 只用于导出到 x 的属性，供外层求解器投影；要确认运行时不会对它们生成越界断言（§9），否则外层迭代中间值越界会让求值失败。
 - **不加选项时零影响**：`lowerInteractive` 只在 `--interactiveFMU` 下调用。
 
@@ -149,7 +159,7 @@ OCT 文档对 `interactive_fmu` 的描述是"DAE 系统被转换成交互式 FMU
 
 - `iter_N`、`res_N` 是普通的输入、输出变量，nominal、min、max 是它们的标准属性；
 - `iter_N_hold`、`res_N_hold` 是普通的参数，绑定的表达式由现有的 `updateBoundParameters` 计算，**任意参数表达式都可以**，不再有"只能是常数或单个参数"的限制；
-- `iter_N` 是 x 的别名，`description` 是 x 的名字；`res_N` 的 `description` 是方程的源码文本加注解（§4.1），供诊断和 `printInfo` 使用。
+- `iter_N` 是输入，x 是它的别名，`iter_N` 的 `description` 是 x 的名字；`res_N` 的 `description` 是方程的源码文本加注解（§4.1），供诊断和 `printInfo` 使用。
 
 要确认的只有一点：现有的 FMI 导出会把带非字面量绑定的参数导出成 `causality="calculatedParameter"`，把字面量参数导出成 `causality="parameter" variability="fixed" initial="exact"`（§4.2），和 OCT 的 FMU 一致。不一致的话在模板中对这些变量单独处理。
 
@@ -216,7 +226,7 @@ equation
 
 | 变量 | OCT 中看到的 | 本设计 |
 |---|---|---|
-| `iter_N` | **参数**：start 由表达式算出的是 `causality="calculatedParameter" variability="fixed" initial="calculated"`（`iter_0`，值引用 3124），start 是字面量的是 `causality="parameter"`（`iter_10`，`start="0.0"`）；`description` 是迭代变量名；属性只有 `relativeQuantity` | **不同**：原来的迭代变量 x 是 FMI 输入，`iter_N` 是 x 的别名（同一个值引用）；start、nominal、min、max 在 x 上（理由见 §4.2'） |
+| `iter_N` | **参数**：start 由表达式算出的是 `causality="calculatedParameter" variability="fixed" initial="calculated"`（`iter_0`，值引用 3124），start 是字面量的是 `causality="parameter"`（`iter_10`，`start="0.0"`）；`description` 是迭代变量名；属性只有 `relativeQuantity` | **不同**：`iter_N` 是 FMI 输入，原来的迭代变量 x 是它的别名（同一个值引用）；start、nominal、min、max 在 `iter_N` 上（理由见 §4.2'） |
 | `res_N` | 新的变量，值引用连续（7720 + N）；`causality="output" variability="continuous" initial="calculated"`；`nominal="0"` | 同左；给了残差 nominal 时写这个值，没给时写 0 |
 | `res_N` 的 `description` | 方程的源码文本加注解，残差形式写成 `a - b = 0`，例如 `EXV_Opening.value - EXV_Opening.setPoint = 0 annotation(__Modelon(ResidualEquation(iterationVariable(hold = EXV_Opening.fixed or (EXV_Opening.isOff or false)) = EXV_Opening.scaledValue,hold = true,enabled = false)))` | 同左 |
 | `iter_N_hold`、`res_N_hold` | Boolean，见 §4.2 | 同左 |
@@ -226,8 +236,8 @@ equation
 
 | 变量 | 内容 |
 |---|---|
-| x（别名 `iter_0`） | 输入，start 1 |
-| T（别名 `iter_1`） | 输入，start 400 |
+| `iter_0`（x 是它的别名） | 输入，start 1 |
+| `iter_1`（T 是它的别名） | 输入，start 400，nominal 100 |
 | `res_0` | `LongEq` 的残差，`description` 是 `0 = 120*x - … annotation(…)` |
 | `res_1` | `LongEq2` 的残差 |
 | `iter_0_hold` | 计算参数，= `testHold2` |
@@ -260,7 +270,7 @@ equation
 | 没给残差 nominal 时 `nominal="0"` | 已确认；给了 nominal 时的写法还没看到 |
 | 字面量 hold 是固定参数，参数表达式的 hold 是计算参数 | 已确认，hold 表达式可以是 `or` 等组合 |
 | `enabled = false` 的配对 | OCT 中仍然导出（已确认）；**本设计不导出**，保持现在的行为：前端直接丢掉。以后如果需要，再确认它在 OCT 交互式 FMU 中的确切含义 |
-| `iter_N` 的因果属性 | **已确认，和本设计不同**：OCT 中是参数或计算参数（初始化时由 start 决定，`variability="fixed"`），本设计中是输入（x 本身是输入，`iter_N` 是别名） |
+| `iter_N` 的因果属性 | **已确认，和本设计不同**：OCT 中是参数或计算参数（初始化时由 start 决定，`variability="fixed"`），本设计中是输入（`iter_N` 是输入，x 是别名） |
 | 残差对迭代变量的依赖 | **已确认 OCT 没有导出**（`<Outputs>`、`<InitialUnknowns>` 中都没有 `iter_N`）；本设计在 `<Outputs>` 中导出 |
 | 编号的顺序 | 未确认；本设计按残差名排序 |
 | 没写 hold 时是否也生成 hold 变量 | 未确认；本设计生成，取 false |
@@ -325,7 +335,7 @@ Solver(p).solve()                      # 都不 hold
 print(p.get(["x", "T"]))               # x = 0.96387, T = 346.164
 
 p.set("testHold1", True)               # T 固定，去掉 LongEq
-p.set("T", 330.0)                      # T 就是输入，别名 iter_1
+p.set("T", 330.0)                      # T 是输入 iter_1 的别名
 Solver(p).solve()
 print(p.get(["x", "T"]))               # x = 0.60773, T = 330
 
@@ -349,12 +359,11 @@ Solver(p).solve()                      # 报错：1 个未知量，2 条残差
 | 编译器 | 报错：有状态；没开 `--handGuidedTearing`；`C+Rust` 目标 | `HGTInteractiveError1.mos` |
 | 编译器 | 默认（`--hgtOnly`）：`OnlyStuck` 报 8023；`OnlySolvable`、官方例子通过；`--hgtOnly=false` 时 `OnlyStuck` 能编译，FMU 内部解 z | `HGTInteractiveOnly1.mos` |
 | 回归 | 不加 `--interactiveFMU` 时，现有的全部 HGT 测试不变 | 现有测试 |
-| FMU 求值 | 迭代变量设为已知解时残差为 0；设成别的值时残差和手算一致 | `OMSteady/tests/test_fmu.py`（pytest） |
-| 求解 | `HGT.mo` 中的稳态模型（`Loop`、`Chain`、`Bound`、`Multi`、`CrossSCC` 等）：交互式求解的结果和普通仿真一致 | `OMSteady/tests/test_solve.py` |
-| hold | 官方例子的各工况；`TwoBlocks` 的跨块 hold；个数不平衡；结构奇异；API hold 和 parametric hold 合并；保持当前值（连续两次 `solve()`） | `OMSteady/tests/test_hold.py` |
-| 缩放和界 | `Bound`：界防止 `log` 的参数为负；残差 nominal 在 `manual`、`hybrid` 下起作用 | `OMSteady/tests/test_scaling.py` |
+| FMU 接口和求值 | 变量、属性、hold 参数的因果属性、依赖关系；迭代变量设为已知解时残差为 0，设成别的值时和手算一致 | `OMSteady/tests/test_fmu.py`（用 omc 现场生成 `HGTInteractive.mo` 的 FMU；没有 omc 或 FMPy 时跳过） |
+| 求解和 hold（真实 FMU） | 官方例子 §6 的全部工况；`TwoBlocks` 的跨块 hold（整体和分块）和反向 hold 的结构奇异；直接设字面量 hold 参数；改参数后保留迭代变量的值；`Plant`（组件里的配对、界、残差 nominal） | `OMSteady/tests/test_fmu.py` |
+| 求解、hold、缩放和界（Python 函数） | 同上的模型写成 `FunctionProblem`；个数不平衡；API hold 和 parametric hold 合并；`Bound`；四种残差缩放 | `OMSteady/tests/test_solver.py`、`test_model_description.py` |
 
-Python 测试通过一个 `.mos` 包装接进 testsuite（环境中没有 FMPy 时跳过）。
+Python 测试通过一个 `.mos` 包装接进 testsuite（环境中没有 FMPy 时跳过）：**还没做**，目前在 `OMSteady/` 中直接运行 `pytest tests`。
 
 **验收标准**：上表全部通过；官方例子 §6 的脚本得到表中的数值；不加选项时生成的代码不变。
 
@@ -378,7 +387,7 @@ Python 测试通过一个 `.mos` 包装接进 testsuite（环境中没有 FMPy �
 | 变换后的输入会不会被前面的模块特殊处理 | 迭代变量在前端是普通变量，到后端才改成输入；要确认 `BackendDAECreate` 之后没有模块依赖"输入一定是顶层声明的 input"。M1 中验证 |
 | `createFMIModelStructure` 对新建的输出是否生效 | 它从符号雅可比矩阵得到依赖关系，要确认后端新建的输出变量和输入变量被计入。不行的话在 M2 中补上 |
 | 方向导数的正确性 | FMIDER 是否覆盖"输出对输入"，以及对新变量是否正确；不可用时求解器退回差分，不阻塞第一阶段 |
-| 别名导出 | 要确认 OMC 的 FMU 导出会把 `iter_N` 生成为和 x 同一个值引用的别名，而且 x 的 `causality="input"`。不行的话退回到"新建输入 `iter_N`，x = iter_N"的做法 |
+| 别名导出 | **已解决**：采用“新建输入 `iter_N`，x = iter_N”的做法（§3.3 实现说明），x 导出为同一个值引用的别名 |
 | `enabled = false` 的配对 | 本设计不导出，和 OCT 不同：从 OCT 迁移来、依赖这类配对在交互式 FMU 中出现的模型，要把 `enabled` 改成 true。以后如果要跟随 OCT，再确认它的确切语义 |
 | 改参数要 `fmi2Reset` | OMC 的 FMU 中普通参数在初始化之后不能改；`omsteady` 在 `set` 参数后重新初始化并恢复迭代变量的值。每次切换工况多一次初始化，可以接受 |
 | 迭代变量的 min/max 不再进入模型 | 界只由外层求解器保证；FMU 内部的方程在迭代变量取界外的值时可能触发断言（例如 `log` 的参数为负），所以求解器必须先投影再求值 |

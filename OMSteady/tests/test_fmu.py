@@ -150,14 +150,23 @@ def test_hold_parameters_are_read_from_the_fmu(fmus):
 
 
 def test_set_literal_hold_parameter(fmus):
-    # hold any iteration variable without changing the model
-    p = FMUProblem(fmus["TwoBlocks"])
-    p.set("iter_1_hold", True)             # hold m
-    p.set("res_0_hold", True)              # drop e1
-    p.set("m", 2.0)
+    # without hold attributes the hold parameters are parameters: hold any
+    # iteration variable without changing the model
+    p = FMUProblem(fmus["Plant"])
+    assert [i.hold.causality for i in p.model.iteration_variables + p.model.residuals] == ["parameter"] * 4
+    p.set("iter_0_hold", True)             # hold p_mid
+    p.set("res_0_hold", True)              # drop pipe1.m = m
+    p.set("p_mid", 50.0)
     sol = Solver(p).solve()
     assert sol.success, sol.message
-    assert p.get("p") == pytest.approx(5.0, abs=1e-8)
+    assert p.get("m") == pytest.approx(21.0, abs=1e-8)
+    p.terminate()
+
+
+def test_names(fmus):
+    p = FMUProblem(fmus["TwoEq"])
+    assert [p.variable_index(n) for n in ("x", "iter_1", 0)] == [0, 1, 0]
+    assert [p.residual_index(n) for n in ("LongEq", "LongEq2", "res_1")] == [0, 1, 1]
     p.terminate()
 
 
@@ -181,7 +190,7 @@ def test_two_blocks(fmus, blocks):
 def test_two_blocks_reverse_hold_is_structurally_singular(fmus):
     p = FMUProblem(fmus["TwoBlocks"])
     p.holdIterationVariables(["p"])
-    p.holdResiduals(["res_1"])
+    p.holdResiduals(["e2"])
     with pytest.raises(StructuralSingularityError):
         Solver(p).solve()
     p.terminate()

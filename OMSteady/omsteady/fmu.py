@@ -227,6 +227,24 @@ class FMUProblem(SteadyProblem):
         return np.array(self._fmu.getDirectionalDerivative(
             vUnknown_ref=self._res_vrs, vKnown_ref=[self._iter_vrs[variable]], dvKnown=[1.0]))
 
+    # --- names ----------------------------------------------------------------------
+
+    def variable_index(self, item):
+        """iter_N, the name of the original variable, or an index."""
+        if isinstance(item, str):
+            k = self._iteration_position(item)
+            if k is not None:
+                return k
+        return super().variable_index(item)
+
+    def residual_index(self, item):
+        """res_N, the hand guided tearing name of the equation, or an index."""
+        if isinstance(item, str) and item not in self.residual_names:
+            for k, r in enumerate(self.model.residuals):
+                if equation_name(r.variable.description) == item:
+                    return k
+        return super().residual_index(item)
+
     # --- user API -------------------------------------------------------------------
 
     def set(self, name, value):
@@ -283,6 +301,17 @@ class FMUProblem(SteadyProblem):
         if v.type in ("Integer", "Enumeration"):
             return fmu.getInteger(vr)[0]
         return fmu.getString(vr)[0]
+
+
+_NAME = re.compile(r"\bname\s*=\s*([A-Za-z_$][\w$.\[\],]*?)\s*[,)]")
+
+
+def equation_name(description):
+    """The name = ... of the hand guided tearing annotation in the description
+    of res_N (the equation and its annotation), or None."""
+    _, sep, annotation = description.partition(" annotation(")
+    m = _NAME.search(annotation) if sep else None
+    return m.group(1) if m else None
 
 
 def _float(text):

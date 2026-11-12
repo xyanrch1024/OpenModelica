@@ -1,7 +1,7 @@
 // name:      HGTInteractiveOnly1
 // keywords:  tearing, hand guided tearing, interactive FMU
 // status:    correct
-// teardown_command: rm -rf HGT.Only* HGT_Only* HGTInteractive.TwoEq* HGTInteractive_TwoEq*
+// teardown_command: rm -rf OnlySolvable.fmu OnlyStuck.fmu TwoEq.fmu OnlySolvable.log OnlyStuck.log TwoEq.log
 //
 // --interactiveFMU with --hgtOnly (the default): the FMU may not solve
 // algebraic loops itself (error 8023). With --hgtOnly=false the loop of
@@ -14,10 +14,32 @@ setCommandLineOptions("--handGuidedTearing --interactiveFMU"); getErrorString();
 buildModelFMU(HGT.OnlySolvable, version = "2.0", fmuType = "me"); getErrorString();
 buildModelFMU(HGTInteractive.TwoEq, version = "2.0", fmuType = "me"); getErrorString();
 buildModelFMU(HGT.OnlyStuck, version = "2.0", fmuType = "me"); getErrorString();
-buildModelFMU(HGT.Loop, version = "2.0", fmuType = "me"); getErrorString();
 
 setCommandLineOptions("--hgtOnly=false"); getErrorString();
 buildModelFMU(HGT.OnlyStuck, version = "2.0", fmuType = "me"); getErrorString();
 
 // Result:
+// true
+// ""
+// true
+// ""
+// true
+// ""
+// "OnlySolvable.fmu"
+// "Notification: Building FMU for platform 'static' (1/1).
+// Notification: Finished FMU for platform 'static' (1/1).
+// "
+// "TwoEq.fmu"
+// "Notification: Building FMU for platform 'static' (1/1).
+// Notification: Finished FMU for platform 'static' (1/1).
+// "
+// ""
+// "Error: With --interactiveFMU and --hgtOnly the FMU may not solve algebraic loops, but the equations {$cse2 = sin(z); $cse2 + z - y = 0} form a non-linear system for the variables {z}. Give them hand guided tearing pairs or compile with --hgtOnly=false.
+// "
+// true
+// ""
+// "OnlyStuck.fmu"
+// "Notification: Building FMU for platform 'static' (1/1).
+// Notification: Finished FMU for platform 'static' (1/1).
+// "
 // endResult

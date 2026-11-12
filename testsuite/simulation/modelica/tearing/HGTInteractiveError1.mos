@@ -1,7 +1,7 @@
 // name:      HGTInteractiveError1
 // keywords:  tearing, hand guided tearing, interactive FMU
 // status:    correct
-// teardown_command: rm -rf HGTInteractive.Dynamic* HGTInteractive_Dynamic* HGTInteractive.TwoEq* HGTInteractive_TwoEq*
+// teardown_command: rm -rf Dynamic.fmu TwoEq.fmu HGTInteractive.TwoEq* HGTInteractive_TwoEq*
 //
 // --interactiveFMU: models with states, --handGuidedTearing missing, the
 // C+Rust target, and a warning without FMU export.
@@ -20,4 +20,33 @@ setCommandLineOptions("--simCodeTarget=C --handGuidedTearing=false"); getErrorSt
 buildModelFMU(HGTInteractive.TwoEq, version = "2.0", fmuType = "me"); getErrorString();
 
 // Result:
+// true
+// ""
+// true
+// ""
+// ""
+// "[simulation/modelica/tearing/HGTInteractive.mo:48:5-48:16:writable] Error: --interactiveFMU: models with states are not supported yet, but the model contains der(x) = -x.
+// "
+// record SimulationResult
+//     resultFile = "HGTInteractive.TwoEq_res.mat",
+//     simulationOptions = "startTime = 0.0, stopTime = 0.0, numberOfIntervals = 500, tolerance = 1e-6, method = 'dassl', fileNamePrefix = 'HGTInteractive.TwoEq', options = '', outputFormat = 'mat', variableFilter = '.*', cflags = '', simflags = ''",
+//     messages = "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.
+// LOG_SUCCESS       | info    | The simulation finished successfully.
+// "
+// end SimulationResult;
+// "Warning: --interactiveFMU transforms the model into a residual calculator for an outer steady-state solver: the iteration variables are inputs and the residuals outputs. It is meant for FMU export, simulating the model directly gives the residuals at the start values.
+// "
+// -120.0
+// -627.0
+// true
+// ""
+// ""
+// "Error: --interactiveFMU: --simCodeTarget=C+Rust is not supported yet, the Rust runtime can not export interactive FMUs.
+// "
+// true
+// ""
+// ""
+// "Notification: The model contains hand guided tearing annotations, which are ignored since --handGuidedTearing is not set.
+// Error: --interactiveFMU: it needs --handGuidedTearing.
+// "
 // endResult

@@ -8,6 +8,9 @@ HGTError1.mos \
 HGTFor1.mos \
 HGTIf1.mos \
 HGTInit1.mos \
+HGTInteractive1.mos \
+HGTInteractiveError1.mos \
+HGTInteractiveOnly1.mos \
 HGTNetwork1.mos \
 HGTOnly1.mos \
 HGTPair1.mos \

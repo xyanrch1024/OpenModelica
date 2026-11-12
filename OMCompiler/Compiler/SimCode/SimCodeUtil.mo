@@ -311,6 +311,7 @@ protected
   SimCode.SimulationSettings theSettings;
 
   constant Boolean debug = false;
+  Boolean hgtInteractiveOk = true "false: --interactiveFMU found algebraic loops, already reported";
 algorithm
   try
     execStat("Backend phase and start with SimCode phase");
@@ -710,6 +711,9 @@ algorithm
       execStat("simCode: alias equations");
     end if;
 
+    // --interactiveFMU: no algebraic loops in the FMU with --hgtOnly
+    hgtInteractiveOk := HandGuidedTearing.checkInteractiveSimCode(allEquations, initialEquations, isFMU);
+
     // fix issue https://github.com/OpenModelica/OpenModelica/issues/12916
     fileNamePrefixHash := Util.hashFileNamePrefix(filenamePrefix);
 
@@ -793,6 +797,10 @@ algorithm
     Error.addInternalError("function createSimCode failed [Transformation from optimised DAE to simulation code structure failed]", sourceInfo());
     fail();
   end try;
+
+  if not hgtInteractiveOk then
+    fail();
+  end if;
 end createSimCode;
 
 protected function getParamAsserts"splits the equationArray in variable-dependent and parameter-dependent equations.

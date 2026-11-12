@@ -1473,6 +1473,9 @@ constant ConfigFlag HGT_ALLOW_MULTIPLE_RESIDUALS = CONFIG_FLAG(175, "hgtAllowMul
 constant ConfigFlag HGT_ONLY = CONFIG_FLAG(176, "hgtOnly",
   NONE(), EXTERNAL(), BOOL_FLAG(true), NONE(),
   "Tears the blocks that contain hand guided tearing items only with the given iteration\nvariables and residual equations: if the other equations of such a block can not be\nsolved with them, an error is reported instead of adding iteration variables or residual\nequations automatically. On by default; --hgtOnly=false lets the tearing add them.");
+constant ConfigFlag INTERACTIVE_FMU = CONFIG_FLAG(177, "interactiveFMU",
+  NONE(), EXTERNAL(), BOOL_FLAG(false), NONE(),
+  "With --handGuidedTearing: transforms the model into an interactive FMU for an outer\nsteady-state solver. The iteration variable of hand guided tearing pair N becomes the\ninput iter_N, its residual equation the output res_N, and the Boolean parameters\niter_N_hold and res_N_hold give the hold attributes. With --hgtOnly the FMU may not\nsolve algebraic loops itself. Corresponds to the OCT option interactive_fmu, see\ndoc/HGT_interactive_fmu_phase1.md.");
 
 function getFlags
   "Loads the flags with getGlobalRoot. Assumes flags have been loaded."

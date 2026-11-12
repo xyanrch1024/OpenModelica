@@ -445,7 +445,8 @@ constant list<Flags.ConfigFlag> allConfigFlags = {
   Flags.HAND_GUIDED_TEARING,
   Flags.HGT_MERGE_BLT_BLOCKS,
   Flags.HGT_ALLOW_MULTIPLE_RESIDUALS,
-  Flags.HGT_ONLY
+  Flags.HGT_ONLY,
+  Flags.INTERACTIVE_FMU
 };
 
 public function new

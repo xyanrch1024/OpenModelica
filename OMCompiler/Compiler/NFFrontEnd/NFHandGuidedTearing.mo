@@ -641,7 +641,7 @@ public
 
     s := SPEC(residuals);
 
-    if hasHold(s) then
+    if hasHold(s) and not Flags.getConfigBool(Flags.INTERACTIVE_FMU) then
       Error.addMessage(Error.HGT_HOLD_NOT_SUPPORTED, {});
     end if;
 

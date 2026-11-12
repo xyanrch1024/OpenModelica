@@ -17,4 +17,144 @@ system("sed -n \"/<ModelVariables>/,/<\\/ModelStructure>/p\" TwoEq_tmp.xml > Two
 readFile("TwoEq.xml"); getErrorString();
 
 // Result:
+// true
+// ""
+// true
+// ""
+// Hand guided tearing:
+//   pair: residual equation LongEq (hold = testHold1), iteration variable x (hold = testHold2)
+//   pair: residual equation LongEq2 (hold = testHold2), iteration variable T (hold = testHold1)
+// Hand guided tearing (interactive):
+//   0: iter_0 (x, hold = testHold2), res_0 (LongEq, hold = testHold1) = -(120.0 * x + (-9.0) * exp(12581.0 * (T - 298.0) / (298.0 * T)) * (1.0 - x))
+//   1: iter_1 (T, hold = testHold1), res_1 (LongEq2, hold = testHold2) = -(11.0 * (-300.0 + T) + x * (T - 873.0))
+// "TwoEq.fmu"
+// "Notification: Building FMU for platform 'static' (1/1).
+// Notification: Finished FMU for platform 'static' (1/1).
+// "
+// 0
+// ""
+// 0
+// ""
+// "  <ModelVariables>
+//   <!-- Index of variable = \"1\" -->
+//   <ScalarVariable
+//     name=\"iter_0\"
+//     valueReference=\"3\"
+//     description=\"x\"
+//     causality=\"input\"
+//     >
+//     <Real start=\"1.0\"/>
+//   </ScalarVariable>
+//   <!-- Index of variable = \"2\" -->
+//   <ScalarVariable
+//     name=\"iter_1\"
+//     valueReference=\"4\"
+//     description=\"T\"
+//     causality=\"input\"
+//     >
+//     <Real start=\"400.0\" nominal=\"100.0\"/>
+//   </ScalarVariable>
+//   <!-- Index of variable = \"3\" -->
+//   <ScalarVariable
+//     name=\"res_0\"
+//     valueReference=\"5\"
+//     description=\"0.0 = 120.0 * x + (-9.0) * exp(12581.0 * (T - 298.0) / (298.0 * T)) * (1.0 - x) annotation(__OpenModelica_HGT(ResidualEquation(hold = testHold1, iterationVariable(hold = testHold2) = x), name = LongEq))\"
+//     causality=\"output\"
+//     >
+//     <Real nominal=\"0.0\"/>
+//   </ScalarVariable>
+//   <!-- Index of variable = \"4\" -->
+//   <ScalarVariable
+//     name=\"res_1\"
+//     valueReference=\"6\"
+//     description=\"0.0 = 11.0 * (-300.0 + T) + x * (T - 873.0) annotation(__OpenModelica_HGT(ResidualEquation(hold = testHold2, iterationVariable(hold = testHold1) = T), name = LongEq2))\"
+//     causality=\"output\"
+//     >
+//     <Real nominal=\"0.0\"/>
+//   </ScalarVariable>
+//   <!-- Index of variable = \"5\" -->
+//   <ScalarVariable
+//     name=\"T\"
+//     valueReference=\"4\"
+//     >
+//     <Real nominal=\"100.0\"/>
+//   </ScalarVariable>
+//   <!-- Index of variable = \"6\" -->
+//   <ScalarVariable
+//     name=\"x\"
+//     valueReference=\"3\"
+//     >
+//     <Real/>
+//   </ScalarVariable>
+//   <!-- Index of variable = \"7\" -->
+//   <ScalarVariable
+//     name=\"iter_0_hold\"
+//     valueReference=\"0\"
+//     variability=\"fixed\"
+//     causality=\"calculatedParameter\"
+//     >
+//     <Boolean/>
+//   </ScalarVariable>
+//   <!-- Index of variable = \"8\" -->
+//   <ScalarVariable
+//     name=\"iter_1_hold\"
+//     valueReference=\"1\"
+//     variability=\"fixed\"
+//     causality=\"calculatedParameter\"
+//     >
+//     <Boolean/>
+//   </ScalarVariable>
+//   <!-- Index of variable = \"9\" -->
+//   <ScalarVariable
+//     name=\"res_0_hold\"
+//     valueReference=\"2\"
+//     variability=\"fixed\"
+//     causality=\"calculatedParameter\"
+//     >
+//     <Boolean/>
+//   </ScalarVariable>
+//   <!-- Index of variable = \"10\" -->
+//   <ScalarVariable
+//     name=\"res_1_hold\"
+//     valueReference=\"3\"
+//     variability=\"fixed\"
+//     causality=\"calculatedParameter\"
+//     >
+//     <Boolean/>
+//   </ScalarVariable>
+//   <!-- Index of variable = \"11\" -->
+//   <ScalarVariable
+//     name=\"testHold1\"
+//     valueReference=\"4\"
+//     variability=\"fixed\"
+//     causality=\"parameter\"
+//     >
+//     <Boolean start=\"false\"/>
+//   </ScalarVariable>
+//   <!-- Index of variable = \"12\" -->
+//   <ScalarVariable
+//     name=\"testHold2\"
+//     valueReference=\"5\"
+//     variability=\"fixed\"
+//     causality=\"parameter\"
+//     >
+//     <Boolean start=\"false\"/>
+//   </ScalarVariable>
+//   </ModelVariables>
+//   <ModelStructure>
+//     <Outputs>
+//       <Unknown index=\"3\" dependencies=\"1 2\" dependenciesKind=\"dependent dependent\" />
+//       <Unknown index=\"4\" dependencies=\"1 2\" dependenciesKind=\"dependent dependent\" />
+//     </Outputs>
+//     <InitialUnknowns>
+//       <Unknown index=\"3\" dependencies=\"1 2\" dependenciesKind=\"dependent dependent\" />
+//       <Unknown index=\"4\" dependencies=\"1 2\" dependenciesKind=\"dependent dependent\" />
+//       <Unknown index=\"7\" dependencies=\"12\" dependenciesKind=\"dependent\" />
+//       <Unknown index=\"8\" dependencies=\"11\" dependenciesKind=\"dependent\" />
+//       <Unknown index=\"9\" dependencies=\"11\" dependenciesKind=\"dependent\" />
+//       <Unknown index=\"10\" dependencies=\"12\" dependenciesKind=\"dependent\" />
+//     </InitialUnknowns>
+//   </ModelStructure>
+// "
+// ""
 // endResult

@@ -1236,6 +1236,12 @@ public constant ErrorTypes.Message HGT_MULTIPLE_RESIDUALS = ErrorTypes.MESSAGE(8
   "The hand guided tearing block has %s residual equations {%s}, but --hgtAllowMultipleResiduals=false allows only one.");
 public constant ErrorTypes.Message HGT_UNPAIRED_NOT_ALLOWED = ErrorTypes.MESSAGE(8022, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "The hand guided tearing %s is not paired. Only explicit pairs are supported, given by ResidualEquation(iterationVariable = ...) or tearingPairs(Pair(...)).");
+public constant ErrorTypes.Message HGT_INTERACTIVE_LOOP = ErrorTypes.MESSAGE(8023, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
+  "With --interactiveFMU and --hgtOnly the FMU may not solve algebraic loops, but the equations {%s} form a %s system for the variables {%s}. Give them hand guided tearing pairs or compile with --hgtOnly=false.");
+public constant ErrorTypes.Message HGT_INTERACTIVE_NOT_SUPPORTED = ErrorTypes.MESSAGE(8024, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
+  "--interactiveFMU: %s.");
+public constant ErrorTypes.Message HGT_INTERACTIVE_NOT_FMU = ErrorTypes.MESSAGE(8025, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),
+  "--interactiveFMU transforms the model into a residual calculator for an outer steady-state solver: the iteration variables are inputs and the residuals outputs. It is meant for FMU export, simulating the model directly gives the residuals at the start values.");
 
 public constant ErrorTypes.Message MATCH_SHADOWING = ErrorTypes.MESSAGE(5001, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "Local variable '%s' shadows another variable.");

@@ -44,7 +44,11 @@ encapsulated package HandGuidedTearing
        into the matching, so that each residual equation and its iteration
        variable end up in the same strong component,
      - componentItems: tells Tearing which items of a strong component were
-       given by the user, Tearing.handGuidedTearing then tears the component."
+       given by the user, Tearing.handGuidedTearing then tears the component.
+   With --interactiveFMU, lower instead transforms the model into a residual
+   calculator (lowerInteractive, doc/HGT_interactive_fmu_phase1.md): the pairs
+   become inputs iter_N and outputs res_N, and nothing is left for hgtMatching
+   and the tearing."
 
 public
 import BackendDAE;
@@ -69,7 +73,12 @@ import ExpressionDump;
 import Flags;
 import List;
 import SCode;
+import SCodeDump;
 import SCodeUtil;
+import System;
+import SimCode;
+import SimCodeCodegenUtil;
+import SimCodeVar;
 import UnorderedMap;
 import UnorderedSet;
 import Util;
@@ -92,12 +101,17 @@ function lower
   input output list<BackendDAE.Var> vars;
   input output list<BackendDAE.Equation> eqns;
   input output list<BackendDAE.Equation> initialEqns;
+  input output list<BackendDAE.Var> knownVars;
 protected
   BackendDAE.HGTSpec s;
   UnorderedMap<String, DAE.HGTIterationVariable> var_map;
   UnorderedMap<String, DAE.Exp> nominal_map;
   list<DAE.HGTIterationVariable> iter_vars;
 algorithm
+  if Flags.getConfigBool(Flags.INTERACTIVE_FMU) then
+    checkInteractiveOptions();
+  end if;
+
   spec := findSpec(elements);
 
   if isNone(spec) then
@@ -105,6 +119,14 @@ algorithm
   end if;
 
   SOME(s) := spec;
+
+  if Flags.getConfigBool(Flags.INTERACTIVE_FMU) then
+    // The pairs become inputs and outputs, nothing is left for hgtMatching
+    // and the tearing to do, see doc/HGT_interactive_fmu_phase1.md section 3.3.
+    (vars, eqns, initialEqns, knownVars) := lowerInteractive(s, vars, eqns, initialEqns, knownVars);
+    spec := NONE();
+    return;
+  end if;
   iter_vars := allIterationVariables(s);
 
   var_map := UnorderedMap.new<DAE.HGTIterationVariable>(stringHashDjb2, stringEq);
@@ -154,6 +176,48 @@ algorithm
     end if;
   end for;
 end iterationVariableBounds;
+
+function isInteractive
+  "Returns true if the model is transformed into an interactive FMU."
+  output Boolean interactive = Flags.getConfigBool(Flags.INTERACTIVE_FMU) and
+                               Flags.getConfigBool(Flags.HAND_GUIDED_TEARING);
+end isInteractive;
+
+function checkInteractiveSimCode
+  "With --interactiveFMU: warns if the model is not exported as an FMU, and with
+   --hgtOnly reports the algebraic loops left in the FMU (error 8023), see
+   doc/HGT_interactive_fmu_phase1.md section 3.7. The systems are checked in the
+   SimCode because a single equation that can not be solved explicitly only
+   becomes a 1x1 non-linear system there. The initialization system is only
+   checked if the simulation system has no loops, without states they are
+   usually the same."
+  input list<SimCode.SimEqSystem> allEquations;
+  input list<SimCode.SimEqSystem> initialEquations;
+  input Boolean isFMU;
+  output Boolean ok = true;
+algorithm
+  if not isInteractive() then
+    return;
+  end if;
+
+  if not isFMU then
+    Error.addMessage(Error.HGT_INTERACTIVE_NOT_FMU, {});
+  end if;
+
+  if not Flags.getConfigBool(Flags.HGT_ONLY) then
+    return;
+  end if;
+
+  for eq in allEquations loop
+    ok := checkInteractiveSystem(eq) and ok;
+  end for;
+
+  if ok then
+    for eq in initialEquations loop
+      ok := checkInteractiveSystem(eq) and ok;
+    end for;
+  end if;
+end checkInteractiveSimCode;
 
 function isActive
   "Returns true if the DAE has a hand guided tearing specification."
@@ -402,6 +466,360 @@ algorithm
     end if;
   end if;
 end lowerVariable;
+
+// ============================================================================
+// Interactive FMU, see doc/HGT_interactive_fmu_phase1.md
+// ============================================================================
+
+function checkInteractiveOptions
+  "Checks the options that --interactiveFMU needs."
+algorithm
+  if not Flags.getConfigBool(Flags.HAND_GUIDED_TEARING) then
+    Error.addMessage(Error.HGT_INTERACTIVE_NOT_SUPPORTED, {"it needs --handGuidedTearing"});
+    fail();
+  end if;
+
+  if Flags.getConfigString(Flags.SIMCODE_TARGET) == "C+Rust" then
+    Error.addMessage(Error.HGT_INTERACTIVE_NOT_SUPPORTED, {"--simCodeTarget=C+Rust is not supported yet, the Rust runtime can not export interactive FMUs"});
+    fail();
+  end if;
+end checkInteractiveOptions;
+
+function lowerInteractive
+  "Transforms the model into a residual calculator. For pair N (residual
+   equation lhs = rhs, iteration variable x):
+     - a new top-level input iter_N with the attributes of x and the start,
+       nominal, min and max of the pair, and the equation x = iter_N (x becomes
+       an alias of iter_N),
+     - a new top-level output res_N and the residual equation rewritten as
+       res_N = lhs - rhs (not divided by the nominal, which is an attribute of
+       res_N),
+     - the Boolean parameters iter_N_hold and res_N_hold, bound to the hold
+       attributes (false if not given).
+   Each pair removes one unknown (x is given by iter_N) and adds one (res_N), so
+   the system stays balanced. The pairs are numbered in the order of the
+   specification."
+  input BackendDAE.HGTSpec spec;
+  input output list<BackendDAE.Var> vars;
+  input output list<BackendDAE.Equation> eqns;
+  input output list<BackendDAE.Equation> initialEqns;
+  input output list<BackendDAE.Var> knownVars;
+protected
+  array<DAE.HGTResidual> pairs;
+  array<Option<BackendDAE.Var>> bases;
+  array<Option<String>> descriptions;
+  array<DAE.Exp> residuals "the residual expressions, for the dump";
+  UnorderedMap<String, Integer> eq_map, var_map;
+  Option<Integer> oi;
+  Integer n, i;
+  DAE.HGTResidual r;
+  BackendDAE.Var x, v;
+  DAE.ComponentRef iter_cr, res_cr;
+  list<BackendDAE.Var> new_vars = {}, new_known = {};
+  list<BackendDAE.Equation> new_eqns = {};
+  Boolean ok = true;
+  String dump = "";
+algorithm
+  pairs := listArray(spec.residuals);
+  n := arrayLength(pairs);
+  bases := arrayCreate(n, NONE());
+  descriptions := arrayCreate(n, NONE());
+  residuals := arrayCreate(n, DAE.RCONST(0.0));
+  eq_map := UnorderedMap.new<Integer>(stringHashDjb2, stringEq);
+  var_map := UnorderedMap.new<Integer>(stringHashDjb2, stringEq);
+
+  for k in 1:n loop
+    UnorderedMap.add(pairs[k].name, k, eq_map);
+    UnorderedMap.add(crefString(pairs[k].iterationVariable.name), k, var_map);
+  end for;
+
+  for e in eqns loop
+    if equationHasDer(e) then
+      Error.addSourceMessage(Error.HGT_INTERACTIVE_NOT_SUPPORTED,
+        {"models with states are not supported yet, but the model contains " + BackendDump.equationString(e)},
+        ElementSource.getInfo(BackendEquation.equationSource(e)));
+      fail();
+    end if;
+  end for;
+
+  // the iteration variables
+  for var in vars loop
+    oi := UnorderedMap.get(crefString(BackendVariable.varCref(var)), var_map);
+    if isSome(oi) then
+      SOME(i) := oi;
+      bases[i] := SOME(var);
+    end if;
+  end for;
+
+  // the residual equations
+  eqns := list(rewriteResidual(e, eq_map, descriptions, residuals) for e in eqns);
+  initialEqns := list(rewriteResidual(e, eq_map, descriptions, residuals) for e in initialEqns);
+
+  for k in 1:n loop
+    r := pairs[k];
+    i := k - 1;
+
+    if isNone(bases[k]) then
+      Error.addSourceMessage(Error.HGT_INTERACTIVE_NOT_SUPPORTED,
+        {"the iteration variable " + crefString(r.iterationVariable.name) + " of " + r.name + " is not an unknown of the model"},
+        r.iterationVariable.info);
+      ok := false;
+      continue;
+    end if;
+
+    if isNone(descriptions[k]) then
+      Error.addSourceMessage(Error.HGT_INTERACTIVE_NOT_SUPPORTED,
+        {"the residual equation " + r.name + " is not an equation of the form lhs = rhs"}, r.info);
+      ok := false;
+      continue;
+    end if;
+
+    SOME(x) := bases[k];
+
+    // iter_N: an input with the attributes of x
+    iter_cr := ComponentReferenceBasics.makeCrefIdent("iter_" + intString(i), DAE.T_REAL_DEFAULT, {});
+    v := BackendVariable.copyVarNewName(iter_cr, x);
+    v.varKind := BackendDAE.VARIABLE();
+    v.varDirection := DAE.INPUT();
+    v.varType := DAE.T_REAL_DEFAULT;
+    v.arryDim := {};
+    v.bindExp := NONE();
+    v.tplExp := NONE();
+    v.tearingSelectOption := NONE();
+    v.hideResult := NONE();
+    v.connectorType := DAE.NON_CONNECTOR();
+    v.innerOuter := DAE.NOT_INNER_OUTER();
+    v.unreplaceable := true;
+    v.comment := SOME(SCode.COMMENT(NONE(), SOME(crefString(BackendVariable.varCref(x)))));
+    v := setInteractiveAttributes(v, r.iterationVariable);
+    new_known := v :: new_known;
+    new_eqns := BackendDAE.EQUATION(Expression.crefExp(BackendVariable.varCref(x)), Expression.crefExp(iter_cr),
+      BackendVariable.getVarSource(x), BackendDAE.EQ_ATTR_DEFAULT_DYNAMIC) :: new_eqns;
+
+    // res_N: an output
+    res_cr := ComponentReferenceBasics.makeCrefIdent("res_" + intString(i), DAE.T_REAL_DEFAULT, {});
+    v := BackendVariable.makeVar(res_cr);
+    v.varDirection := DAE.OUTPUT();
+    v.varType := DAE.T_REAL_DEFAULT;
+    v.unreplaceable := true;
+    v.source := ElementSource.addElementSourceFileInfo(DAE.emptyElementSource, r.info);
+    v.comment := SOME(SCode.COMMENT(NONE(), descriptions[k]));
+    v := BackendVariable.setVarNominalValue(v, Util.getOptionOrDefault(r.nominal, DAE.RCONST(0.0)));
+    new_vars := v :: new_vars;
+
+    // the hold parameters
+    new_known := makeHoldParameter("iter_" + intString(i) + "_hold", r.iterationVariable.hold, r.iterationVariable.info) ::
+                 makeHoldParameter("res_" + intString(i) + "_hold", r.hold, r.info) :: new_known;
+
+    if Flags.isSet(Flags.HGT_DUMP) then
+      dump := dump + "  " + intString(i) + ": iter_" + intString(i) + " (" + crefString(BackendVariable.varCref(x)) +
+        ", hold = " + holdString(r.iterationVariable.hold) + "), res_" + intString(i) + " (" + r.name +
+        ", hold = " + holdString(r.hold) + ") = " + ExpressionBasics.printExpStr(residuals[k]) + "\n";
+    end if;
+  end for;
+
+  if not ok then
+    fail();
+  end if;
+
+  if Flags.isSet(Flags.HGT_DUMP) then
+    print("Hand guided tearing (interactive):\n" + dump);
+  end if;
+
+  // new_* are in reverse order: append them in the order of the pairs
+  vars := listReverse(listAppend(new_vars, listReverse(vars)));
+  eqns := listReverse(listAppend(new_eqns, listReverse(eqns)));
+  knownVars := listReverse(listAppend(new_known, listReverse(knownVars)));
+end lowerInteractive;
+
+function equationHasDer
+  input BackendDAE.Equation eq;
+  output Boolean hasDer;
+algorithm
+  (_, hasDer) := BackendEquation.traverseExpsOfEquation(eq, expHasDerHelper, false);
+end equationHasDer;
+
+function expHasDerHelper
+  input output DAE.Exp exp;
+  input output Boolean hasDer;
+algorithm
+  hasDer := hasDer or Expression.expHasDer(exp);
+end expHasDerHelper;
+
+function rewriteResidual
+  "Rewrites residual equation N - 1 lhs = rhs as res_N-1 = lhs - rhs and stores
+   its description: the equation and its annotation."
+  input output BackendDAE.Equation eq;
+  input UnorderedMap<String, Integer> eqMap;
+  input array<Option<String>> descriptions;
+  input array<DAE.Exp> residuals;
+protected
+  Option<String> name;
+  Option<Integer> oi;
+  Integer k;
+  DAE.ComponentRef cr;
+algorithm
+  name := equationName(eq);
+
+  if isNone(name) then
+    return;
+  end if;
+
+  oi := UnorderedMap.get(Util.getOption(name), eqMap);
+
+  if isNone(oi) then
+    return;
+  end if;
+
+  SOME(k) := oi;
+
+  eq := match eq
+    case BackendDAE.EQUATION()
+      algorithm
+        arrayUpdate(descriptions, k, SOME(BackendDump.equationString(eq) + annotationString(eq.source)));
+        cr := ComponentReferenceBasics.makeCrefIdent("res_" + intString(k - 1), DAE.T_REAL_DEFAULT, {});
+        eq.scalar := Expression.expSub(eq.exp, eq.scalar);
+        eq.exp := Expression.crefExp(cr);
+        arrayUpdate(residuals, k, eq.scalar);
+      then
+        eq;
+
+    else eq;
+  end match;
+end rewriteResidual;
+
+function annotationString
+  "The annotations of an equation, without the tag added by the frontend."
+  input DAE.ElementSource source;
+  output String str = "";
+protected
+  SCode.Annotation ann;
+  SCode.Mod mod;
+  list<SCode.SubMod> submods;
+algorithm
+  for cmt in ElementSource.getComments(source) loop
+    if isSome(cmt.annotation_) then
+      SOME(ann) := cmt.annotation_;
+
+      _ := match ann
+        case SCode.ANNOTATION(modification = mod as SCode.MOD(subModLst = submods))
+          algorithm
+            submods := list(m for m guard m.ident <> EQUATION_TAG in submods);
+            if not listEmpty(submods) then
+              mod.subModLst := submods;
+              str := str + " " + System.trimWhitespace(SCodeDump.printAnnotationStr(SCode.COMMENT(SOME(SCode.ANNOTATION(mod)), NONE())));
+            end if;
+          then ();
+        else ();
+      end match;
+    end if;
+  end for;
+end annotationString;
+
+function setInteractiveAttributes
+  "Applies the start, nominal, min and max of a pair to its input iter_N."
+  input output BackendDAE.Var var;
+  input DAE.HGTIterationVariable hgtVar;
+algorithm
+  if isSome(hgtVar.start) then
+    var := BackendVariable.setVarStartValue(var, Util.getOption(hgtVar.start));
+  end if;
+
+  if isSome(hgtVar.nominal) then
+    var := BackendVariable.setVarNominalValue(var, Util.getOption(hgtVar.nominal));
+  end if;
+
+  var := BackendVariable.setVarMinMax(var, hgtVar.min, hgtVar.max);
+end setInteractiveAttributes;
+
+function makeHoldParameter
+  "A Boolean parameter bound to a hold attribute, false if it is not given."
+  input String name;
+  input Option<DAE.Exp> hold;
+  input SourceInfo info;
+  output BackendDAE.Var var;
+protected
+  DAE.ComponentRef cr;
+  DAE.Exp e;
+algorithm
+  cr := ComponentReferenceBasics.makeCrefIdent(name, DAE.T_BOOL_DEFAULT, {});
+  e := Util.getOptionOrDefault(hold, DAE.BCONST(false));
+  var := BackendVariable.makeVar(cr);
+  var.varKind := BackendDAE.PARAM();
+  var.varType := DAE.T_BOOL_DEFAULT;
+  var.bindExp := SOME(e);
+  var.source := ElementSource.addElementSourceFileInfo(DAE.emptyElementSource, info);
+
+  if Expression.isConst(e) then
+    var := BackendVariable.setVarStartValue(var, e);
+  end if;
+end makeHoldParameter;
+
+function holdString
+  input Option<DAE.Exp> hold;
+  output String str = if isSome(hold) then ExpressionBasics.printExpStr(Util.getOption(hold)) else "false";
+end holdString;
+
+function checkInteractiveSystem
+  "Reports a linear, non-linear or mixed system left in an interactive FMU."
+  input SimCode.SimEqSystem eq;
+  output Boolean ok = true;
+protected
+  String kind;
+  list<SimCode.SimEqSystem> innerEqs;
+  list<String> var_names;
+  SimCode.SimEqSystem cont;
+algorithm
+  (kind, innerEqs, var_names) := match eq
+    case SimCode.SES_MIXED(cont = cont) then systemItems(cont, "mixed");
+    else systemItems(eq, "");
+  end match;
+
+  if stringEmpty(kind) then
+    return;
+  end if;
+
+  ok := false;
+  Error.addMessage(Error.HGT_INTERACTIVE_LOOP, {
+    stringDelimitList(list(simEqString(e) for e in innerEqs), "; "), kind, stringDelimitList(var_names, ", ")});
+end checkInteractiveSystem;
+
+function systemItems
+  "The equations and iteration variables of a linear or non-linear system."
+  input SimCode.SimEqSystem eq;
+  input String mixedKind "the kind to report, empty: the kind of eq";
+  output String kind;
+  output list<SimCode.SimEqSystem> eqs;
+  output list<String> varNames;
+protected
+  list<DAE.ComponentRef> crefs;
+  list<SimCodeVar.SimVar> vars;
+  list<SimCode.SimEqSystem> residual;
+algorithm
+  (kind, eqs, varNames) := match eq
+    case SimCode.SES_NONLINEAR(nlSystem = SimCode.NONLINEARSYSTEM(eqs = eqs, crefs = crefs))
+      then ("non-linear", eqs, list(crefString(c) for c in crefs));
+    case SimCode.SES_LINEAR(lSystem = SimCode.LINEARSYSTEM(vars = vars, residual = residual))
+      then ("linear", residual, list(crefString(v.name) for v in vars));
+    else ("", {}, {});
+  end match;
+
+  if not stringEmpty(kind) and not stringEmpty(mixedKind) then
+    kind := mixedKind;
+  end if;
+end systemItems;
+
+function simEqString
+  input SimCode.SimEqSystem eq;
+  output String str;
+algorithm
+  str := match eq
+    case SimCode.SES_RESIDUAL() then ExpressionBasics.printExpStr(eq.exp) + " = 0";
+    case SimCode.SES_SIMPLE_ASSIGN() then crefString(eq.cref) + " = " + ExpressionBasics.printExpStr(eq.exp);
+    case SimCode.SES_SIMPLE_ASSIGN_CONSTRAINTS() then crefString(eq.cref) + " = " + ExpressionBasics.printExpStr(eq.exp);
+    else "equation " + intString(SimCodeCodegenUtil.simEqSystemIndex(eq));
+  end match;
+end simEqString;
 
 function scaleResidual
   "Rewrites a residual equation lhs = rhs with a nominal as 0 = (lhs - rhs) / nominal."

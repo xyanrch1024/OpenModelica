@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omsteady"
+version = "0.1.0"
+description = "Steady-state solving of OpenModelica hand guided tearing problems"
+requires-python = ">=3.9"
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+fmu = ["fmpy"]
+test = ["pytest"]
+
+[tool.setuptools]
+packages = ["omsteady"]

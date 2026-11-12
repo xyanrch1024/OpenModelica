@@ -32,7 +32,7 @@
 |---|---|---|
 | 编译选项 | `--interactiveFMU` | 暴露标量块的选项（OCT 的 `expose_scalar_equation_blocks_in_interactive_fmu`） |
 | 模型 | 没有状态、没有事件的稳态模型 | 带状态（`der(x) = 0` 作残差）、带事件 |
-| 暴露的项 | 用户写的 HGT 配对；剩下的代数环默认由 FMU 内部求解，加 `--hgtOnly` 时编译期报错（§3.7） | 自动撕裂出来的迭代变量和残差 |
+| 暴露的项 | 用户写的 HGT 配对；剩下的代数环默认编译期报错（`--hgtOnly` 默认打开），`--hgtOnly=false` 时由 FMU 内部求解（§3.7） | 自动撕裂出来的迭代变量和残差 |
 | FMI | 2.0 Model Exchange | FMI 3、Co-Simulation |
 | 运行时 | C 运行时 | Rust 运行时（`C+Rust` 目标下报错） |
 | 雅可比矩阵 | 差分；FMU 已有的方向导数能用就用（§9） | 专门优化 |
@@ -81,7 +81,7 @@ end twoEqSteadyStateParaHold_interactive;
 - **输出对输入的依赖关系自动得到。** 现有的 `SimCodeUtil.createFMIModelStructure` 从符号雅可比矩阵算出 `<ModelStructure><Outputs>` 的 `dependencies`，残差是输出、迭代变量是输入，所以"每条残差依赖哪些迭代变量"（包括跨块的间接依赖）直接出现在 `modelDescription.xml` 中，不用另外计算。
 - **方向导数自动可用。** FMU 已经为"输出对输入"生成 FMIDER 雅可比矩阵，`fmi2GetDirectionalDerivative` 给出的就是残差对迭代变量的导数。
 - **初始化系统和仿真系统自然一致**：变换在创建初始化系统之前做，两边用的是同一个变换后的模型。没有状态时，FMU 初始化之后的每次求值都只是把方程算一遍。
-- **用户给的迭代变量不够时**：默认剩下的代数环留在 FMU 内部，由 FMU 自己的求解器解（和 OCT"只暴露部分块"的行为类似）；加了 `--hgtOnly` 时不自动撕裂、不补迭代变量，FMU 内部只要还有代数环就编译期报错（§3.7）。
+- **用户给的迭代变量不够时**：`--hgtOnly` 默认打开，不自动撕裂、不补迭代变量，FMU 内部只要还有代数环就编译期报错（§3.7）；`--hgtOnly=false` 时剩下的代数环留在 FMU 内部，由 FMU 自己的求解器解（和 OCT"只暴露部分块"的行为类似）。
 - hold、nominal、界都不进入方程：hold 是参数，nominal、min、max 是 `iter_N`、`res_N` 的属性（§4）。
 
 OCT 文档对 `interactive_fmu` 的描述是"DAE 系统被转换成交互式 FMU，残差方程和迭代变量变成顶层的输出和输入"，和这个做法一致。
@@ -127,7 +127,7 @@ OCT 文档对 `interactive_fmu` 的描述是"DAE 系统被转换成交互式 FMU
 |---|---|---|
 | 把配对强制放进同一个强连通分量；不在同一个系统报 8013 | `hgtMatching` | 不需要：x 是输入，`res_N` 是显式赋值，没有环 |
 | 残差不依赖自己配对的变量（8016） | `checkDependence` | 外层求解器按实际的 hold 组合做结构检查 |
-| 用户的项不够时自动补；`--hgtOnly` 下报 8018 | `hgtMatching`、HGT 撕裂 | 剩下的环走普通匹配和撕裂，在 FMU 内部求解；`--hgtOnly` 下报 8023（§3.7） |
+| 用户的项不够时自动补；`--hgtOnly` 下报 8018 | `hgtMatching`、HGT 撕裂 | `--hgtOnly`（默认）下剩下的环报 8023（§3.7）；`--hgtOnly=false` 时走普通匹配和撕裂，在 FMU 内部求解 |
 | `--hgtAllowMultipleResiduals`（8021） | `hgtMatching` | 不适用 |
 | 迭代变量的界（`hgtBounds`） | HGT 撕裂、运行时 | 外层求解器每步投影 |
 | 迭代变量被删掉（8012） | `checkPresence` | 不适用：x 是不可替换的输入 |
@@ -167,9 +167,9 @@ Hand guided tearing (interactive):
   1: iter_1 (T, hold = testHold1), res_1 (LongEq2, hold = testHold2) = ...
 ```
 
-### 3.7 `--hgtOnly`：FMU 内部不允许留下代数环
+### 3.7 `--hgtOnly`（默认打开）：FMU 内部不允许留下代数环
 
-变换之后，用户的配对已经是输入和输出。模型里如果还有代数环（用户没写配对的环，或者撕开用户的配对后仍然解不出的方程），默认由 FMU 内部的求解器解（§2）。加 `--hgtOnly` 时不这样做：
+变换之后，用户的配对已经是输入和输出。模型里如果还有代数环（用户没写配对的环，或者撕开用户的配对后仍然解不出的方程），`--hgtOnly=false` 时由 FMU 内部的求解器解（§2）。`--hgtOnly` 是默认值，这时不这样做：
 
 - 不自动撕裂，不自动补迭代变量和残差；
 - FMU 内部不能有任何非线性系统、线性系统或混合系统；
@@ -184,7 +184,7 @@ Hand guided tearing (interactive):
 ```
 HGT_INTERACTIVE_LOOP: With --interactiveFMU and --hgtOnly the FMU may not solve algebraic
 loops, but the equations {%s} form a %s system for the variables {%s}. Give them hand guided
-tearing pairs or compile without --hgtOnly.
+tearing pairs or compile with --hgtOnly=false.
 ```
 
 **例子**：`HGT.mo` 中的 `OnlyStuck`
@@ -201,8 +201,8 @@ equation
 
 | 选项 | 结果 |
 |---|---|
-| 不加 `--hgtOnly` | 可以编译，FMU 每次求值时内部迭代求 z |
-| 加 `--hgtOnly` | 报错：方程 `{z + sin(z) = y}` 是关于 `{z}` 的非线性系统。用户要再写一个配对，例如 `z + sin(z) = y` 配 z，之后外层求解器同时迭代 x 和 z |
+| `--hgtOnly=false` | 可以编译，FMU 每次求值时内部迭代求 z |
+| 默认（`--hgtOnly`） | 报错：方程 `{z + sin(z) = y}` 是关于 `{z}` 的非线性系统。用户要再写一个配对，例如 `z + sin(z) = y` 配 z，之后外层求解器同时迭代 x 和 z |
 
 线性系统也一并报错，因为 `--hgtOnly` 的含义就是"只用用户给的项"。如果以后觉得太严，可以放宽成只对非线性系统报错。
 
@@ -347,7 +347,7 @@ Solver(p).solve()                      # 报错：1 个未知量，2 条残差
 |---|---|---|
 | 编译器 | `-d=hgtDump` 的变换结果；`modelDescription.xml` 中的输入、输出、依赖关系、配对表 | `testsuite/simulation/modelica/tearing/HGTInteractive1.mos`（基准输出） |
 | 编译器 | 报错：有状态；没开 `--handGuidedTearing`；`C+Rust` 目标 | `HGTInteractiveError1.mos` |
-| 编译器 | `--hgtOnly`：`OnlyStuck` 报 8023；`OnlySolvable`、官方例子通过；不加 `--hgtOnly` 时 `OnlyStuck` 能编译，FMU 内部解 z | `HGTInteractiveOnly1.mos` |
+| 编译器 | 默认（`--hgtOnly`）：`OnlyStuck` 报 8023；`OnlySolvable`、官方例子通过；`--hgtOnly=false` 时 `OnlyStuck` 能编译，FMU 内部解 z | `HGTInteractiveOnly1.mos` |
 | 回归 | 不加 `--interactiveFMU` 时，现有的全部 HGT 测试不变 | 现有测试 |
 | FMU 求值 | 迭代变量设为已知解时残差为 0；设成别的值时残差和手算一致 | `OMSteady/tests/test_fmu.py`（pytest） |
 | 求解 | `HGT.mo` 中的稳态模型（`Loop`、`Chain`、`Bound`、`Multi`、`CrossSCC` 等）：交互式求解的结果和普通仿真一致 | `OMSteady/tests/test_solve.py` |

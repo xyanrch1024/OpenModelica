@@ -9,7 +9,7 @@
 //
 
 loadFile("HGTAlgebra.mo"); getErrorString();
-setCommandLineOptions("--handGuidedTearing -d=hgtDump"); getErrorString();
+setCommandLineOptions("--handGuidedTearing --hgtOnly=false -d=hgtDump"); getErrorString();
 r := simulate(HGTAlgebra.System, stopTime = 0); getErrorString();
 val(x, 0); val(y, 0); val(v, 0); val(z, 0); val(k, 0);
 

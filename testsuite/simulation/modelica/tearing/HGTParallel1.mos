@@ -9,7 +9,7 @@
 //
 
 loadFile("HGTParallel.mo"); getErrorString();
-setCommandLineOptions("--handGuidedTearing -d=hgtDump"); getErrorString();
+setCommandLineOptions("--handGuidedTearing --hgtOnly=false -d=hgtDump"); getErrorString();
 r := simulate(HGTParallel.Plant, stopTime = 0); getErrorString();
 val(speed, 0); val(dp, 0); val(totalFlow, 0); val(branch[1].m, 0); val(branch[12].m, 0);
 val(mixedTemperature, 0); val(heatDuty, 0);

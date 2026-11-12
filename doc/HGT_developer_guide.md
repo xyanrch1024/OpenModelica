@@ -84,7 +84,7 @@ CodegenC.tpl：sysData->hgtBounds = 1、min/max 写进 NLS 数组
 | `--handGuidedTearing` | config 173 | false | 总开关；同时自动启用后端模块 `hgtMatching` |
 | `--hgtMergeBLTBlocks` | config 174 | false | 把所有 HGT 项合并进同一个 BLT 块（OCT `merge_blt_blocks`） |
 | `--hgtAllowMultipleResiduals` | config 175 | true | 为 false 时每个块只允许一个用户残差（OCT 的 R9） |
-| `--hgtOnly` | config 176 | false | HGT 块只用用户给的迭代变量和残差方程撕裂：需要补迭代变量或残差方程时报错 8018，不再自动补全 |
+| `--hgtOnly` | config 176 | **true** | HGT 块只用用户给的迭代变量和残差方程撕裂：需要补迭代变量或残差方程时报错 8018，不再自动补全。默认打开，`--hgtOnly=false` 时自动补全 |
 | `-d=hgtDump` | debug 202 | 关 | 打印前端收集到的规范和后端的分块结果 |
 
 `.cmake/meta_modelica_source_list.cmake` 中登记了 `NFFrontEnd/NFHandGuidedTearing.mo` 和 `BackEnd/HandGuidedTearing.mo` 两个新文件。
@@ -282,7 +282,7 @@ HGT 方程必须原样保留到撕裂阶段，迭代变量也不能被消掉。�
 4. **自动补撕裂变量**（`selectAdditionalTearingVar`）：
    - 还有变量没赋值时，选出现在最多未赋值方程里的非离散变量，加入撕裂变量后重新执行第 3 步。
    - 只剩离散变量时，报错误 8020。
-   - 开了 `--hgtOnly` 时不补变量，直接报错误 8018，列出解不出的方程和变量。
+   - `--hgtOnly`（默认）时不补变量，直接报错误 8018，列出解不出的方程和变量；`--hgtOnly=false` 时自动补。
 5. **组装结果**：
    - 残差 = 用户残差 ∪ 剩下没赋值的行；
    - 残差数必须等于撕裂变量数（否则报 8020）；
@@ -490,7 +490,7 @@ OMC_SIMRT_INCLUDE_DIRS="$PWD/../c|$PWD/../../3rdParty/gc/include" \
 | HGTNetwork1 | 泵网络：组件级和系统级配对、设计目标、界；`m_set = 8` 时越界解被拒绝 |
 | HGTPlant1 | 热工水力例子：系统级配对、两个块、自动补全、`enabled = false`、各属性 |
 | HGTAlgebra1 | 纯代数：多根选根、反问题、带界的迭代变量、自动补撕裂变量 |
-| HGTOnly1 | `--hgtOnly`：能解的块照常；撕裂卡住和匹配不上的块报 8018；不加 `--hgtOnly` 时同样的模型自动补全后能解 |
+| HGTOnly1 | 默认的 `--hgtOnly`：能解的块照常；撕裂卡住和匹配不上的块报 8018；`--hgtOnly=false` 时同样的模型自动补全后能解。其他 HGT 仿真测试都显式加了 `--hgtOnly=false`，以继续覆盖自动补全 |
 | HGTIf1 | OCT 风格的稳态开关：参数 `isSteadyState` 选中带 HGT 注解的稳态分支 |
 | HGTFor1 | for 循环写的配对与逐段写出的配对结果完全相同 |
 | HGTArray1 | 数组方程配切片与 for 写法结果相同；矩阵方程逐元素配对（元素顺序） |

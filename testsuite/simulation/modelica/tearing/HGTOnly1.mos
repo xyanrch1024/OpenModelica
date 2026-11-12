@@ -2,13 +2,13 @@
 // keywords:  tearing, hand guided tearing
 // status:    correct
 //
-// --hgtOnly tears the hand guided tearing blocks only with the given items: a
+// --hgtOnly (the default) tears the hand guided tearing blocks only with the given items: a
 // block that needs an additional iteration variable or residual equation is an
-// error. Without --hgtOnly the same models are torn automatically.
+// error. With --hgtOnly=false the same models are torn automatically.
 //
 
 loadFile("HGT.mo"); getErrorString();
-setCommandLineOptions("--handGuidedTearing --hgtOnly"); getErrorString();
+setCommandLineOptions("--handGuidedTearing"); getErrorString();
 r := simulate(HGT.OnlySolvable, stopTime = 0); getErrorString();
 val(x, 0);
 r := simulate(HGT.OnlyStuck, stopTime = 0); getErrorString();

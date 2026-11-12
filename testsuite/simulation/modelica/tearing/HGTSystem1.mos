@@ -6,7 +6,7 @@
 //
 
 loadFile("HGT.mo"); getErrorString();
-setCommandLineOptions("--handGuidedTearing -d=hgtDump"); getErrorString();
+setCommandLineOptions("--handGuidedTearing --hgtOnly=false -d=hgtDump"); getErrorString();
 simulate(HGT.SystemPair); getErrorString();
 val(b.x, 1.0); val(b.y, 1.0);
 simulate(HGT.CrossComponentPair); getErrorString();

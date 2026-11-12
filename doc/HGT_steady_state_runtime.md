@@ -135,7 +135,7 @@
 ### 7.1 选项
 
 - `--interactiveFMU`（config flag）：必须和 `--handGuidedTearing` 一起用，只影响 `buildModelFMU`。
-- `--hgtOnly` 不是必需的；加上时 FMU 内部不允许留下代数环（见 [HGT_interactive_fmu_phase1.md](HGT_interactive_fmu_phase1.md) §3.7）。
+- `--hgtOnly` 默认打开：FMU 内部不允许留下代数环；`--hgtOnly=false` 时剩下的环在 FMU 内部求解（见 [HGT_interactive_fmu_phase1.md](HGT_interactive_fmu_phase1.md) §3.7）。
 
 ### 7.2 后端
 
@@ -149,7 +149,7 @@
 
 `Tearing.handGuidedTearing` 在用户的项不够时会自动补迭代变量和残差。交互模式下有两种做法：
 
-- 第一版：接口上只有用户写的配对，名字稳定。剩下的代数环默认在 FMU 内部求解；加 `--hgtOnly` 时编译期报错（[HGT_interactive_fmu_phase1.md](HGT_interactive_fmu_phase1.md) §3.7）。
+- 第一版：接口上只有用户写的配对，名字稳定。剩下的代数环默认（`--hgtOnly`）编译期报错，`--hgtOnly=false` 时在 FMU 内部求解（[HGT_interactive_fmu_phase1.md](HGT_interactive_fmu_phase1.md) §3.7）。
 - 以后：把自动补的项也暴露出来，名字自动生成（例如 `$hgtAuto.<变量名>`、`$hgtAutoRes<n>`），在配对表中标记为自动。
 
 ### 7.4 SimCode 与代码生成
@@ -358,7 +358,7 @@ for k in 1..maxIter:
 | 求解器放在哪里：S1 / S2 / S3 | S1（Python） |
 | FMI 版本 | FMI 2.0 Model Exchange；FMI 3 以后再说 |
 | 第一版是否支持带状态的模型 | 不支持，放到 2b |
-| 自动补的迭代变量 | 第一版不暴露：默认留在 FMU 内部求解，`--hgtOnly` 时报错 |
+| 自动补的迭代变量 | 第一版不暴露：默认（`--hgtOnly`）报错，`--hgtOnly=false` 时留在 FMU 内部求解 |
 | 交互式 FMU 是否同时支持 Rust 运行时 | 第一版只做 C 运行时 |
 | Python 包的位置和名字 | 仓库中的 `OMSteady/`，包名 `omsteady` |
 

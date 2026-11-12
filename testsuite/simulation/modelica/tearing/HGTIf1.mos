@@ -7,7 +7,7 @@
 //
 
 loadFile("HGT.mo"); getErrorString();
-setCommandLineOptions("--handGuidedTearing -d=hgtDump"); getErrorString();
+setCommandLineOptions("--handGuidedTearing --hgtOnly=false -d=hgtDump"); getErrorString();
 r := simulate(HGT.SteadyStateSwitch, stopTime = 0); getErrorString();
 val(x, 0); val(y, 0);
 

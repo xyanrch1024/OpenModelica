@@ -9,7 +9,7 @@
 //
 
 loadFile("HGT.mo"); getErrorString();
-setCommandLineOptions("--handGuidedTearing"); getErrorString();
+setCommandLineOptions("--handGuidedTearing --hgtOnly=false"); getErrorString();
 r := simulate(HGT.Bound, stopTime = 0); getErrorString();
 val(y, 0); val(x, 0);
 

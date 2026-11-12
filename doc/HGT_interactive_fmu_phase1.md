@@ -203,11 +203,11 @@ equation
 
 | 变量 | OCT 中看到的 | 本设计 |
 |---|---|---|
-| `iter_N` | 值引用不连续（`iter_0` 3124、`iter_10` 953、`iter_11` 954），`description` 是迭代变量名，属性只有 `relativeQuantity`，有的有 `start` | 原来的迭代变量 x 是 FMI 输入；`iter_N` 是 x 的别名，同一个值引用。start、nominal、min、max 在 x 上 |
+| `iter_N` | **参数**：start 由表达式算出的是 `causality="calculatedParameter" variability="fixed" initial="calculated"`（`iter_0`，值引用 3124），start 是字面量的是 `causality="parameter"`（`iter_10`，`start="0.0"`）；`description` 是迭代变量名；属性只有 `relativeQuantity` | **不同**：原来的迭代变量 x 是 FMI 输入，`iter_N` 是 x 的别名（同一个值引用）；start、nominal、min、max 在 x 上（理由见 §4.2'） |
 | `res_N` | 新的变量，值引用连续（7720 + N）；`causality="output" variability="continuous" initial="calculated"`；`nominal="0"` | 同左；给了残差 nominal 时写这个值，没给时写 0 |
 | `res_N` 的 `description` | 方程的源码文本加注解，残差形式写成 `a - b = 0`，例如 `EXV_Opening.value - EXV_Opening.setPoint = 0 annotation(__Modelon(ResidualEquation(iterationVariable(hold = EXV_Opening.fixed or (EXV_Opening.isOff or false)) = EXV_Opening.scaledValue,hold = true,enabled = false)))` | 同左 |
 | `iter_N_hold`、`res_N_hold` | Boolean，见 §4.2 | 同左 |
-| 依赖关系 | `<ModelStructure><Outputs>` 中 `res_0`（第 10371 个变量）的依赖是 `"8"`，类型 `fixed`；`iter_0` 自己是第 1670 个变量，不在依赖里 | 依赖引用 x（基础变量）的编号；求解器通过值引用把 `iter_N` 对应到 x |
+| 依赖关系 | 残差对迭代变量的依赖**没有导出**：`res_0`（第 10371 个变量）在 `<Outputs>` 中依赖 `"8"`（`fixed`），在 `<InitialUnknowns>` 中依赖 `"4 5 8 9"`，都没有 `iter_0`（第 1670 个变量）。按 FMI 2.0，`<Outputs>` 只列输入和状态，`<InitialUnknowns>` 只列初始化的自变量，计算参数形式的迭代变量都不能出现，依赖被追溯到了 start 所依赖的独立参数上 | 迭代变量是输入，所以 `<Outputs>` 直接给出残差对迭代变量的依赖（引用 x 的编号）；求解器通过值引用把 `iter_N` 对应到 x |
 
 官方例子 `twoEqSteadyStateParaHold`（本设计的编号按残差名排序：`LongEq` 是 0，`LongEq2` 是 1）：
 
@@ -247,11 +247,20 @@ equation
 | 没给残差 nominal 时 `nominal="0"` | 已确认；给了 nominal 时的写法还没看到 |
 | 字面量 hold 是固定参数，参数表达式的 hold 是计算参数 | 已确认，hold 表达式可以是 `or` 等组合 |
 | `enabled = false` 的配对仍然导出 | 已确认；它在交互式 FMU 中的确切含义（是否只影响普通撕裂）还要确认 |
-| `iter_N` 是原变量的别名，原变量是 FMI 输入 | **推断**：值引用不连续，且依赖里引用的是第 8 个变量而不是 `iter_0`。确认方法：第 8 个变量的值引用是否为 3124、`causality` 是否为 `input` |
+| `iter_N` 的因果属性 | **已确认，和本设计不同**：OCT 中是参数或计算参数（初始化时由 start 决定，`variability="fixed"`），本设计中是输入（x 本身是输入，`iter_N` 是别名） |
+| 残差对迭代变量的依赖 | **已确认 OCT 没有导出**（`<Outputs>`、`<InitialUnknowns>` 中都没有 `iter_N`）；本设计在 `<Outputs>` 中导出 |
 | 编号的顺序 | 未确认；本设计按残差名排序 |
 | 没写 hold 时是否也生成 hold 变量 | 未确认；本设计生成，取 false |
 
-如果全部一致，`omsteady` 就能直接求解 OCT 生成的交互式 FMU，反过来 OCT 的 `FMUProblem` 也可能直接用 OMC 生成的 FMU。
+**为什么迭代变量不照搬 OCT 做成参数**：
+
+| | 照搬 OCT（参数） | 本设计（输入） |
+|---|---|---|
+| 依赖结构 | `modelDescription.xml` 中没有，只能在运行时数值探测，导数恰好为 0 的点会漏掉依赖 | `<Outputs>` 中直接给出，是结构上的依赖，结构检查和运行时分块可靠 |
+| 设置迭代变量 | 固定参数只能在初始化模式中修改，求解器要一直停在初始化模式；计算参数按 FMI 2.0 不允许由外部设置 | 标准操作：初始化之后设输入、读输出 |
+| 其他 FMI 工具 | 大多不允许修改计算参数，无法驱动 | 任何工具都能驱动 |
+
+所以 OMC 生成的 FMU 只在命名和描述上和 OCT 一致，`iter_N` 的因果属性不同，OCT 的 `FMUProblem` 不能直接用它；`omsteady` 也不能直接解 OCT 生成的 FMU。以后需要时，给 `omsteady` 加一个"OCT 模式"（§10）。
 
 ### 4.2'' 在当前运行时上做全局求解时
 
@@ -373,3 +382,4 @@ Python 测试通过一个 `.mos` 包装接进 testsuite（环境中没有 FMPy �
 | 运行时分块 | 用依赖表对当前的未知量和方程做 Tarjan，按块依次求解，提高收敛的稳健性 |
 | KINSOL 后端、Brent | `Solver(method=…)` |
 | Rust 运行时 | 变换在后端完成，生成的 C 代码是普通模型，理论上 Rust 运行时的 FMU 可以直接用，需要验证 |
+| `omsteady` 的 OCT 模式 | 求解 OCT 生成的交互式 FMU：进入初始化模式后不退出，按值引用设 `iter_N`（参数），读 `res_N`；依赖结构在运行时用差分探测（在 start 附近取几个点，减少导数恰好为 0 造成的遗漏），并警告结构检查不完全可靠 |

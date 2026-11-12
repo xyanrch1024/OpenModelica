@@ -101,7 +101,7 @@ OCT 文档对 `interactive_fmu` 的描述是"DAE 系统被转换成交互式 FMU
 ### 3.2 前端（`NFFrontEnd/NFHandGuidedTearing.mo`）
 
 - 交互模式下不给"hold 不支持"的警告 8009。变量上和残差上的 hold 已经分别存储并传到 `DAE.HAND_GUIDED_TEARING`。
-- 交互模式下**保留 `enabled = false` 的配对**：OCT 的交互式 FMU 中，`enabled = false` 的配对仍然导出成 `iter_N`/`res_N`（§4.1）。现在的前端在求值 `enabled` 后直接丢掉这样的配对，交互模式下改成保留并标记，普通模式不变。
+- `enabled = false` 的配对**保持现状**：前端求值 `enabled` 后直接丢掉，交互模式下也不导出。OCT 的交互式 FMU 中这样的配对仍然导出成 `iter_N`/`res_N`（§4.1），这一点第一阶段不跟随。
 - 为每条残差方程保存源码文本（方程加注解），用作 `res_N` 的 `description`。
 
 ### 3.3 后端：变换（`BackEnd/HandGuidedTearing.mo`）
@@ -110,7 +110,7 @@ OCT 文档对 `interactive_fmu` 的描述是"DAE 系统被转换成交互式 FMU
 
 | 步骤 | 内容 | 用到的已有函数 |
 |---|---|---|
-| 1 | 找到规范，建立"方程名 → 配对"和"变量名 → 配对"两张表；交互模式下 `enabled = false` 的配对也在规范中（§3.2） | `findSpec`、`equationName` |
+| 1 | 找到规范，建立"方程名 → 配对"和"变量名 → 配对"两张表（`enabled = false` 的配对已被前端丢掉，不在规范中） | `findSpec`、`equationName` |
 | 2 | 按配对编号 N = 0, 1, …（顺序同前端：按残差名排序），命名规则见 §4.1 | |
 | 3 | 第 N 个配对的迭代变量 x：方向改成 `DAE.INPUT()`，不可替换；HGT 的 start、nominal 写进 x 的属性；再登记一个别名变量 `iter_N`，和 x 共用值引用（放进别名变量集合，FMU 导出时生成同一个 `valueReference` 的别名） | `BackendVariable.setVarDirection`、`setVarStartValue`、`setVarNominalValue` |
 | 3' | 第 N 个配对的残差方程 e：新建输出 `res_N`（Real，`DAE.OUTPUT()`，不可替换；nominal 取残差的 nominal，没写时为 0，和 OCT 一致），把方程改写成 `res_N = lhs − rhs`（**不除以 nominal**）；`description` 是方程的源码文本加注解（§4.1） | `BackendVariable.setVarUnreplaceable`、`Expression.expSub` |
@@ -246,7 +246,7 @@ equation
 | `res_N` 的 `description` 是方程文本加注解 | 已确认 |
 | 没给残差 nominal 时 `nominal="0"` | 已确认；给了 nominal 时的写法还没看到 |
 | 字面量 hold 是固定参数，参数表达式的 hold 是计算参数 | 已确认，hold 表达式可以是 `or` 等组合 |
-| `enabled = false` 的配对仍然导出 | 已确认；它在交互式 FMU 中的确切含义（是否只影响普通撕裂）还要确认 |
+| `enabled = false` 的配对 | OCT 中仍然导出（已确认）；**本设计不导出**，保持现在的行为：前端直接丢掉。以后如果需要，再确认它在 OCT 交互式 FMU 中的确切含义 |
 | `iter_N` 的因果属性 | **已确认，和本设计不同**：OCT 中是参数或计算参数（初始化时由 start 决定，`variability="fixed"`），本设计中是输入（x 本身是输入，`iter_N` 是别名） |
 | 残差对迭代变量的依赖 | **已确认 OCT 没有导出**（`<Outputs>`、`<InitialUnknowns>` 中都没有 `iter_N`）；本设计在 `<Outputs>` 中导出 |
 | 编号的顺序 | 未确认；本设计按残差名排序 |
@@ -366,7 +366,7 @@ Python 测试通过一个 `.mos` 包装接进 testsuite（环境中没有 FMPy �
 | `createFMIModelStructure` 对新建的输出是否生效 | 它从符号雅可比矩阵得到依赖关系，要确认后端新建的输出变量和输入变量被计入。不行的话在 M2 中补上 |
 | 方向导数的正确性 | FMIDER 是否覆盖"输出对输入"，以及对新变量是否正确；不可用时求解器退回差分，不阻塞第一阶段 |
 | 别名导出 | 要确认 OMC 的 FMU 导出会把 `iter_N` 生成为和 x 同一个值引用的别名，而且 x 的 `causality="input"`。不行的话退回到"新建输入 `iter_N`，x = iter_N"的做法 |
-| `enabled = false` 的语义 | OCT 中这样的配对仍然导出；要确认它在交互式 FMU 中有没有别的效果（例如默认 hold），再决定 OMC 怎么处理 |
+| `enabled = false` 的配对 | 本设计不导出，和 OCT 不同：从 OCT 迁移来、依赖这类配对在交互式 FMU 中出现的模型，要把 `enabled` 改成 true。以后如果要跟随 OCT，再确认它的确切语义 |
 | 改参数要 `fmi2Reset` | OMC 的 FMU 中普通参数在初始化之后不能改；`omsteady` 在 `set` 参数后重新初始化并恢复迭代变量的值。每次切换工况多一次初始化，可以接受 |
 | 迭代变量的 min/max 不再进入模型 | 界只由外层求解器保证；FMU 内部的方程在迭代变量取界外的值时可能触发断言（例如 `log` 的参数为负），所以求解器必须先投影再求值 |
 | 伪根约束 | 原来撕裂时为反解非线性函数生成的解检查，在变换后内部方程仍按同样的方式求解，约束仍然生成；断言失败时 FMU 求值报错，求解器要把它当作"这一步不可接受"并缩短步长 |

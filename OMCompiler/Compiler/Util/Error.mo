@@ -1237,7 +1237,7 @@ public constant ErrorTypes.Message HGT_MULTIPLE_RESIDUALS = ErrorTypes.MESSAGE(8
 public constant ErrorTypes.Message HGT_UNPAIRED_NOT_ALLOWED = ErrorTypes.MESSAGE(8022, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "The hand guided tearing %s is not paired. Only explicit pairs are supported, given by ResidualEquation(iterationVariable = ...) or tearingPairs(Pair(...)).");
 public constant ErrorTypes.Message HGT_INTERACTIVE_LOOP = ErrorTypes.MESSAGE(8023, ErrorTypes.SYMBOLIC(), ErrorTypes.ERROR(),
-  "With --interactiveFMU and --hgtOnly the FMU may not solve algebraic loops, but the equations {%s} form a %s system. Add hand guided tearing pairs for it, for example with the iteration variables {%s}%s, or compile with --hgtOnly=false.");
+  "With --interactiveFMU and --hgtOnly the FMU may not solve algebraic loops, but the equations {%s} form a %s system. Add hand guided tearing pairs for it, for example with the iteration variables {%s}%s.");
 public constant ErrorTypes.Message HGT_INTERACTIVE_NOT_SUPPORTED = ErrorTypes.MESSAGE(8024, ErrorTypes.TRANSLATION(), ErrorTypes.ERROR(),
   "--interactiveFMU: %s.");
 public constant ErrorTypes.Message HGT_INTERACTIVE_NOT_FMU = ErrorTypes.MESSAGE(8025, ErrorTypes.SYMBOLIC(), ErrorTypes.WARNING(),

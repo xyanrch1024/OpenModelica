@@ -198,8 +198,8 @@ Hand guided tearing (interactive):
 
 ```
 HGT_INTERACTIVE_LOOP: With --interactiveFMU and --hgtOnly the FMU may not solve algebraic
-loops, but the equations {%s} form a %s system for the variables {%s}. Give them hand guided
-tearing pairs or compile with --hgtOnly=false.
+loops, but the equations {%s} form a %s system. Add hand guided tearing pairs for it, for
+example with the iteration variables {%s} and the residual equations {%s}.
 ```
 
 **例子**：`HGT.mo` 中的 `OnlyStuck`

@@ -149,6 +149,11 @@ OCT 文档对 `interactive_fmu` 的描述是"DAE 系统被转换成交互式 FMU
 - 变换在 `HandGuidedTearing.lowerInteractive` 中，由 `lower` 在 `--interactiveFMU` 下调用；`lower` 多了一个参数（已知变量列表），用来放 `iter_N` 和 hold 参数。
 - 有状态（方程中有 `der`）时报 8024；没开 `--handGuidedTearing`、`--simCodeTarget=C+Rust` 也报 8024；不是 FMU 导出（`simulate`、`buildModel`）时给警告 8025。
 - `res_N` 的 `description` 不是源码原文，而是后端看到的方程（前端已经化简过，例如 `75*0.12` 写成 `9.0`）加上原来的注解，所以前端（§3.2）不需要保存源码文本。
+- **编译期的结构检查**（`checkInteractiveStructure`，在变换时做，所有 hold 按 false）：
+  - 内层：迭代变量给定之后，其余方程要能确定其余变量（二部图匹配）。匹配不上的方程必须成为残差方程，没有方程确定的变量必须成为迭代变量；报错 8026，列出这些方程（带行号）和变量，并说明要补几个配对。例如 `MissingPair`：`x ^ 2.0 = 4.0 (line 48)` 多出来，`z` 没有方程确定，提示把它们补成一个配对。
+  - 外层：每条残差依赖哪些迭代变量（直接依赖，或者经过确定其余变量的方程间接依赖），再在残差和迭代变量之间做匹配。不完全匹配时给警告 8027，列出残差和迭代变量。只是警告，因为 hold 住它们之后问题可以是正则的；求解时 `omsteady` 仍按实际的 hold 组合检查。
+  - 只分析标量方程；模型里有数组方程、算法、when 等，或者有别名方程时，这两项检查跳过，仍由后端和外层求解器检查。
+- 8023 的报错给出建议：这个代数环撕裂后的迭代变量和残差方程（带行号），可以直接照着补配对。
 - 代数环检查（8023）先查仿真系统，有环就不再查初始化系统（没有状态时两者一般相同，避免同一个环报两次）。
 - **min/max 不能生成范围检查**：HGT 的 min/max 只用于导出到 x 的属性，供外层求解器投影；要确认运行时不会对它们生成越界断言（§9），否则外层迭代中间值越界会让求值失败。
 - **不加选项时零影响**：`lowerInteractive` 只在 `--interactiveFMU` 下调用。
@@ -357,6 +362,7 @@ Solver(p).solve()                      # 报错：1 个未知量，2 条残差
 |---|---|---|
 | 编译器 | `-d=hgtDump` 的变换结果；`modelDescription.xml` 中的输入、输出、依赖关系、配对表 | `testsuite/simulation/modelica/tearing/HGTInteractive1.mos`（基准输出） |
 | 编译器 | 报错：有状态；没开 `--handGuidedTearing`；`C+Rust` 目标 | `HGTInteractiveError1.mos` |
+| 编译器 | 编译期结构检查：缺配对（8026，给出要补的残差方程和迭代变量）；迭代变量选错；残差定不出迭代变量（警告 8027） | `HGTInteractiveStructure1.mos` |
 | 编译器 | 默认（`--hgtOnly`）：`OnlyStuck` 报 8023；`OnlySolvable`、官方例子通过；`--hgtOnly=false` 时 `OnlyStuck` 能编译，FMU 内部解 z | `HGTInteractiveOnly1.mos` |
 | 回归 | 不加 `--interactiveFMU` 时，现有的全部 HGT 测试不变 | 现有测试 |
 | FMU 接口和求值 | 变量、属性、hold 参数的因果属性、依赖关系；迭代变量设为已知解时残差为 0，设成别的值时和手算一致 | `OMSteady/tests/test_fmu.py`（用 omc 现场生成 `HGTInteractive.mo` 的 FMU；没有 omc 或 FMPy 时跳过） |

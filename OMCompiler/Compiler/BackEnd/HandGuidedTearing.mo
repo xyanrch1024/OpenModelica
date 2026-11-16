@@ -84,6 +84,7 @@ import UnorderedSet;
 import Util;
 
 constant String EQUATION_TAG = "__OpenModelica_HGTEquation";
+type IntegerList = list<Integer>;
 
 public
 
@@ -102,6 +103,7 @@ function lower
   input output list<BackendDAE.Equation> eqns;
   input output list<BackendDAE.Equation> initialEqns;
   input output list<BackendDAE.Var> knownVars;
+  input Boolean hasAliasEquations = false "the DAE has alias equations that are not in eqns";
 protected
   BackendDAE.HGTSpec s;
   UnorderedMap<String, DAE.HGTIterationVariable> var_map;
@@ -123,7 +125,7 @@ algorithm
   if Flags.getConfigBool(Flags.INTERACTIVE_FMU) then
     // The pairs become inputs and outputs, nothing is left for hgtMatching
     // and the tearing to do, see doc/HGT_interactive_fmu_phase1.md section 3.3.
-    (vars, eqns, initialEqns, knownVars) := lowerInteractive(s, vars, eqns, initialEqns, knownVars);
+    (vars, eqns, initialEqns, knownVars) := lowerInteractive(s, vars, eqns, initialEqns, knownVars, hasAliasEquations);
     spec := NONE();
     return;
   end if;
@@ -504,6 +506,7 @@ function lowerInteractive
   input output list<BackendDAE.Equation> eqns;
   input output list<BackendDAE.Equation> initialEqns;
   input output list<BackendDAE.Var> knownVars;
+  input Boolean hasAliasEquations;
 protected
   array<DAE.HGTResidual> pairs;
   array<Option<BackendDAE.Var>> bases;
@@ -626,11 +629,253 @@ algorithm
     print("Hand guided tearing (interactive):\n" + dump);
   end if;
 
+  if not hasAliasEquations then
+    checkInteractiveStructure(pairs, vars, eqns, eq_map, var_map);
+  end if;
+
   // new_* are in reverse order: append them in the order of the pairs
   vars := listReverse(listAppend(new_vars, listReverse(vars)));
   eqns := listReverse(listAppend(new_eqns, listReverse(eqns)));
   knownVars := listReverse(listAppend(new_known, listReverse(knownVars)));
 end lowerInteractive;
+
+function checkInteractiveStructure
+  "Structural checks of the transformed model at compile time, with all hold
+   attributes false:
+     - inner: with the iteration variables given, the other equations must
+       determine the other variables. Equations that are left over have to
+       become residual equations and variables that no equation determines have
+       to become iteration variables: error 8026 names them.
+     - outer: the residual equations must be able to determine the iteration
+       variables. A residual depends on an iteration variable directly or
+       through the equations that compute the other variables. Warning 8027
+       names the residual equations and iteration variables that do not match;
+       it is only a warning since holding them can make the problem regular.
+   Only scalar equations are analysed; models with other equations are checked
+   by the backend and by the outer solver as before."
+  input array<DAE.HGTResidual> pairs;
+  input list<BackendDAE.Var> vars;
+  input list<BackendDAE.Equation> eqns "the residual equations are already rewritten";
+  input UnorderedMap<String, Integer> eqMap "residual equation name -> pair";
+  input UnorderedMap<String, Integer> varMap "iteration variable name -> pair";
+protected
+  Integer n = arrayLength(pairs), nv, ne, i, j, k, v, e;
+  array<BackendDAE.Var> var_arr;
+  array<BackendDAE.Equation> eq_arr;
+  array<Integer> var_pair "pair of an iteration variable, otherwise 0";
+  array<Integer> eq_pair "pair of a residual equation, otherwise 0";
+  array<list<Integer>> inc "equation -> variables";
+  array<Integer> var_eq "inner matching: variable -> equation";
+  array<Integer> eq_var "inner matching: equation -> variable";
+  array<Integer> pair_eq "pair -> its residual equation";
+  array<Integer> mark;
+  array<list<Integer>> deps "pair (residual) -> pairs (iteration variables)";
+  array<Integer> iter_res "outer matching: iteration variable -> residual";
+  array<Integer> res_iter;
+  UnorderedMap<String, Integer> var_index;
+  UnorderedMap<String, list<Integer>> array_index;
+  Option<Integer> oi;
+  Option<String> name;
+  list<Integer> lst, unmatched_eqs = {}, unmatched_vars = {}, work;
+  list<String> res_names, var_names;
+  String key;
+algorithm
+  var_arr := listArray(vars);
+  eq_arr := listArray(eqns);
+  nv := arrayLength(var_arr);
+  ne := arrayLength(eq_arr);
+
+  if nv == 0 or ne == 0 then
+    return;
+  end if;
+
+  // the variables: by name, and the elements of arrays by the name without subscripts
+  var_index := UnorderedMap.new<Integer>(stringHashDjb2, stringEq);
+  array_index := UnorderedMap.new<IntegerList>(stringHashDjb2, stringEq);
+  var_pair := arrayCreate(nv, 0);
+
+  for i in 1:nv loop
+    key := crefString(BackendVariable.varCref(var_arr[i]));
+    UnorderedMap.add(key, i, var_index);
+    var_pair[i] := UnorderedMap.getOrDefault(key, varMap, 0);
+    key := crefString(ComponentReference.crefStripSubs(BackendVariable.varCref(var_arr[i])));
+    UnorderedMap.add(key, i :: UnorderedMap.getOrDefault(key, array_index, {}), array_index);
+  end for;
+
+  // the equations and their variables
+  eq_pair := arrayCreate(ne, 0);
+  pair_eq := arrayCreate(n, 0);
+  inc := arrayCreate(ne, {});
+
+  for j in 1:ne loop
+    if not BackendEquation.isEquation(eq_arr[j]) then
+      return;
+    end if;
+
+    name := equationName(eq_arr[j]);
+
+    if isSome(name) then
+      k := UnorderedMap.getOrDefault(Util.getOption(name), eqMap, 0);
+      eq_pair[j] := k;
+
+      if k > 0 then
+        pair_eq[k] := j;
+      end if;
+    end if;
+
+    lst := {};
+
+    for cr in BackendEquation.equationCrefs(eq_arr[j]) loop
+      oi := UnorderedMap.get(crefString(cr), var_index);
+
+      if isSome(oi) then
+        lst := Util.getOption(oi) :: lst;
+      else
+        // a whole array or a slice: all its elements
+        lst := listAppend(UnorderedMap.getOrDefault(
+          crefString(ComponentReference.crefStripSubs(cr)), array_index, {}), lst);
+      end if;
+    end for;
+
+    inc[j] := List.unique(lst);
+  end for;
+
+  // pairs on initial equations are not part of this system: no check
+  for k in 1:n loop
+    if pair_eq[k] == 0 then
+      return;
+    end if;
+  end for;
+
+  // inner matching: the other equations and the other variables
+  var_eq := arrayCreate(nv, 0);
+  eq_var := arrayCreate(ne, 0);
+  mark := arrayCreate(nv, 0);
+
+  for j in 1:ne loop
+    if eq_pair[j] == 0 and not augmentInner(j, j, inc, var_pair, var_eq, eq_var, mark) then
+      unmatched_eqs := j :: unmatched_eqs;
+    end if;
+  end for;
+
+  for i in 1:nv loop
+    if var_pair[i] == 0 and var_eq[i] == 0 then
+      unmatched_vars := i :: unmatched_vars;
+    end if;
+  end for;
+
+  if not (listEmpty(unmatched_eqs) and listEmpty(unmatched_vars)) then
+    unmatched_eqs := listReverse(unmatched_eqs);
+    unmatched_vars := listReverse(unmatched_vars);
+    Error.addSourceMessage(Error.HGT_INTERACTIVE_INCOMPLETE, {
+      intString(listLength(unmatched_eqs)),
+      stringDelimitList(list(equationLabel(eq_arr[j]) for j in unmatched_eqs), "; "),
+      intString(listLength(unmatched_vars)),
+      stringDelimitList(list(crefString(BackendVariable.varCref(var_arr[i])) for i in unmatched_vars), ", "),
+      interactiveSuggestion(listLength(unmatched_eqs), listLength(unmatched_vars))},
+      if listEmpty(unmatched_eqs) then ElementSource.getInfo(BackendVariable.getVarSource(var_arr[listHead(unmatched_vars)]))
+      else ElementSource.getInfo(BackendEquation.equationSource(eq_arr[listHead(unmatched_eqs)])));
+    fail();
+  end if;
+
+  // the iteration variables each residual depends on, directly or through
+  // the equations matched to the other variables
+  deps := arrayCreate(n, {});
+  mark := arrayCreate(ne, 0);
+
+  for k in 1:n loop
+    work := {pair_eq[k]};
+    mark[pair_eq[k]] := k;
+    lst := {};
+
+    while not listEmpty(work) loop
+      e :: work := work;
+
+      for v in inc[e] loop
+        if var_pair[v] > 0 then
+          lst := var_pair[v] :: lst;
+        elseif var_eq[v] > 0 and mark[var_eq[v]] <> k then
+          mark[var_eq[v]] := k;
+          work := var_eq[v] :: work;
+        end if;
+      end for;
+    end while;
+
+    deps[k] := List.unique(lst);
+  end for;
+
+  // outer matching: residual equations and iteration variables
+  iter_res := arrayCreate(n, 0);
+  res_iter := arrayCreate(n, 0);
+  mark := arrayCreate(n, 0);
+  var_pair := arrayCreate(n, 0); // all iteration variables may be matched
+
+  for k in 1:n loop
+    augmentInner(k, k, deps, var_pair, iter_res, res_iter, mark);
+  end for;
+
+  res_names := list(pairs[k].name for k guard res_iter[k] == 0 in 1:n);
+  var_names := list(crefString(pairs[k].iterationVariable.name) for k guard iter_res[k] == 0 in 1:n);
+
+  if not listEmpty(res_names) then
+    k := 1;
+    while res_iter[k] <> 0 loop
+      k := k + 1;
+    end while;
+    Error.addSourceMessage(Error.HGT_INTERACTIVE_SINGULAR, {
+      stringDelimitList(res_names, ", "), stringDelimitList(var_names, ", ")}, pairs[k].info);
+  end if;
+end checkInteractiveStructure;
+
+function augmentInner
+  "Searches an augmenting path from an equation (depth first). Variables with
+   a non-zero entry in skip are not matched."
+  input Integer eq;
+  input Integer stamp "marks the variables visited in this search";
+  input array<list<Integer>> inc;
+  input array<Integer> skip;
+  input array<Integer> varEq;
+  input array<Integer> eqVar;
+  input array<Integer> mark;
+  output Boolean found = false;
+algorithm
+  for v in inc[eq] loop
+    if skip[v] == 0 and mark[v] <> stamp then
+      arrayUpdate(mark, v, stamp);
+
+      if varEq[v] == 0 or augmentInner(varEq[v], stamp, inc, skip, varEq, eqVar, mark) then
+        arrayUpdate(varEq, v, eq);
+        arrayUpdate(eqVar, eq, v);
+        found := true;
+        return;
+      end if;
+    end if;
+  end for;
+end augmentInner;
+
+function equationLabel
+  "An equation with its line, for messages."
+  input BackendDAE.Equation eq;
+  output String str;
+protected
+  SourceInfo info = ElementSource.getInfo(BackendEquation.equationSource(eq));
+algorithm
+  str := BackendDump.equationString(eq) + (if info.lineNumberStart > 0 then " (line " + intString(info.lineNumberStart) + ")" else "");
+end equationLabel;
+
+function interactiveSuggestion
+  "What to add for unmatched equations and variables."
+  input Integer numEqs;
+  input Integer numVars;
+  output String str;
+algorithm
+  str := if numEqs == numVars then
+      "Add " + intString(numEqs) + " hand guided tearing pair(s) that use these equations as residual equations and these variables as iteration variables"
+    elseif numEqs > numVars then
+      "Use these equations as residual equations of hand guided tearing pairs; the model has " + intString(numEqs - numVars) + " equation(s) more than it can use, so that many of them need an iteration variable that is not listed here or have to be removed"
+    else
+      "Use these variables as iteration variables of hand guided tearing pairs; the model has " + intString(numVars - numEqs) + " variable(s) more than its equations determine, so that many of them need a residual equation that is not listed here";
+end interactiveSuggestion;
 
 function equationHasDer
   input BackendDAE.Equation eq;
@@ -769,6 +1014,7 @@ protected
   list<SimCode.SimEqSystem> innerEqs;
   list<String> var_names;
   SimCode.SimEqSystem cont;
+  list<SimCode.SimEqSystem> residuals;
 algorithm
   (kind, innerEqs, var_names) := match eq
     case SimCode.SES_MIXED(cont = cont) then systemItems(cont, "mixed");
@@ -780,8 +1026,12 @@ algorithm
   end if;
 
   ok := false;
+  residuals := list(e for e guard isSimResidual(e) in innerEqs);
   Error.addMessage(Error.HGT_INTERACTIVE_LOOP, {
-    stringDelimitList(list(simEqString(e) for e in innerEqs), "; "), kind, stringDelimitList(var_names, ", ")});
+    stringDelimitList(list(simEqString(e) for e in innerEqs), "; "), kind,
+    stringDelimitList(var_names, ", "),
+    if listEmpty(residuals) then "" else
+      " and the residual equations {" + stringDelimitList(list(simEqString(e) + simEqLine(e) for e in residuals), "; ") + "}"});
 end checkInteractiveSystem;
 
 function systemItems
@@ -808,6 +1058,33 @@ algorithm
     kind := mixedKind;
   end if;
 end systemItems;
+
+function isSimResidual
+  input SimCode.SimEqSystem eq;
+  output Boolean res;
+algorithm
+  res := match eq
+    case SimCode.SES_RESIDUAL() then true;
+    else false;
+  end match;
+end isSimResidual;
+
+function simEqLine
+  "The line of a residual equation, for messages."
+  input SimCode.SimEqSystem eq;
+  output String str;
+protected
+  SourceInfo info;
+algorithm
+  str := match eq
+    case SimCode.SES_RESIDUAL()
+      algorithm
+        info := ElementSource.getInfo(eq.source);
+      then
+        if info.lineNumberStart > 0 then " (line " + intString(info.lineNumberStart) + ")" else "";
+    else "";
+  end match;
+end simEqLine;
 
 function simEqString
   input SimCode.SimEqSystem eq;

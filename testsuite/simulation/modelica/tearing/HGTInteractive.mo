@@ -42,6 +42,29 @@ package HGTInteractive "Steady-state models for --interactiveFMU, see doc/HGT_in
     pipe2.m = m annotation(__OpenModelica_HGT(ResidualEquation(iterationVariable = m)));
   end Plant;
 
+  model MissingPair "error: with x given, x * x = 4 is left over and nothing determines z: they have to become a pair"
+    Real x(start = 1), y, z(start = 1);
+  equation
+    x * x = 4;
+    y = x + z;
+    z * y = 3 annotation(__OpenModelica_HGT(name = e1, ResidualEquation(iterationVariable = x)));
+  end MissingPair;
+
+  model WrongVariable "error: a is determined by a = 2 * time, it can not be an iteration variable as well"
+    Real a, b;
+  equation
+    b = 3 annotation(__OpenModelica_HGT(name = e1, ResidualEquation(iterationVariable = a)));
+    a = 2 * time;
+  end WrongVariable;
+
+  model OuterSingular "warning: both residual equations only depend on x, none on y"
+    Real x(start = 1), y(start = 1), z;
+  equation
+    z = 2 * x;
+    x * x = 4 annotation(__OpenModelica_HGT(name = e1, ResidualEquation(iterationVariable = x)));
+    z + x = 6 annotation(__OpenModelica_HGT(name = e2, ResidualEquation(iterationVariable = y)));
+  end OuterSingular;
+
   model Dynamic "error: a model with states"
     Real x(start = 1, fixed = true), y(start = 1);
   equation

@@ -1,0 +1,39 @@
+// name:      HGTInteractiveStructure1
+// keywords:  tearing, hand guided tearing, interactive FMU
+// status:    correct
+// teardown_command: rm -rf OuterSingular.fmu OuterSingular.log TwoBlocks.fmu TwoBlocks.log
+//
+// --interactiveFMU: structural checks at compile time, with all hold attributes
+// false. Error 8026 names the equations and variables that have to become
+// residual equations and iteration variables; warning 8027 the residual
+// equations that can not determine the iteration variables.
+//
+
+loadFile("HGTInteractive.mo"); getErrorString();
+setCommandLineOptions("--handGuidedTearing --interactiveFMU"); getErrorString();
+buildModelFMU(HGTInteractive.MissingPair, version = "2.0", fmuType = "me"); getErrorString();
+buildModelFMU(HGTInteractive.WrongVariable, version = "2.0", fmuType = "me"); getErrorString();
+buildModelFMU(HGTInteractive.OuterSingular, version = "2.0", fmuType = "me"); getErrorString();
+buildModelFMU(HGTInteractive.TwoBlocks, version = "2.0", fmuType = "me"); getErrorString();
+
+// Result:
+// true
+// ""
+// true
+// ""
+// ""
+// "[simulation/modelica/tearing/HGTInteractive.mo:48:5-48:14:writable] Error: --interactiveFMU: with the given iteration variables the other equations do not determine the other variables. 1 equation(s) are left over: {x ^ 2.0 = 4.0 (line 48)}; 1 variable(s) are determined by no equation: {z}. Add 1 hand guided tearing pair(s) that use these equations as residual equations and these variables as iteration variables.
+// "
+// ""
+// "[simulation/modelica/tearing/HGTInteractive.mo:57:5-57:17:writable] Error: --interactiveFMU: with the given iteration variables the other equations do not determine the other variables. 1 equation(s) are left over: {a = 2.0 * time (line 57)}; 1 variable(s) are determined by no equation: {b}. Add 1 hand guided tearing pair(s) that use these equations as residual equations and these variables as iteration variables.
+// "
+// "OuterSingular.fmu"
+// "[simulation/modelica/tearing/HGTInteractive.mo:65:56-65:95:writable] Warning: --interactiveFMU: with all hold attributes false the residual equations {e2} can not determine the iteration variables {y}, they do not depend on them. The steady-state problem is structurally singular unless they are held; check which iteration variable each residual equation is paired with.
+// Notification: Building FMU for platform 'static' (1/1).
+// Notification: Finished FMU for platform 'static' (1/1).
+// "
+// "TwoBlocks.fmu"
+// "Notification: Building FMU for platform 'static' (1/1).
+// Notification: Finished FMU for platform 'static' (1/1).
+// "
+// endResult

@@ -25,7 +25,7 @@ buildModelFMU(HGTInteractive.TwoEq, version = "2.0", fmuType = "me"); getErrorSt
 // true
 // ""
 // ""
-// "[simulation/modelica/tearing/HGTInteractive.mo:48:5-48:16:writable] Error: --interactiveFMU: models with states are not supported yet, but the model contains der(x) = -x.
+// "[simulation/modelica/tearing/HGTInteractive.mo:71:5-71:16:writable] Error: --interactiveFMU: models with states are not supported yet, but the model contains der(x) = -x.
 // "
 // record SimulationResult
 //     resultFile = "HGTInteractive.TwoEq_res.mat",

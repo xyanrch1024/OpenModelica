@@ -140,7 +140,7 @@ algorithm
 
     // Hand guided tearing: protect the iteration variables, apply the attributes
     // and scale the residual equations, see HandGuidedTearing.
-    (hgt_spec, varlst, eqns, ieqns, globalKnownVarLst) := HandGuidedTearing.lower(elems, varlst, eqns, ieqns, globalKnownVarLst);
+    (hgt_spec, varlst, eqns, ieqns, globalKnownVarLst) := HandGuidedTearing.lower(elems, varlst, eqns, ieqns, globalKnownVarLst, not listEmpty(aliaseqns));
 
     globalKnownVars := BackendVariable.listVar(globalKnownVarLst);
     localKnownVars := BackendVariable.emptyVars();

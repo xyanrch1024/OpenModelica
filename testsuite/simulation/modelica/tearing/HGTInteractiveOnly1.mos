@@ -34,7 +34,7 @@ buildModelFMU(HGT.OnlyStuck, version = "2.0", fmuType = "me"); getErrorString();
 // Notification: Finished FMU for platform 'static' (1/1).
 // "
 // ""
-// "Error: With --interactiveFMU and --hgtOnly the FMU may not solve algebraic loops, but the equations {$cse2 = sin(z); $cse2 + z - y = 0} form a non-linear system. Add hand guided tearing pairs for it, for example with the iteration variables {z} and the residual equations {$cse2 + z - y = 0 (line 145)}.
+// "Error: With --interactiveFMU and --hgtOnly the FMU may not solve algebraic loops, but the equations {z + sin(z) = y} form a non-linear system. Add hand guided tearing pairs for it, for example with the iteration variables {z} and the residual equations {z + sin(z) = y (line 145)}.
 // "
 // true
 // ""

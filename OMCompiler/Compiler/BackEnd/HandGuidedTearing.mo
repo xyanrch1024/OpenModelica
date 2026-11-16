@@ -84,6 +84,7 @@ import UnorderedSet;
 import Util;
 
 constant String EQUATION_TAG = "__OpenModelica_HGTEquation";
+constant String ORIGINAL_TAG = "__OpenModelica_HGTOriginal" "the text of an equation before the backend changed it, for messages";
 type IntegerList = list<Integer>;
 
 public
@@ -633,6 +634,10 @@ algorithm
     checkInteractiveStructure(pairs, vars, eqns, eq_map, var_map);
   end if;
 
+  // remember the equations as they are now: messages about equations that the
+  // backend rewrites later (error 8023) show this text
+  eqns := list(if isTaggedEquation(e) then e else tagOriginal(e) for e in eqns);
+
   // new_* are in reverse order: append them in the order of the pairs
   vars := listReverse(listAppend(new_vars, listReverse(vars)));
   eqns := listReverse(listAppend(new_eqns, listReverse(eqns)));
@@ -877,6 +882,50 @@ algorithm
       "Use these variables as iteration variables of hand guided tearing pairs; the model has " + intString(numVars - numEqs) + " variable(s) more than its equations determine, so that many of them need a residual equation that is not listed here";
 end interactiveSuggestion;
 
+function tagOriginal
+  "Stores the text of a scalar equation in its source."
+  input output BackendDAE.Equation eq;
+protected
+  SCode.Mod mod;
+algorithm
+  eq := match eq
+    case BackendDAE.EQUATION()
+      algorithm
+        mod := SCode.MOD(SCode.NOT_FINAL(), SCode.NOT_EACH(),
+          {SCode.NAMEMOD(ORIGINAL_TAG, SCode.MOD(SCode.NOT_FINAL(), SCode.NOT_EACH(), {},
+            SOME(Absyn.STRING(BackendDump.equationString(eq))), NONE(), Absyn.dummyInfo))},
+          NONE(), NONE(), Absyn.dummyInfo);
+        eq.source := ElementSource.addCommentToSource(eq.source,
+          SOME(SCode.COMMENT(SOME(SCode.ANNOTATION(mod)), NONE())));
+      then
+        eq;
+    else eq;
+  end match;
+end tagOriginal;
+
+function originalText
+  "The text stored by tagOriginal, empty if there is none."
+  input DAE.ElementSource source;
+  output String str = "";
+protected
+  SCode.Annotation ann;
+algorithm
+  for cmt in ElementSource.getComments(source) loop
+    if isSome(cmt.annotation_) then
+      SOME(ann) := cmt.annotation_;
+
+      str := match SCodeUtil.lookupAnnotation(ann, ORIGINAL_TAG)
+        case SCode.MOD(binding = SOME(Absyn.STRING(value = str))) then str;
+        else "";
+      end match;
+
+      if not stringEmpty(str) then
+        return;
+      end if;
+    end if;
+  end for;
+end originalText;
+
 function equationHasDer
   input BackendDAE.Equation eq;
   output Boolean hasDer;
@@ -1015,6 +1064,7 @@ protected
   list<String> var_names;
   SimCode.SimEqSystem cont;
   list<SimCode.SimEqSystem> residuals;
+  list<String> eq_names;
 algorithm
   (kind, innerEqs, var_names) := match eq
     case SimCode.SES_MIXED(cont = cont) then systemItems(cont, "mixed");
@@ -1027,11 +1077,17 @@ algorithm
 
   ok := false;
   residuals := list(e for e guard isSimResidual(e) in innerEqs);
+  // only the equations of the model if their text is known, not those the
+  // backend generated (common subexpressions)
+  eq_names := List.unique(list(simEqOriginal(e) for e guard not stringEmpty(simEqOriginal(e)) in innerEqs));
+  if listEmpty(eq_names) then
+    eq_names := list(simEqString(e) for e in innerEqs);
+  end if;
   Error.addMessage(Error.HGT_INTERACTIVE_LOOP, {
-    stringDelimitList(list(simEqString(e) for e in innerEqs), "; "), kind,
+    stringDelimitList(eq_names, "; "), kind,
     stringDelimitList(var_names, ", "),
     if listEmpty(residuals) then "" else
-      " and the residual equations {" + stringDelimitList(list(simEqString(e) + simEqLine(e) for e in residuals), "; ") + "}"});
+      " and the residual equations {" + stringDelimitList(List.unique(list(simEqString(e) + simEqLine(e) for e in residuals)), "; ") + "}"});
 end checkInteractiveSystem;
 
 function systemItems
@@ -1086,10 +1142,31 @@ algorithm
   end match;
 end simEqLine;
 
-function simEqString
+function simEqOriginal
+  "The text of an equation before the backend changed it, empty if unknown."
   input SimCode.SimEqSystem eq;
   output String str;
 algorithm
+  str := match eq
+    case SimCode.SES_RESIDUAL() then originalText(eq.source);
+    case SimCode.SES_SIMPLE_ASSIGN() then originalText(eq.source);
+    case SimCode.SES_SIMPLE_ASSIGN_CONSTRAINTS() then originalText(eq.source);
+    else "";
+  end match;
+end simEqOriginal;
+
+function simEqString
+  "An equation of a system for messages: its text before the backend changed
+   it if known, otherwise the generated equation."
+  input SimCode.SimEqSystem eq;
+  output String str;
+algorithm
+  str := simEqOriginal(eq);
+
+  if not stringEmpty(str) then
+    return;
+  end if;
+
   str := match eq
     case SimCode.SES_RESIDUAL() then ExpressionBasics.printExpStr(eq.exp) + " = 0";
     case SimCode.SES_SIMPLE_ASSIGN() then crefString(eq.cref) + " = " + ExpressionBasics.printExpStr(eq.exp);

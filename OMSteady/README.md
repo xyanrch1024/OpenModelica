@@ -22,3 +22,6 @@ print(Solver(p).solve(), p.get(["x", "T"]))
 ```
 
 Tests: `pip install -e .[test,fmu]`, then `pytest tests`.
+
+Demo: `python3 demo/demo.py`, a cooling water loop switched between rating and design
+cases with hold, see `demo/README.md`.

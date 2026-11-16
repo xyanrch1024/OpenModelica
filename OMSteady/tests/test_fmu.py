@@ -214,3 +214,18 @@ def test_plant(fmus):
     assert p_mid == pytest.approx(409 / 13, abs=1e-6)
     assert m == pytest.approx(2 * math.sqrt(100 - 409 / 13), abs=1e-6)
     p.terminate()
+
+
+def test_demo(tmp_path):
+    # the demo of OMSteady/demo runs through and gives the numbers of its README
+    import subprocess
+    import sys
+    demo = os.path.join(ROOT, "OMSteady", "demo", "demo.py")
+    out = subprocess.run([sys.executable, demo, "--no-pause", "--omc", OMC], cwd=tmp_path,
+                         capture_output=True, text=True, timeout=900)
+    assert out.returncode == 0, out.stdout + out.stderr
+    text = out.stdout
+    assert "演示结束" in text
+    for value in ("13.7812", "35.7667", "1.1610", "0.5168", "1.3796", "0.3483", "1.4483"):
+        assert value in text, value
+    assert "HoldBalanceError" in text and "没有方程能确定 {T1}" in text

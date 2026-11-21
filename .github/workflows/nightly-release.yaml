@@ -48,7 +48,7 @@ jobs:
           done
 
       - name: Upload the new assets
-        uses: pyTooling/Actions/releaser@c2282e4d63fb9f7b3e8f4c672b01d9dab7af22c3 # v6.7.0
+        uses: pyTooling/Actions/releaser@5c6a1aec0bb5a0243ad0c6f98a8e1258c019e679 # v9.3.3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           tag: nightly

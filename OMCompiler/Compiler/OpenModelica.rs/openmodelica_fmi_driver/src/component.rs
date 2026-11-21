@@ -46,8 +46,10 @@ fn status(s: WitStatus) -> Status {
 }
 
 /// A component call that traps, or a status the master cannot continue from.
+/// `{e:#}` so the trap code (`wasm trap: ...`) comes with the backtrace wasmtime
+/// puts in front of it.
 fn trap(call: &'static str, e: impl std::fmt::Display) -> Error {
-    Error::Load(format!("{call}: {e}"))
+    Error::Load(format!("{call}: {e:#}"))
 }
 
 fn check(call: &'static str, s: WitStatus) -> Result<()> {
@@ -165,6 +167,12 @@ pub fn engine() -> Result<Engine> {
     cfg.wasm_component_model(true);
     // A model with external "C" carries the `model_error` tag its call sites catch.
     cfg.wasm_exceptions(true);
+    // The GC heap holds only exception objects; left to default it would reserve
+    // another 4 GiB + guard per instance, like a linear memory.
+    cfg.gc_heap_reservation(16 << 20);
+    cfg.gc_heap_reservation_for_growth(16 << 20);
+    cfg.gc_heap_guard_size(0);
+    cfg.gc_heap_may_move(true);
     Engine::new(&cfg).map_err(|e| trap("wasmtime engine", e))
 }
 
@@ -241,7 +249,7 @@ impl WasmArtifact {
         let resources = self.resources.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(dir) = resources.filter(|d| d.is_dir()) {
             builder
-                .preopened_dir(&dir, "/", wasmtime_wasi::DirPerms::READ, wasmtime_wasi::FilePerms::READ)
+                .preopened_dir(&dir, "/", wasmtime_wasi::FsPerms::ReadOnly)
                 .map_err(|e| trap("preopening the resources directory", e))?;
         }
         Ok(Store::new(

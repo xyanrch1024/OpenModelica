@@ -30,6 +30,10 @@
 #
 # See the full OSMC Public License conditions for more details.
 
+# NOTE: Not a build file; OMEdit is built with CMake. `lupdate` reads
+# SOURCES/HEADERS/TRANSLATIONS from here to update the .ts files, see
+# Resources/nls/README.md. Keep the source lists in sync with
+# OMEditLIB/CMakeLists.txt, or new translatable strings will be missed.
 include(../OMEdit.config.pre.pri)
 TARGET = OMEdit
 
@@ -67,8 +71,6 @@ win32 {
 
   OPENMODELICAHOME = $$(OMBUILDDIR)
   host_short =
-} else { # Unix libraries and includes
-  include(OMEditLIB.unix.config.pri)
 }
 
 INCLUDEPATH += . ../ \
@@ -87,6 +89,7 @@ INCLUDEPATH += . ../ \
 
 SOURCES += Util/Helper.cpp \
   Util/Utilities.cpp \
+  Util/Style.cpp \
   Util/PersistentStorage.cpp \
   Cloud/CloudTypes.cpp \
   Cloud/CloudConfig.cpp \
@@ -163,6 +166,7 @@ SOURCES += Util/Helper.cpp \
   Element/ElementProperties.cpp \
   Element/Transformation.cpp \
   Modeling/DocumentationWidget.cpp \
+  Modeling/ClassDiagramWidget.cpp \
   Simulation/TranslationFlagsWidget.cpp \
   Simulation/SimulationDialog.cpp \
   Simulation/SimulationOutputWidget.cpp \
@@ -241,6 +245,7 @@ HEADERS  += Util/Helper.h \
   Cloud/OAuth2Client.h \
   Cloud/OAuth2Redirect.h \
   Util/Utilities.h \
+  Util/Style.h \
   Util/StringHandler.h \
   Util/OutputPlainTextEdit.h \
   Util/DirectoryOrFileSelector.h \
@@ -303,6 +308,7 @@ HEADERS  += Util/Helper.h \
   Element/ElementProperties.h \
   Element/Transformation.h \
   Modeling/DocumentationWidget.h \
+  Modeling/ClassDiagramWidget.h \
   Simulation/SimulationOptions.h \
   Simulation/TranslationFlagsWidget.h \
   Simulation/SimulationDialog.h \
@@ -404,6 +410,7 @@ CONFIG(animation) {
 }
 
 OTHER_FILES += Resources/css/stylesheet.qss \
+  Resources/css/stylesheet-dark.qss \
   Debugger/Parser/GDBMIOutput.g \
   Debugger/Parser/GDBMIParser.h \
   Debugger/Parser/GDBMIParser.cpp \

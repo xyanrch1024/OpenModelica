@@ -1,6 +1,25 @@
 TEST = ../../../rtest -v
 
 TESTFILES = \
+HGTAlgebra1.mos \
+HGTArray1.mos \
+HGTBounds1.mos \
+HGTError1.mos \
+HGTFor1.mos \
+HGTIf1.mos \
+HGTInit1.mos \
+HGTInteractive1.mos \
+HGTInteractiveError1.mos \
+HGTInteractiveOnly1.mos \
+HGTInteractiveStructure1.mos \
+HGTNetwork1.mos \
+HGTOnly1.mos \
+HGTPair1.mos \
+HGTParallel1.mos \
+HGTPair2.mos \
+HGTPlant1.mos \
+HGTSolve1.mos \
+HGTSystem1.mos \
 Tearing1-celMC3.mos \
 Tearing2-celMC3.mos \
 Tearing3-celMC3.mos \
@@ -119,8 +138,7 @@ DEPENDENCIES = \
 *.mo \
 *.mos \
 *.sh \
-Makefile \
-msl32-models.txt
+Makefile
 
 
 CLEAN = `ls | grep -w -v -f deps.tmp`

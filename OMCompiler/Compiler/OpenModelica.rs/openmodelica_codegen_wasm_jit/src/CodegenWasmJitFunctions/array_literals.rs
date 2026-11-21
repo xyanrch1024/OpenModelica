@@ -11,44 +11,55 @@ use super::*;
 /// cross-module call dominated the per-evaluation cost. The stride follows the
 /// element's wasm type, which the load/store that follows already assumes.
 pub(super) fn emit_elem_ptr(ctx: &mut FnCtx, elem: &SigTy) -> Result<()> {
+    emit_elem_ptr_ranked(ctx, elem, None)
+}
+
+/// [`emit_elem_ptr`] for an array whose rank the caller knows, which fixes where
+/// its elements start.
+pub(super) fn emit_elem_ptr_ranked(ctx: &mut FnCtx, elem: &SigTy, rank: Option<u32>) -> Result<()> {
     use we::Instruction as I;
     let (ot, it) = ctx.elem_ptr_temps();
     let shift = match elem.wty() {
         WTy::F64 => 3,
         WTy::I32 => 2,
     };
+    // `it` holds the 0-based index.
+    ctx.emit(I::I32Const(1));
+    ctx.emit(I::I32Sub);
     ctx.emit(I::LocalSet(it));
     ctx.emit(I::LocalSet(ot));
     ctx.emit(I::Block(we::BlockType::Result(we::ValType::I32)));
-    // index < 1 || index > total -> the runtime's out-of-range arm.
-    ctx.emit(I::LocalGet(it));
-    ctx.emit(I::I32Const(1));
-    ctx.emit(I::I32LtS);
+    // index < 1 || index > total, as one unsigned compare -> the runtime's
+    // out-of-range arm.
     ctx.emit(I::LocalGet(it));
     ctx.emit(I::LocalGet(ot));
     ctx.emit(I::I32Load(mem_arg(ARR_TOTAL_OFF, 2)));
-    ctx.emit(I::I32GtS);
-    ctx.emit(I::I32Or);
-    ctx.emit(I::If(we::BlockType::Empty));
+    ctx.emit(I::I32GeU);
+    emit_unlikely_if(ctx, we::BlockType::Empty);
     ctx.emit(I::LocalGet(ot));
     ctx.emit(I::LocalGet(it));
+    ctx.emit(I::I32Const(1));
+    ctx.emit(I::I32Add);
     ctx.emit(I::Call(rt_index("rt_elem_ptr_oob")?));
     ctx.emit(I::Br(1));
     ctx.emit(I::End);
     // obj + align8(ARR_DIMS_OFF + ndims*4) + (index - 1) * stride
     ctx.emit(I::LocalGet(ot));
-    ctx.emit(I::LocalGet(ot));
-    ctx.emit(I::I32Load(mem_arg(ARR_NDIMS_OFF, 2)));
-    ctx.emit(I::I32Const(2));
-    ctx.emit(I::I32Shl);
-    ctx.emit(I::I32Const(ARR_DIMS_OFF as i32 + 7));
-    ctx.emit(I::I32Add);
-    ctx.emit(I::I32Const(-8));
-    ctx.emit(I::I32And);
+    match rank {
+        Some(r) => ctx.emit(I::I32Const(arr_data_off(r) as i32)),
+        None => {
+            ctx.emit(I::LocalGet(ot));
+            ctx.emit(I::I32Load(mem_arg(ARR_NDIMS_OFF, 2)));
+            ctx.emit(I::I32Const(2));
+            ctx.emit(I::I32Shl);
+            ctx.emit(I::I32Const(ARR_DIMS_OFF as i32 + 7));
+            ctx.emit(I::I32Add);
+            ctx.emit(I::I32Const(-8));
+            ctx.emit(I::I32And);
+        }
+    }
     ctx.emit(I::I32Add);
     ctx.emit(I::LocalGet(it));
-    ctx.emit(I::I32Const(1));
-    ctx.emit(I::I32Sub);
     ctx.emit(I::I32Const(shift));
     ctx.emit(I::I32Shl);
     ctx.emit(I::I32Add);
@@ -93,12 +104,12 @@ fn elem_store_off(ctx: &mut FnCtx, elem: &SigTy, offset: u32) {
 /// runtime's `arr_data_off`. Constant here, so a construction's element address
 /// is a plain offset off the object rather than the descriptor arithmetic (and
 /// bounds check) [`emit_elem_ptr`] needs for a run-time index.
-fn arr_data_off(rank: u32) -> u32 {
+pub(super) fn arr_data_off(rank: u32) -> u32 {
     (ARR_DIMS_OFF + rank * 4).next_multiple_of(8)
 }
 
 /// Byte size of one array element.
-fn elem_stride(elem: &SigTy) -> u32 {
+pub(super) fn elem_stride(elem: &SigTy) -> u32 {
     match elem.wty() {
         WTy::F64 => 8,
         WTy::I32 => 4,
@@ -189,11 +200,11 @@ fn emit_const_run(
 }
 
 /// [`const_dims`] keeping the non-constant dimensions.
-pub(super) fn type_dims(ty: &DAE::Type) -> Vec<Arc<DAE::Dimension>> {
+pub(super) fn type_dims(ty: &DAE::Type) -> Vec<metamodelica::Ref<DAE::Dimension>> {
     let DAE::Type::T_ARRAY { ty: elem, dims } = ty else {
         return Vec::new();
     };
-    let mut out: Vec<Arc<DAE::Dimension>> = (&**dims).into_iter().cloned().collect();
+    let mut out: Vec<metamodelica::Ref<DAE::Dimension>> = (&**dims).into_iter().cloned().collect();
     out.extend(type_dims(elem));
     out
 }
@@ -468,7 +479,7 @@ fn leaf_array_count(exp: &DAE::Exp) -> Result<Option<u32>> {
 /// The DAE type an expression carries, for the cases that can appear as an
 /// array-constructor leaf. `None` when no type annotation is readily available
 /// (treated as a scalar leaf by [`leaf_array_count`]).
-fn exp_dae_type(exp: &DAE::Exp) -> Option<Arc<DAE::Type>> {
+fn exp_dae_type(exp: &DAE::Exp) -> Option<metamodelica::Ref<DAE::Type>> {
     use DAE::Exp as E;
     match exp {
         E::CREF { ty, .. } | E::CAST { ty, .. } | E::ARRAY { ty, .. } | E::MATRIX { ty, .. } | E::RANGE { ty, .. } => {
@@ -487,7 +498,7 @@ fn exp_dae_type(exp: &DAE::Exp) -> Option<Arc<DAE::Type>> {
 /// The result DAE type carried by an arithmetic operator (for the array-valued
 /// operators that can appear as a constructor leaf). `None` for operators that
 /// do not carry a usable type here.
-fn operator_dae_type(op: &DAE::Operator) -> Option<Arc<DAE::Type>> {
+fn operator_dae_type(op: &DAE::Operator) -> Option<metamodelica::Ref<DAE::Type>> {
     use DAE::Operator as O;
     match op {
         O::ADD { ty } | O::SUB { ty } | O::MUL { ty } | O::DIV { ty } | O::POW { ty } | O::UMINUS { ty }

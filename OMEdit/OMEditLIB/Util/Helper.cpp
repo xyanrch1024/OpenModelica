@@ -53,8 +53,15 @@ QString Helper::userHomeDirectory = "";
 QString Helper::OpenModelicaUsersGuideVersion = "latest";
 QString Helper::OMEditInternal = "OMEditInternal";
 QString Helper::OMCServerName = "OMEdit";
-QString Helper::omFileTypes = "All Files (*.mo *.mol *.bmo *.mos *.ssp *.crml);;Modelica Files (*.mo);;Encrypted Modelica Libraries (*.mol);;Base Modelica Files (*.bmo)"
-                              ";;Modelica Script Files (*.mos);;System Structure and Parameterization Files (*.ssp);;CRML Files (*.crml)";
+QString Helper::modelicaFigureTitle = "modelicaFigureTitle";
+QString Helper::omFileTypes = QString("All Files (*.mo *.mol *.bmo *.mos *.ssp *.crml%1);;Modelica Files (*.mo);;Encrypted Modelica Libraries (*.mol);;Base Modelica Files (*.bmo)"
+                                      ";;Modelica Script Files (*.mos);;System Structure and Parameterization Files (*.ssp);;CRML Files (*.crml)%2")
+#if defined(__EMSCRIPTEN__)
+                              // An archive is the only way a browser hands over a library with its Resources/.
+                              .arg(" *.zip", ";;Zipped Libraries (*.zip)");
+#else
+                              .arg("", "");
+#endif
 QString Helper::omEncryptedFileTypes = "Encrypted Modelica Libraries (*.mol)";
 QString Helper::omnotebookFileTypes = "OMNotebook Files (*.onb *.onbz *.nb)";
 QString Helper::ngspiceNetlistFileTypes = "ngspice Netlist Files (*.cir *.sp *.spice)";
@@ -65,22 +72,14 @@ QString Helper::xmlFileTypes = "XML Files (*.xml)";
 QString Helper::infoXmlFileTypes = "OM Info Files (*_info.json)";
 QString Helper::matFileTypes = "MAT Files (*.mat)";
 QString Helper::csvFileTypes = "CSV Files (*.csv)";
-#ifdef OM_LEGACY_RESULT_READERS
-QString Helper::omResultFileTypes = "OpenModelica Result Files (*.mat *.plt *.csv)";
-QString Helper::omResultFileTypesRegExp = "\\b(mat|plt|csv)\\b";
-#else
 QString Helper::omResultFileTypes = "OpenModelica Result Files (*.mat *.arrow *.plt *.csv)";
 QString Helper::omResultFileTypesRegExp = "\\b(mat|arrow|plt|csv)\\b";
-#endif
 QString Helper::txtFileTypes = "TXT Files (*.txt)";
 QString Helper::figaroFileTypes = "Figaro Files (*.fi)";
 QString Helper::jarFileTypes = "Jar Files (*.jar)";
-#ifdef OM_LEGACY_RESULT_READERS
-QString Helper::visualizationFileTypes = "Visualization Files (*.mat *.csv *.fmu);;Visualization MAT(*.mat);;Visualization CSV(*.csv);;Visualization FMU(*.fmu)";
-#else
 QString Helper::visualizationFileTypes = "Visualization Files (*.mat *.arrow *.csv *.fmu);;Visualization MAT(*.mat *.arrow);;Visualization CSV(*.csv);;Visualization FMU(*.fmu)";
-#endif
 QString Helper::subModelFileTypes = "SubModel Files (*.fmu *.mat *.csv);;SubModel FMU (*.fmu);;SubModel MAT (*.mat);;SubModel CSV (*.csv)";
+QString Helper::drawioFileTypes = "draw.io Files (*.drawio)";
 int Helper::treeIndentation = 20;
 QSize Helper::iconSize = QSize(20, 20);
 int Helper::tabWidth = 20;
@@ -91,11 +90,7 @@ QString Helper::busConnectorFormat = "bus/connector";
 QString Helper::cutCopyPasteFormat = "application/OMEdit.cut-copy-paste";
 qreal Helper::shapesStrokeWidth = 2.0;
 int Helper::headingFontSize = 18;
-#ifdef OM_LEGACY_RESULT_READERS
-QString Helper::ModelicaSimulationOutputFormats = "mat,plt,csv";
-#else
 QString Helper::ModelicaSimulationOutputFormats = "mat,arrow,plt,csv";
-#endif
 QString Helper::clockOptions = ",RT,CYC,CPU";
 QString Helper::internalLevel = ".OpenModelica.Scripting.ErrorLevel.internal";
 QString Helper::notificationLevel = ".OpenModelica.Scripting.ErrorLevel.notification";
@@ -257,6 +252,8 @@ QString Helper::question;
 QString Helper::search;
 QString Helper::findUsage;
 QString Helper::findUsageTip;
+QString Helper::classDiagram;
+QString Helper::classDiagramTip;
 QString Helper::duplicate;
 QString Helper::duplicateTip;
 QString Helper::unloadClass;
@@ -583,6 +580,8 @@ void Helper::initHelperVariables()
   Helper::search = tr("Search");
   Helper::findUsage = tr("Find Usage");
   Helper::findUsageTip = tr("Finds the usage of class");
+  Helper::classDiagram = tr("Class Diagram");
+  Helper::classDiagramTip = tr("Shows the UML class diagram of the class");
   Helper::duplicate = tr("Duplicate");
   Helper::duplicateTip = tr("Duplicates the item");
   Helper::unloadClass = tr("Unload");

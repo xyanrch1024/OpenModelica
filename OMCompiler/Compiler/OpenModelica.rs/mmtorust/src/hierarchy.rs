@@ -205,7 +205,7 @@ pub struct InstanceHierarchy<'a> {
     /// Populated by `detect_recursive_types` after resolve_pass converges.
     pub recursive_types: BTreeSet<String>,
     /// Fully-qualified names of user-defined struct/enum types that transitively
-    /// embed a `Mutable<T>` (= `Arc<Mutex<T>>`) field. `Mutex<T>` does not implement
+    /// embed a `Mutable<T>` (= `Rc<RefCell<T>>`) field. `RefCell<T>` does not implement
     /// `PartialEq` / `Eq` / `Hash`, so these types must not request those derives —
     /// the generated `#[derive(...)]` would otherwise fail to compile. Propagation
     /// also follows container types (`Option`, `List`, `Array`, `Tuple`, `Generic`)
@@ -241,11 +241,6 @@ pub struct InstanceHierarchy<'a> {
     /// they seed as unit variants; codegen lowers constructions to
     /// `unreachable!()` and drops match arms that mention them.
     pub retired: BTreeSet<String>,
-    /// Named types that can reach a declared cyclic cell
-    /// (`MutableCyclic`/`PointerCyclic`), and so must use the collector's
-    /// traced pointer rather than a plain `Arc`. Populated by
-    /// `mutable_cycles::detect_traced_types`.
-    pub traced_types: BTreeSet<String>,
     /// Subset of [`Self::types_containing_dyn_fn`]: types whose *own*
     /// fields/variants directly reference a function type without going
     /// through another user-defined struct/enum. These need a hand-rolled
@@ -318,7 +313,6 @@ impl<'a> InstanceHierarchy<'a> {
             types_containing_array: BTreeSet::new(),
             types_containing_dyn_fn: BTreeSet::new(),
             retired: BTreeSet::new(),
-            traced_types: BTreeSet::new(),
             types_directly_containing_dyn_fn: BTreeSet::new(),
             fallible_functions: BTreeSet::new(),
             keep_public: BTreeSet::new(),
@@ -1720,7 +1714,7 @@ fn resolve_type_spec(ts: &Absyn::TypeSpec, known: &ScopedKnown, aliases: &Scoped
     match ts {
         Absyn::TypeSpec::TPATH { path, .. } => resolve_path(path, known, aliases, type_vars, module_prefix, wctx),
         Absyn::TypeSpec::TCOMPLEX { path, typeSpecs, .. } => {
-            let args: Vec<Arc<Absyn::TypeSpec>> = (&**typeSpecs).into_iter().cloned().collect();
+            let args: Vec<metamodelica::Ref<Absyn::TypeSpec>> = (&**typeSpecs).into_iter().cloned().collect();
             let ctor = path_last(path);
             match ctor {
                 "tuple" => {
@@ -1738,7 +1732,7 @@ fn resolve_type_spec(ts: &Absyn::TypeSpec, known: &ScopedKnown, aliases: &Scoped
                 "array" | "Array" if args.len() == 1 => {
                     Some(Ty::Array(Box::new(resolve_type_spec(&args[0], known, aliases, type_vars, module_prefix, wctx)?)))
                 }
-                "Mutable" | "MutableCyclic" if args.len() == 1 => {
+                "Mutable" if args.len() == 1 => {
                     let inner = resolve_type_spec(&args[0], known, aliases, type_vars, module_prefix, wctx)?;
                     Some(Ty::Generic(ctor.to_owned(), vec![inner]))
                 }
@@ -1966,7 +1960,7 @@ pub(crate) fn strip_exp_wrappers(mut e: &Absyn::Exp) -> &Absyn::Exp {
 /// Extract the raw `Absyn::Exp` from a modification, for typed inference in codegen.
 /// Comment and parenthesis wrappers are stripped so callers can match on the
 /// expression's shape (literal constant folding, self-reference checks, …).
-pub(crate) fn extract_default_exp(modification: &Option<std::sync::Arc<Absyn::Modification>>) -> Option<&Absyn::Exp> {
+pub(crate) fn extract_default_exp(modification: &Option<metamodelica::Ref<Absyn::Modification>>) -> Option<&Absyn::Exp> {
     match modification {
         Some(m) => match &*m.eqMod {
             Absyn::EqMod::EQMOD { exp, .. } => Some(strip_exp_wrappers(exp)),
@@ -1978,7 +1972,7 @@ pub(crate) fn extract_default_exp(modification: &Option<std::sync::Arc<Absyn::Mo
 
 // ── Expression helpers ────────────────────────────────────────────────────────
 
-pub(crate) fn extract_default(modification: &Option<std::sync::Arc<Absyn::Modification>>) -> Option<String> {
+pub(crate) fn extract_default(modification: &Option<metamodelica::Ref<Absyn::Modification>>) -> Option<String> {
     match modification {
         Some(m) => match &*m.eqMod {
             Absyn::EqMod::EQMOD { exp, .. } => Some(fmt_exp(exp)),
@@ -2229,10 +2223,16 @@ fn collect_type_graph(
     }
 }
 
+/// Large records copied far more often than they are updated. Putting them
+/// behind `Ref` makes a copy a refcount bump; an update copies only when the
+/// value is shared (`Arc::make_mut`).
+const SHARED_RECORDS: &[&str] = &["BackendDAE.Var", "BackendDAE.Variables", "BackendVarTransform.VariableReplacements", "SimCodeVar.SimVar", "SimCode.SimCode"];
+
 /// Detect which named types form size-recursive cycles (directly or mutually).
 /// Populates `hier.recursive_types` with the fully-qualified names of all such types.
 /// Must be called after `resolve_pass` has converged.
 pub fn detect_recursive_types(hier: &mut InstanceHierarchy<'_>) {
+    hier.recursive_types.extend(SHARED_RECORDS.iter().map(|s| s.to_string()));
     let mut graph: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     collect_type_graph(&hier.top_level, "", &mut graph);
 
@@ -2296,6 +2296,30 @@ pub fn detect_recursive_types(hier: &mut InstanceHierarchy<'_>) {
 /// Collect, for every user-defined struct/enum/uniontype `qname`, the resolved
 /// `Ty`s of all of its component fields (variant fields in the enum/uniontype
 /// case). Used as the input to the `Mutable`-containment fixed point.
+/// Fields to drop from the containment graph, as `Type.field` or `.field`,
+/// from `MMTORUST_WEAK_FIELDS`. A weak reference owns nothing, so it carries no
+/// edge — this is how to ask what the cycle structure would look like if a given
+/// back-pointer were weakened, before weakening it for real.
+fn weak_fields() -> &'static BTreeSet<String> {
+    static WEAK: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
+    WEAK.get_or_init(|| {
+        std::env::var("MMTORUST_WEAK_FIELDS")
+            .map(|v| v.split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect())
+            .unwrap_or_default()
+    })
+}
+
+fn is_weak_field(owner: &str, field: &str) -> bool {
+    let w = weak_fields();
+    if w.is_empty() {
+        return false;
+    }
+    let short = owner.rsplit('.').next().unwrap_or(owner);
+    w.contains(&format!(".{field}"))
+        || w.contains(&format!("{owner}.{field}"))
+        || w.contains(&format!("{short}.{field}"))
+}
+
 pub(crate) fn collect_struct_field_tys(
     nodes: &BTreeMap<String, NameNode<'_>>,
     prefix: &str,
@@ -2305,9 +2329,10 @@ pub(crate) fn collect_struct_field_tys(
         let qname = qualify(prefix, name);
         match &node.ty {
             Ty::RustStruct(_) => {
-                let tys: Vec<Ty> = node.children.values()
-                    .filter(|c| matches!(c.kind, NodeKind::Component(_)))
-                    .map(|c| c.ty.clone())
+                let tys: Vec<Ty> = node.children.iter()
+                    .filter(|(_, c)| matches!(c.kind, NodeKind::Component(_)))
+                    .filter(|(fname, _)| !is_weak_field(&qname, fname))
+                    .map(|(_, c)| c.ty.clone())
                     .collect();
                 out.insert(qname.clone(), tys);
             }
@@ -2323,9 +2348,10 @@ pub(crate) fn collect_struct_field_tys(
                 // parameter in some sibling function).
                 let tys: Vec<Ty> = node.children.values()
                     .filter(|v| matches!(v.ty, Ty::RustStruct(_) | Ty::RustUnitVariant))
-                    .flat_map(|variant| variant.children.values()
-                        .filter(|c| matches!(c.kind, NodeKind::Component(_)))
-                        .map(|c| c.ty.clone()))
+                    .flat_map(|variant| variant.children.iter()
+                        .filter(|(_, c)| matches!(c.kind, NodeKind::Component(_)))
+                        .filter(|(fname, _)| !is_weak_field(&qname, fname))
+                        .map(|(_, c)| c.ty.clone()))
                     .collect();
                 out.insert(qname.clone(), tys);
             }
@@ -2347,7 +2373,6 @@ fn ty_contains_mutable(ty: &Ty, tainted: &BTreeSet<String>) -> bool {
             // form to match graph keys.
             let dotted = name.replace("::", ".");
             dotted == "Mutable"
-                || dotted == "MutableCyclic"
                 || tainted.contains(&dotted)
                 || args.iter().any(|a| ty_contains_mutable(a, tainted))
         }
@@ -2360,7 +2385,7 @@ fn ty_contains_mutable(ty: &Ty, tainted: &BTreeSet<String>) -> bool {
 }
 
 /// Detect which named types transitively contain a `Mutable<T>` field and
-/// therefore cannot derive `PartialEq` / `Eq` / `Hash` (because `Mutex<T>`
+/// therefore cannot derive `PartialEq` / `Eq` / `Hash` (because `RefCell<T>`
 /// implements none of those traits). Must be called after `resolve_pass` has
 /// converged so all field types are populated.
 pub fn detect_types_containing_mutable(hier: &mut InstanceHierarchy<'_>) {
@@ -2399,7 +2424,8 @@ fn ty_contains_array(ty: &Ty, tainted: &BTreeSet<String>) -> bool {
             // whose buckets are an `Array<T>`). Normalise the `::`
             // path to dotted form to match the graph keys.
             let dotted = name.replace("::", ".");
-            tainted.contains(&dotted)
+            is_rc_cell(&dotted)
+                || tainted.contains(&dotted)
                 || args.iter().any(|a| ty_contains_array(a, tainted))
         }
         Ty::RustStruct(qname) | Ty::RustEnum(qname) | Ty::AliasTo(qname) => tainted.contains(qname),
@@ -2408,7 +2434,14 @@ fn ty_contains_array(ty: &Ty, tainted: &BTreeSet<String>) -> bool {
     }
 }
 
-/// Detect which named types transitively contain a `metamodelica::Array<T>` field.
+/// The cell types, which like `Array<T>` are an `Rc` around a `RefCell`.
+pub(crate) fn is_rc_cell(dotted: &str) -> bool {
+    matches!(dotted, "Mutable" | "Mutable.Mutable" | "MutableWeak" | "MutableWeak.MutableWeak"
+        | "Pointer" | "Pointer.Pointer" | "PointerWeak" | "PointerWeak.PointerWeak")
+}
+
+/// Detect which named types transitively contain a `metamodelica::Array<T>` field
+/// or a cell (`Mutable`, `Pointer` and their weak forms).
 /// Such types are not `Sync` (because `Rc`/`RefCell` aren't), so they cannot be
 /// stored in a `pub static`. Codegen consults the result to pick `pub const fn`
 /// getter emission instead of `pub static` for affected constants. Must be called

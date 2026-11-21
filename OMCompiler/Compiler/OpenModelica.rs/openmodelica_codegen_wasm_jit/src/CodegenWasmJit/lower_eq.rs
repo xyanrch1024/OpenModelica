@@ -6,7 +6,7 @@ use super::*;
 pub(super) fn lower_equation_inner(
     ctx: &mut FnCtx,
     eq: &SimCode::SimEqSystem,
-    eq_index: &HashMap<i32, Arc<SimCode::SimEqSystem>>,
+    eq_index: &HashMap<i32, metamodelica::Ref<SimCode::SimEqSystem>>,
 ) -> Result<()> {
     use SimCode::SimEqSystem as E;
     if let Some(info) = eq_info(eq) {
@@ -59,7 +59,7 @@ pub(super) fn lower_equation_inner(
             if *insideNonLinearSystem {
                 return ctx.sim_stmts(statements);
             }
-            let known: Vec<Arc<DAE::ComponentRef>> = lst(knownOutputCrefs).cloned().collect();
+            let known: Vec<metamodelica::Ref<DAE::ComponentRef>> = lst(knownOutputCrefs).cloned().collect();
             let saved = backup_known_outputs(ctx, &known)?;
             ctx.sim_stmts(statements)?;
             restore_known_outputs(ctx, &known, &saved)
@@ -102,12 +102,12 @@ pub(super) fn lower_equation_inner(
 /// component. `Linear`/`Nonlinear` carry `(strict, casual)`, C's `lSystem`/`nlSystem`
 /// and its `alternativeTearing`.
 enum DtSystem<'a> {
-    Linear(&'a Arc<SimCode::LinearSystem>, &'a Arc<SimCode::LinearSystem>),
-    Nonlinear(&'a Arc<SimCode::NonlinearSystem>, &'a Arc<SimCode::NonlinearSystem>),
+    Linear(&'a metamodelica::Ref<SimCode::LinearSystem>, &'a metamodelica::Ref<SimCode::LinearSystem>),
+    Nonlinear(&'a metamodelica::Ref<SimCode::NonlinearSystem>, &'a metamodelica::Ref<SimCode::NonlinearSystem>),
 }
 
 /// Every `CONSTRAINT_DT` of an equation's constraint list, as `(condition, local)`.
-pub(crate) fn dt_constraints(cons: &List<Arc<DAE::Constraint>>) -> Vec<(Arc<DAE::Exp>, bool)> {
+pub(crate) fn dt_constraints(cons: &List<metamodelica::Ref<DAE::Constraint>>) -> Vec<(metamodelica::Ref<DAE::Exp>, bool)> {
     lst(cons)
         .filter_map(|c| match &**c {
             DAE::Constraint::CONSTRAINT_DT { constraint, localCon } => {
@@ -120,9 +120,9 @@ pub(crate) fn dt_constraints(cons: &List<Arc<DAE::Constraint>>) -> Vec<(Arc<DAE:
 
 /// Every constraint a casual tearing set's inner equations carry, in C's order
 /// (`createGlobalConstraints` over `at.eqs` / `at.residual`).
-fn dt_system_constraints(sys: &DtSystem) -> Vec<(Arc<DAE::Exp>, bool)> {
+fn dt_system_constraints(sys: &DtSystem) -> Vec<(metamodelica::Ref<DAE::Exp>, bool)> {
     use SimCode::SimEqSystem as E;
-    let inner: Vec<Arc<SimCode::SimEqSystem>> = match sys {
+    let inner: Vec<metamodelica::Ref<SimCode::SimEqSystem>> = match sys {
         DtSystem::Linear(_, at) => lst(&at.residual).cloned().collect(),
         DtSystem::Nonlinear(_, at) => lst(&at.eqs).cloned().collect(),
     };
@@ -142,7 +142,7 @@ fn dt_system_constraints(sys: &DtSystem) -> Vec<(Arc<DAE::Exp>, bool)> {
 /// C's `solveNLS` calls `strictTearingFunctionCall`.
 fn lower_dynamic_tearing(
     ctx: &mut FnCtx,
-    eq_index: &HashMap<i32, Arc<SimCode::SimEqSystem>>,
+    eq_index: &HashMap<i32, metamodelica::Ref<SimCode::SimEqSystem>>,
     sys: DtSystem,
 ) -> Result<()> {
     let linear = matches!(sys, DtSystem::Linear(..));
@@ -185,7 +185,7 @@ fn lower_dynamic_tearing(
 pub(super) fn lower_linear_system(
     ctx: &mut FnCtx,
     lsystem: &SimCode::LinearSystem,
-    eq_index: &HashMap<i32, Arc<SimCode::SimEqSystem>>,
+    eq_index: &HashMap<i32, metamodelica::Ref<SimCode::SimEqSystem>>,
     dt_strict: i32,
 ) -> Result<()> {
     // C's `equationLinear` line; the casual variant is printed at the call site.
@@ -211,18 +211,18 @@ pub(super) fn lower_linear_system(
 fn lower_linear_system_body(
     ctx: &mut FnCtx,
     lsystem: &SimCode::LinearSystem,
-    eq_index: &HashMap<i32, Arc<SimCode::SimEqSystem>>,
+    eq_index: &HashMap<i32, metamodelica::Ref<SimCode::SimEqSystem>>,
 ) -> Result<()> {
     use SimCode::SimEqSystem as E;
-    let mut inner: Vec<Arc<SimCode::SimEqSystem>> = Vec::new();
+    let mut inner: Vec<metamodelica::Ref<SimCode::SimEqSystem>> = Vec::new();
     let residuals = lin_residuals(lsystem, &mut inner);
     let torn = !residuals.is_empty();
-    let vars: Vec<Arc<DAE::ComponentRef>> = lst(&lsystem.vars).map(|v| v.name.clone()).collect();
+    let vars: Vec<metamodelica::Ref<DAE::ComponentRef>> = lst(&lsystem.vars).map(|v| v.name.clone()).collect();
     let n = vars.len();
 
     // A from simJac, b from beqs. `usable` false if any entry is not an ordinary
     // scalar residual (e.g. a for-residual we can't index statically).
-    let mut a_entries: Vec<(usize, usize, &Arc<DAE::Exp>)> = Vec::new();
+    let mut a_entries: Vec<(usize, usize, &metamodelica::Ref<DAE::Exp>)> = Vec::new();
     let mut usable = true;
     for entry in lst(&lsystem.simJac) {
         let (row, col, eq) = entry;
@@ -234,16 +234,14 @@ fn lower_linear_system_body(
             }
         }
     }
-    let b_exps: Vec<&Arc<DAE::Exp>> = lst(&lsystem.beqs).collect();
+    let b_exps: Vec<&metamodelica::Ref<DAE::Exp>> = lst(&lsystem.beqs).collect();
 
     if usable && !a_entries.is_empty() && b_exps.len() == n {
         // Torn systems recover their inner variables at the solution; the non-torn
         // form has none (its `inner` is empty regardless).
         let mut lower_inner = |c: &mut FnCtx| -> Result<()> {
             if torn {
-                for eq in &inner {
-                    lower_equation(c, eq, eq_index)?;
-                }
+                lower_eq_list(c, &inner, eq_index)?;
             }
             Ok(())
         };
@@ -255,12 +253,7 @@ fn lower_linear_system_body(
         return Err("CodegenWasmJit: SES_LINEAR has neither a usable simJac nor residual equations");
     }
     let use_sparse = lin_torn_use_sparse(lsystem, n);
-    let mut lower_inner = |c: &mut FnCtx| -> Result<()> {
-        for eq in &inner {
-            lower_equation(c, eq, eq_index)?;
-        }
-        Ok(())
-    };
+    let mut lower_inner = |c: &mut FnCtx| -> Result<()> { lower_eq_list(c, &inner, eq_index) };
 
     // Prefer analytic-Jacobian assembly (C's method 1); probe only when there is no
     // usable Jacobian (its slots were registered by `build_lin_jac_infos`).
@@ -271,16 +264,10 @@ fn lower_linear_system_body(
         };
         let jm = lsystem.jacobianMatrix.as_ref().unwrap();
         let col = lst(&jm.columns).next().unwrap();
-        let constant_eqns: Vec<Arc<SimCode::SimEqSystem>> = lst(&col.constantEqns).cloned().collect();
-        let column_eqns: Vec<Arc<SimCode::SimEqSystem>> = lst(&col.columnEqns).cloned().collect();
-        let mut lower_constant = |c: &mut FnCtx| -> Result<()> {
-            for eq in &constant_eqns { lower_equation(c, eq, eq_index)?; }
-            Ok(())
-        };
-        let mut lower_column = |c: &mut FnCtx| -> Result<()> {
-            for eq in &column_eqns { lower_equation(c, eq, eq_index)?; }
-            Ok(())
-        };
+        let constant_eqns: Vec<metamodelica::Ref<SimCode::SimEqSystem>> = lst(&col.constantEqns).cloned().collect();
+        let column_eqns: Vec<metamodelica::Ref<SimCode::SimEqSystem>> = lst(&col.columnEqns).cloned().collect();
+        let mut lower_constant = |c: &mut FnCtx| -> Result<()> { lower_eq_list(c, &constant_eqns, eq_index) };
+        let mut lower_column = |c: &mut FnCtx| -> Result<()> { lower_eq_list(c, &column_eqns, eq_index) };
         // Sparse: assemble straight into CSC (no dense n² buffer) when the pattern
         // remaps cleanly to res_index rows; otherwise dense A + runtime nonzero scan.
         if use_sparse {
@@ -302,15 +289,40 @@ fn lower_linear_system_body(
     compile_linear_system(ctx, &vars, &residuals, &mut lower_inner, use_sparse, lsystem.jacobianMatrix.is_some(), lsystem.index)
 }
 
-/// Whether a torn linear system uses the sparse solver (C's density/size
-/// threshold), an unknown nonzero count counting as dense.
+/// Lower one of a linear system's equation lists, outlined once it is long enough
+/// to be worth a call: the system is otherwise copied into every entry point
+/// evaluating it.
+fn lower_eq_list(
+    ctx: &mut FnCtx,
+    eqs: &[metamodelica::Ref<SimCode::SimEqSystem>],
+    eq_index: &HashMap<i32, metamodelica::Ref<SimCode::SimEqSystem>>,
+) -> Result<()> {
+    if eqs.len() >= crate::CodegenWasmJitFunctions::OUTLINE_MIN_UNITS
+        && ctx.emit_outlined(eqs.len(), None, |c, i| lower_equation(c, &eqs[i], eq_index))?
+    {
+        return Ok(());
+    }
+    for eq in eqs {
+        lower_equation(ctx, eq, eq_index)?;
+    }
+    Ok(())
+}
+
+/// Whether a torn linear system uses the sparse solver: C's
+/// `linearSystemMatrixFormat`, an unknown nonzero count counting as dense.
 fn lin_torn_use_sparse(lsystem: &SimCode::LinearSystem, n: usize) -> bool {
     use crate::CodegenWasmJitFunctions::lin_use_sparse;
     if n == 0 {
         return false;
     }
-    let nnz = lin_system_nnz(lsystem);
-    nnz > 0 && lin_use_sparse(n, nnz)
+    let sim_jac = count(&lsystem.simJac);
+    let nnz = lsystem
+        .jacobianMatrix
+        .as_ref()
+        .and_then(|jm| sparsity_nonzeros(jm))
+        .or((sim_jac > 0).then_some(sim_jac))
+        .unwrap_or(n * n);
+    lin_use_sparse(n, nnz)
 }
 
 /// Total f64 count of the state-set Jacobian scratch region: the seeds plus every

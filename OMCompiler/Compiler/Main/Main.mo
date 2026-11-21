@@ -462,8 +462,11 @@ algorithm
             fmuVersion, fmuType, fileNamePrefix, true, fmuPlatforms, NONE());
           showErrors(Print.getErrorString(), ErrorExt.printMessagesStr(false));
           System.fflush();
+        elseif Config.simulation() then
+          print(CevalScriptBackend.simulateModel(cname));
+          showErrors(Print.getErrorString(), ErrorExt.printMessagesStr(false));
         else
-          runBackend := Config.simulationCg() or Config.simulation();
+          runBackend := Config.simulationCg();
           runSilent := Config.silent();
 
           CevalScriptBackend.translateModel(FCore.emptyCache(), FGraph.empty(), cname,
@@ -700,15 +703,7 @@ algorithm
   ErrorExt.initAssertionFunctions();
   System.realtimeTick(ClockIndexes.RT_CLOCK_SIMULATE_TOTAL);
   args_1 := FlagsUtil.new(args);
-  // OpenBLAS sizes its thread pool from the environment when it loads, and
-  // which of the two variables it reads depends on how it was built. The MSYS2
-  // package used on Windows is built with USE_OPENMP, and such a build ignores
-  // OPENBLAS_NUM_THREADS entirely and honours only OMP_NUM_THREADS, so both
-  // have to be set to keep the pool down to a single thread.
-  if Flags.getConfigInt(Flags.NUM_PROC) == 1 then
-    System.setEnv("OPENBLAS_NUM_THREADS", "1", false);
-    System.setEnv("OMP_NUM_THREADS", "1", false);
-  end if;
+  FlagsUtil.applyNumProcEnvironment();
   setDefaultCC();
   SymbolTable.reset();
   BackendInterfaceImplementation.initializeBackendInterface();
@@ -744,7 +739,7 @@ algorithm
       print(GCExt.profStatsStr(GCExt.getProfStats(), head="GC stats at end of program:") + "\n");
     end if;
   else
-    print("Stack overflow detected and was not caught.\n" +
+    print(StackOverflow.errorPrefix() + " detected and was not caught.\n" +
           "Send us a bug report at https://trac.openmodelica.org/OpenModelica/newticket\n" +
           "    Include the following trace:\n");
     for s in StackOverflow.readableStacktraceMessages() loop

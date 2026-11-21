@@ -27,8 +27,6 @@
 
 #include "simulation_result_rust.h"
 
-#ifdef OM_RUST_RESULT_WRITERS
-
 #include "omc_result.h"
 #include "util/omc_error.h"
 #include "util/rtclock.h"
@@ -86,7 +84,7 @@ static const char *mmcString(const modelica_string *s)
   if (s == NULL || *s == NULL) {
     return "";
   }
-  const char *str = MMC_STRINGDATA(*s);
+  const char *str = omc_string_data(*s);
   return str ? str : "";
 }
 
@@ -481,5 +479,3 @@ void rust_result_free(simulation_result *self, DATA *data, threadData_t *threadD
 }
 
 } /* extern "C" */
-
-#endif /* OM_RUST_RESULT_WRITERS */

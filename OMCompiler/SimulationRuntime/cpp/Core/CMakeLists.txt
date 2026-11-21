@@ -12,19 +12,6 @@
 # compilation code. It needs to be set to a valid directory resembling path.
 set(SCOREP_INCLUDE_ ".")
 
-# The boost libraries and headers are expected to be in the system directories.
-# For MSVC this needs to be adjusted. However, it is not clear which approach we are
-# taking for MSVC yet. So leave it like this until we decide.
-set(Boost_INCLUDE_ ".")
-# This is supposwed to signify the directory where the boost libraries can be found (for -L ...)
-set(Boost_LIBS_ ".")
-# The actual boost libraries needed to be linked.
-# DEFINED, not truthiness: Boost_LIBRARIES holds CMake target names, which mean
-# nothing in a makefile.
-if (NOT DEFINED Boost_LIBRARIES_)
-set(Boost_LIBRARIES_ ${Boost_LIBRARIES})
-endif()
-
 # Lapack libs are also expected to be in the system directories.
 set(LAPACK_LIBS_ ".")
 if(UNIX)
@@ -47,7 +34,7 @@ set(CPPTHREADS_LIBRARY_FLAG ${CMAKE_THREAD_LIBS_INIT})
 
 # Some common flags for the generated simulation code. It is not clear why OMC_BUILD is defined
 # by the old system. It is always defined for some reason. USE_THREAD means use the C++ standard
-# library's thread library (instead of something like boost threads).
+# library's thread library.
 # The generated model is built with the same optimization as the runtime; the
 # autotools build forwarded CMAKE_CXX_FLAGS here and this replaces that.
 if(MSVC)
@@ -57,13 +44,9 @@ else()
 endif()
 
 # Compile the generated model code with -DUSE_LOGGER, like the runtime libraries
-# themselves (see cmake_3.14.cmake). The generated makefile turns this into that
+# themselves (see ../CMakeLists.txt). The generated makefile turns this into that
 # flag itself, so it must not also be listed in SYSTEM_CFLAGS above.
 set(USE_LOGGER_ "ON")
-
-message(STATUS "configuring ModelicaConfig_gcc.inc in OMCompiler/SimulationRuntime/cpp with:")
-message(STATUS "boost include: ${Boost_INCLUDE_DIR}")
-message(STATUS "boost libraries implict / explicit: ${Boost_LIBRARIES} / ${Boost_LIBRARIES_}")
 
 # A coverage build instruments the runtime libraries, so generated code that
 # statically links them (the FMUs, which pull in the OMCpp*_static variants)
@@ -106,6 +89,7 @@ target_sources(OMCppDataExchange PRIVATE ${OMC_SIMRT_CPP_CORE_DATAEXCHANGE_SOURC
 
 target_link_libraries(OMCppDataExchange PUBLIC omc::simrt::cpp::config)
 target_link_libraries(OMCppDataExchange PUBLIC omc::simrt::cpp::core::utils::extension)
+target_link_libraries(OMCppDataExchange PRIVATE omc::3rd::FMIL::expat)
 
 install(TARGETS OMCppDataExchange)
 
@@ -303,7 +287,6 @@ target_sources(OMCppSimController PRIVATE ${OMC_SIMRT_CPP_CORE_SIMCONTROLLER_SOU
 target_link_libraries(OMCppSimController PUBLIC omc::simrt::cpp::config)
 target_link_libraries(OMCppSimController PUBLIC omc::simrt::cpp::simcorefactory::omcfactory)
 target_link_libraries(OMCppSimController PUBLIC omc::simrt::cpp::core::utils::modelica)
-target_link_libraries(OMCppSimController PUBLIC Boost::filesystem)
 
 install(TARGETS OMCppSimController)
 
@@ -327,7 +310,6 @@ target_sources(OMCppSimulationSettings PRIVATE ${OMC_SIMRT_CPP_CORE_SIM_SETTINGS
 
 target_link_libraries(OMCppSimulationSettings PUBLIC omc::simrt::cpp::config)
 target_link_libraries(OMCppSimulationSettings PUBLIC omc::simrt::cpp::simcorefactory::omcfactory)
-target_link_libraries(OMCppSimulationSettings PUBLIC Boost::filesystem)
 
 install(TARGETS OMCppSimulationSettings)
 
@@ -358,7 +340,6 @@ target_sources(OMCppSystem PRIVATE ${OMC_SIMRT_CPP_CORE_SYSTEM_SOURCES})
 
 target_link_libraries(OMCppSystem PUBLIC omc::simrt::cpp::config)
 target_link_libraries(OMCppSystem PUBLIC omc::simrt::cpp::simcorefactory::omcfactory)
-target_link_libraries(OMCppSystem PUBLIC Boost::filesystem)
 
 install(TARGETS OMCppSystem)
 

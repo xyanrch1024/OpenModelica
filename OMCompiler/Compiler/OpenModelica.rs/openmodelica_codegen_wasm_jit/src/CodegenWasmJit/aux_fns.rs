@@ -5,7 +5,7 @@ use super::*;
 
 /// The initial equations the backend removed as redundant, kept as `0 = <exp>`
 /// checks. A `SCONST` residual is C's `res = 0`, never inconsistent.
-pub(super) fn removed_init_residuals(sim_code: &SimCode::SimCode) -> Vec<&Arc<DAE::Exp>> {
+pub(super) fn removed_init_residuals(sim_code: &SimCode::SimCode) -> Vec<&metamodelica::Ref<DAE::Exp>> {
     lst(&sim_code.removedInitialEquations)
         .filter_map(|eq| match &**eq {
             SimCode::SimEqSystem::SES_RESIDUAL { exp, .. } => Some(exp),
@@ -21,7 +21,7 @@ pub(super) fn build_removed_init_eqs_fn(
     sim_code: &SimCode::SimCode,
     layout: &SimLayout,
     var_map: &SimVarMap,
-    eq_index: &HashMap<i32, Arc<SimCode::SimEqSystem>>,
+    eq_index: &HashMap<i32, metamodelica::Ref<SimCode::SimEqSystem>>,
     by_name: &HashMap<String, FnInfo>,
     literals: &mut Literals,
 ) -> Result<we::Function> {
@@ -126,7 +126,7 @@ pub(super) fn build_equations_synchronous_fn(
     clocks: &[ClockInfo],
     layout: &SimLayout,
     var_map: &SimVarMap,
-    eq_index: &HashMap<i32, Arc<SimCode::SimEqSystem>>,
+    eq_index: &HashMap<i32, metamodelica::Ref<SimCode::SimEqSystem>>,
     by_name: &HashMap<String, FnInfo>,
     literals: &mut Literals,
 ) -> Result<we::Function> {
@@ -159,7 +159,8 @@ pub(super) fn build_equations_synchronous_fn(
 /// would put it on the wrong side of the `pre`-value snapshot.
 pub(super) fn build_init_start_values_fn(
     reals: &[&SimCodeVar::SimVar],
-    layout: &SimLayout,
+    pos: &RealPositions,
+    lz: &openmodelica_sim_meta::Layout<Sz>,
     var_map: &SimVarMap,
     by_name: &HashMap<String, FnInfo>,
     literals: &mut Literals,
@@ -168,9 +169,14 @@ pub(super) fn build_init_start_values_fn(
     let starts: Vec<(f64, u32)> = reals
         .iter()
         .enumerate()
-        .map(|(i, sv)| (literal_value(&sv.initialValue).unwrap_or(0.0), layout.real_start_off(i as u32)))
-        .collect();
-    ctx.emit_init_start_values(&starts)?;
+        .map(|(i, sv)| Ok((literal_value(&sv.initialValue).unwrap_or(0.0), at_real(&lz.start_off, &pos.fixed(i))?)))
+        .collect::<Result<_>>()?;
+    let fills: Vec<(u32, Sz, f64)> = pos
+        .dyn_reals
+        .iter()
+        .map(|(dv, idx)| Ok((at_real(&lz.start_off, idx)?, dv.len(), literal_value(&dv.sv.initialValue).unwrap_or(0.0))))
+        .collect::<Result<_>>()?;
+    ctx.emit_init_start_values(&starts, &fills)?;
     let (locals, instrs) = ctx.finish_sim();
     let mut func = we::Function::new(locals.into_iter().map(|t| (1u32, t)));
     for i in &instrs {
@@ -183,7 +189,7 @@ pub(super) fn build_init_start_values_fn(
 /// A start equation assigns `$START.<var>`, i.e. that variable's `start` attribute.
 pub(super) fn bound_attr_equations(
     sim_code: &SimCode::SimCode,
-) -> Vec<(Attr, &Arc<DAE::ComponentRef>, &Arc<DAE::Exp>)> {
+) -> Vec<(Attr, &metamodelica::Ref<DAE::ComponentRef>, &metamodelica::Ref<DAE::Exp>)> {
     let mut out = Vec::new();
     for (attr, eqs) in [
         (Attr::Min, &sim_code.minValueEquations),
@@ -202,7 +208,7 @@ pub(super) fn bound_attr_equations(
 
 /// What C's `_init.xml` records for an attribute, i.e. what
 /// `SerializeInitXML.expString` serializes: a literal, and nothing else.
-pub(super) fn literal_value(exp: &Option<Arc<DAE::Exp>>) -> Option<f64> {
+pub(super) fn literal_value(exp: &Option<metamodelica::Ref<DAE::Exp>>) -> Option<f64> {
     fn eval(e: &DAE::Exp) -> Option<f64> {
         use DAE::Exp as E;
         match e {
@@ -224,26 +230,26 @@ pub(super) fn literal_value(exp: &Option<Arc<DAE::Exp>>) -> Option<f64> {
 pub(super) fn build_update_bound_attrs_fn(
     sim_code: &SimCode::SimCode,
     layout: &SimLayout,
-    defaults: &[(u32, f64)],
-    int_defaults: &[(u32, i32)],
-    attr_targets: &HashMap<String, AttrTargets>,
+    defaults: &[(u32, ConstSlot)],
+    dyn_defaults: &[(u32, Sz, ConstSlot, u32)],
+    attr_targets: &AttrTargetMap,
     var_map: &SimVarMap,
     by_name: &HashMap<String, FnInfo>,
     literals: &mut Literals,
 ) -> Result<we::Function> {
-    let mut attrs: Vec<(Attr, Arc<DAE::Exp>, AttrTargets, u32, Option<SimSlot>)> = Vec::new();
+    let mut attrs: Vec<(Attr, metamodelica::Ref<DAE::Exp>, AttrTargets, u32, Option<SimSlot>)> = Vec::new();
     for (i, (attr, cref, exp)) in bound_attr_equations(sim_code).into_iter().enumerate() {
         let key = sim_cref_key(cref).ok().map(|k| k.strip_prefix("$START.").unwrap_or(&k).to_string());
         let targets = key.as_deref().and_then(|k| attr_targets.get(k)).cloned().unwrap_or_default();
         let var = match attr {
-            Attr::Start => key.as_deref().and_then(|k| var_map.vars.get(k)).copied(),
+            Attr::Start => key.as_deref().and_then(|k| var_map.vars.get(k)),
             _ => None,
         };
         attrs.push((attr, exp.clone(), targets, layout.attr_log_off + i as u32 * 8, var));
     }
     let sim = sim_ctx(var_map);
     let mut ctx = FnCtx::new_sim(sim, by_name, literals);
-    ctx.emit_update_bound_attrs(defaults, int_defaults, &attrs)?;
+    ctx.emit_update_bound_attrs(defaults, dyn_defaults, &attrs)?;
     let (locals, instrs) = ctx.finish_sim();
     let mut func = we::Function::new(locals.into_iter().map(|t| (1u32, t)));
     for i in &instrs {
@@ -255,13 +261,14 @@ pub(super) fn build_update_bound_attrs_fn(
 /// Build `functionAttrDefaults(SimData*)`: the constant attribute defaults only, for
 /// a solver built before initialization.
 pub(super) fn build_attr_defaults_fn(
-    defaults: &[(u32, f64)],
+    defaults: &[(u32, ConstSlot)],
+    dyn_defaults: &[(u32, Sz, ConstSlot, u32)],
     var_map: &SimVarMap,
     by_name: &HashMap<String, FnInfo>,
     literals: &mut Literals,
 ) -> Result<we::Function> {
     let mut ctx = FnCtx::new_sim(sim_ctx(var_map), by_name, literals);
-    ctx.emit_update_bound_attrs(defaults, &[], &[])?;
+    ctx.emit_update_bound_attrs(defaults, dyn_defaults, &[])?;
     let (locals, instrs) = ctx.finish_sim();
     let mut func = we::Function::new(locals.into_iter().map(|t| (1u32, t)));
     for i in &instrs {
@@ -292,7 +299,7 @@ pub(super) fn build_zero_crossings_fn(
 /// Build `functionUpdateRelations(SimData*)`: C's `function_updateRelations(data,
 /// 0)`, the exact recomputation of every `relations[]` entry.
 pub(super) fn build_update_relations_fn(
-    relations: &[Option<Arc<DAE::Exp>>],
+    relations: &[Option<metamodelica::Ref<DAE::Exp>>],
     var_map: &SimVarMap,
     by_name: &HashMap<String, FnInfo>,
     literals: &mut Literals,
@@ -300,6 +307,23 @@ pub(super) fn build_update_relations_fn(
     let sim = SimCtx { zc_context: true, ..sim_ctx(var_map) };
     let mut ctx = FnCtx::new_sim(sim, by_name, literals);
     ctx.emit_update_relations(relations, var_map.relations_off)?;
+    let (locals, instrs) = ctx.finish_sim();
+    let mut func = we::Function::new(locals.into_iter().map(|t| (1u32, t)));
+    for i in &instrs {
+        func.instruction(i);
+    }
+    Ok(func)
+}
+
+/// Build `functionNextTimeEvent(SimData*)` (C's `function_nextTimeEvent`).
+pub(super) fn build_next_time_event_fn(
+    triggers: &[metamodelica::Ref<DAE::Exp>],
+    var_map: &SimVarMap,
+    by_name: &HashMap<String, FnInfo>,
+    literals: &mut Literals,
+) -> Result<we::Function> {
+    let mut ctx = FnCtx::new_sim(sim_ctx(var_map), by_name, literals);
+    ctx.emit_next_time_event(triggers)?;
     let (locals, instrs) = ctx.finish_sim();
     let mut func = we::Function::new(locals.into_iter().map(|t| (1u32, t)));
     for i in &instrs {
@@ -316,7 +340,7 @@ pub(super) fn build_store_delayed_fn(
     by_name: &HashMap<String, FnInfo>,
     literals: &mut Literals,
 ) -> Result<we::Function> {
-    let delayed: Vec<(i32, Arc<DAE::Exp>, Arc<DAE::Exp>, Arc<DAE::Exp>)> =
+    let delayed: Vec<(i32, metamodelica::Ref<DAE::Exp>, metamodelica::Ref<DAE::Exp>, metamodelica::Ref<DAE::Exp>)> =
         lst(&sim_code.delayedExps.delayedExps)
             .map(|(i, (e, d, dmax))| (*i, e.clone(), d.clone(), dmax.clone()))
             .collect();
@@ -393,7 +417,7 @@ pub(super) fn build_init_spatial_fn(
 pub(crate) fn lower_equation(
     ctx: &mut FnCtx,
     eq: &SimCode::SimEqSystem,
-    eq_index: &HashMap<i32, Arc<SimCode::SimEqSystem>>,
+    eq_index: &HashMap<i32, metamodelica::Ref<SimCode::SimEqSystem>>,
 ) -> Result<()> {
     // C's `SIM_PROF_TICK_EQ` / `SIM_PROF_ACC_EQ` around a profiled block: every
     // equation under `all`, the linear and nonlinear systems under `blocks` — where

@@ -61,6 +61,7 @@
 #include "Debugger/StackFrames/StackFramesWidget.h"
 #include "Debugger/Locals/LocalsWidget.h"
 #include "Modeling/DocumentationWidget.h"
+#include "Modeling/ClassDiagramWidget.h"
 #include "Plotting/VariablesWidget.h"
 #include "Search/SearchWidget.h"
 #include "Util/Helper.h"
@@ -176,15 +177,9 @@ MainWindow::MainWindow(QWidget *parent)
    * Because RecentFile, FindTextOM and DebuggerConfiguration structs should be registered before reading the recentFilesList, FindTextOM and
    * DebuggerConfiguration section respectively from the settings file.
    */
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
   qRegisterMetaType<RecentFile>("RecentFile");
   qRegisterMetaType<FindTextOM>("FindTextOM");
   qRegisterMetaType<DebuggerConfiguration>("DebuggerConfiguration");
-#else // #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-  qRegisterMetaTypeStreamOperators<RecentFile>("RecentFile");
-  qRegisterMetaTypeStreamOperators<FindTextOM>("FindTextOM");
-  qRegisterMetaTypeStreamOperators<DebuggerConfiguration>("DebuggerConfiguration");
-#endif // #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
   /*! @note The above three lines registers the structs as QMetaObjects. Do not remove/move them. */
 #if QT_CONFIG(process)
   qRegisterMetaType<QProcess::ProcessError>("QProcess::ProcessError");
@@ -374,7 +369,7 @@ void MainWindow::setUpMainWindow(threadData_t *threadData)
 #ifdef Q_OS_WIN
     _wfreopen((wchar_t*)errorFileName.utf16(), L"w", stderr);
 #else
-    freopen(outputFileName.toUtf8().constData(), "w", stderr);
+    freopen(errorFileName.toUtf8().constData(), "w", stderr);
 #endif
     setbuf(stderr, NULL); // used non-buffered stderr
   }
@@ -1144,7 +1139,6 @@ void MainWindow::beforeClosingMainWindow()
   }
 
   QSettings *pSettings = Utilities::getApplicationSettings();
-#if !defined(__EMSCRIPTEN__)
   /* delete the TransformationsWidgets */
   const int size = mTransformationsWidgetHash.size();
   int index = 0;
@@ -1172,6 +1166,10 @@ void MainWindow::beforeClosingMainWindow()
     }
   }
   mTransformationsWidgetHash.clear();
+  /* delete the ClassDiagramWindow, its web pages must go before the web engine profile does, at exit. */
+  delete mpClassDiagramWindow;
+  mpClassDiagramWindow = nullptr;
+#if !defined(__EMSCRIPTEN__)
   /* save stackframes list and locals columns width */
   pSettings->beginGroup("algorithmicDebugger");
   pSettings->setValue("stackFramesTreeState", mpStackFramesWidget->getStackFramesTreeWidget()->header()->saveState());
@@ -1728,14 +1726,16 @@ void MainWindow::exportModelFMU(LibraryTreeItem *pLibraryTreeItem)
   }
 #if defined(__EMSCRIPTEN__)
   // A browser omc has no C code generator, so the model always goes into a wasm
-  // FMU. "static"/"dynamic" name the C link modes and mean nothing here; every
-  // other entry is a native platform the FMU should also serve, which is what an
-  // FMI 2.0 FMU needs to be loadable at all.
-  platforms.removeAll("static");
-  platforms.removeAll("dynamic");
-  if (!platforms.contains("wasm")) {
-    platforms.append("wasm");
+  // FMU, and it can add only the native platforms it has a precompiled driver for.
+  const QStringList fmuPlatforms = omcWorkerFmuPlatforms();
+  QList<QString> nativePlatforms;
+  foreach (QString platform, platforms) {
+    if (fmuPlatforms.contains(platform)) {
+      nativePlatforms.append(platform);
+    }
   }
+  platforms = nativePlatforms;
+  platforms.append("wasm");
 #endif
   if (platforms.empty()) {
     MessagesWidget::instance()->addGUIMessage(MessageItem(MessageItem::Modelica, GUIMessages::getMessage(GUIMessages::FMU_EMPTY_PLATFORMS).arg(Helper::toolsOptionsPath),
@@ -2019,11 +2019,7 @@ void MainWindow::exportModelToOMNotebook(LibraryTreeItem *pLibraryTreeItem)
   QFile omnotebookFile(omnotebookFileName);
   if (omnotebookFile.open(QIODevice::WriteOnly)) {
     QTextStream textStream(&omnotebookFile);
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     textStream.setEncoding(QStringConverter::Utf8);
-#else
-    textStream.setCodec(Helper::utf8.toUtf8().constData());
-#endif
     textStream.setGenerateByteOrderMark(false);
     textStream << xmlDocument.toString();
     omnotebookFile.close();
@@ -2113,12 +2109,6 @@ void MainWindow::createOMNotebookCodeCell(LibraryTreeItem *pLibraryTreeItem, QDo
  */
 TransformationsWidget *MainWindow::showTransformationsWidget(QString fileName, bool profiling, bool checkProfilingExists)
 {
-#if defined(__EMSCRIPTEN__)
-  Q_UNUSED(fileName);
-  Q_UNUSED(profiling);
-  Q_UNUSED(checkProfilingExists);
-  return nullptr;
-#else
   TransformationsWidget *pTransformationsWidget = mTransformationsWidgetHash.value(fileName, 0);
   if (!pTransformationsWidget) {
     pTransformationsWidget = new TransformationsWidget(fileName, profiling, checkProfilingExists);
@@ -2126,12 +2116,31 @@ TransformationsWidget *MainWindow::showTransformationsWidget(QString fileName, b
   } else {
     pTransformationsWidget->loadTransformations(profiling, checkProfilingExists);
   }
+#if defined(__EMSCRIPTEN__)
+  // The browser is the screen: a window sized for a desktop runs past its right
+  // edge and takes the title bar's close button with it.
+  pTransformationsWidget->showMaximized();
+#else
   pTransformationsWidget->show();
+#endif
   pTransformationsWidget->raise();
   pTransformationsWidget->activateWindow();
   pTransformationsWidget->setWindowState(pTransformationsWidget->windowState() & (~Qt::WindowMinimized | Qt::WindowActive));
   return pTransformationsWidget;
-#endif
+}
+
+/*!
+ * \brief MainWindow::showClassDiagramWidget
+ * Shows the class diagram of a class in a tab of the Class Diagram window.
+ * \param className
+ * \return
+ */
+ClassDiagramWidget *MainWindow::showClassDiagramWidget(const QString &className)
+{
+  if (!mpClassDiagramWindow) {
+    mpClassDiagramWindow = new ClassDiagramWindow;
+  }
+  return mpClassDiagramWindow->showClassDiagram(className);
 }
 
 /*!
@@ -2271,11 +2280,7 @@ void MainWindow::PlotCallbackFunction(void *p, int externalWindow, const char* f
       throw OMPlot::InvalidInputException(pPlotWindow->windowTitle(), QString(autoScale));
     }
     // plot variables
-#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
     QStringList variablesList = QString(variables).split(" ", Qt::SkipEmptyParts);
-#else // QT_VERSION_CHECK
-    QStringList variablesList = QString(variables).split(" ", QString::SkipEmptyParts);
-#endif // QT_VERSION_CHECK
     VariablesTreeItem *pVariableTreeItem;
     VariablesTreeModel *pVariablesTreeModel = pMainWindow->getVariablesWidget()->getVariablesTreeModel();
     bool state = pVariablesTreeModel->blockSignals(true);
@@ -2591,6 +2596,29 @@ void MainWindow::openModelicaFile()
   if (fileNames.isEmpty()) {
     return;
   }
+#if defined(__EMSCRIPTEN__)
+  // A file picker cannot hand over a directory, so a zipped library is unpacked
+  // and what it holds is loaded instead of the archive.
+  QStringList pickedFiles;
+  foreach (const QString &file, fileNames) {
+    if (QFileInfo(file).suffix().compare("zip", Qt::CaseInsensitive) == 0) {
+      const QString dir = WasmLocalFiles::expandArchive(file);
+      const QStringList files = dir.isEmpty() ? QStringList() : WasmLocalFiles::libraryFiles(dir);
+      if (files.isEmpty()) {
+        MessagesWidget::instance()->addGUIMessage(MessageItem(MessageItem::Modelica,
+                                                              GUIMessages::getMessage(GUIMessages::UNABLE_TO_LOAD_FILE).arg(file),
+                                                              Helper::scriptingKind, Helper::errorLevel));
+      }
+      pickedFiles << files;
+    } else {
+      pickedFiles << file;
+    }
+  }
+  fileNames = pickedFiles;
+  if (fileNames.isEmpty()) {
+    return;
+  }
+#endif
   int progressValue = 0;
   mpProgressBar->setRange(0, fileNames.size());
   showProgressBar();
@@ -2767,11 +2795,32 @@ void MainWindow::unloadAll(bool onlyModelicaClasses)
  */
 void MainWindow::openDirectory()
 {
+#if defined(__EMSCRIPTEN__)
+  // The browser uploads the picked folder, structure and all, and the library in it
+  // is loaded. The directory is deliberately not added to the Library Browser: QDir
+  // enumerates nothing through the worker-VFS engine, so that node comes up childless,
+  // and painting it traps in Qt's raster engine.
+  const QString dir = WasmLocalFiles::openFolder();
+  if (dir.isEmpty()) {
+    return;
+  }
+  const QStringList files = WasmLocalFiles::libraryFiles(dir);
+  if (files.isEmpty()) {
+    MessagesWidget::instance()->addGUIMessage(MessageItem(MessageItem::Modelica,
+                                                          GUIMessages::getMessage(GUIMessages::UNABLE_TO_LOAD_FILE).arg(dir),
+                                                          Helper::scriptingKind, Helper::errorLevel));
+    return;
+  }
+  foreach (const QString &file, files) {
+    mpLibraryWidget->openFile(file, Helper::utf8, false);
+  }
+#else
   QString dir = StringHandler::getExistingDirectory(this, QString("%1 - %2").arg(Helper::applicationName).arg(Helper::chooseDirectory), NULL);
   if (dir.isEmpty()) {
     return;
   }
   mpLibraryWidget->openFile(dir, Helper::utf8, true);
+#endif
 }
 
 /*!
@@ -3769,12 +3818,8 @@ void MainWindow::openTerminal()
 #if QT_CONFIG(process)
   QDetachableProcess process;
   process.setWorkingDirectory(OptionsDialog::instance()->getGeneralSettingsPage()->getWorkingDirectory());
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
   const QStringList args(QProcess::splitCommand(arguments));
   process.start(terminalCommand, args);
-#else
-  process.start(terminalCommand + " " + arguments);
-#endif
   if (process.error() == QProcess::FailedToStart || process.hasStartupError()) {
     const QString processError = process.startupErrorString().isEmpty() ? process.errorString() : process.startupErrorString();
     QString errorString = tr("Unable to run terminal command <b>%1</b> with arguments <b>%2</b>. Process failed with error <b>%3</b>")
@@ -5091,6 +5136,10 @@ void MainWindow::createActions()
   mpExportVariablesAction = new QAction(QIcon(":/Resources/icons/export-variables.svg"), Helper::exportVariables, this);
   mpExportVariablesAction->setStatusTip(tr("Exports the plotted variables to a CSV file"));
   connect(mpExportVariablesAction, SIGNAL(triggered()), mpPlotWindowContainer, SLOT(exportVariables()));
+  // save plot figures in their respective model annotations
+  mpSaveFigureInModelAction = new QAction(QIcon(":/Resources/icons/save-figure-in-model.svg"), tr("Save Figure in Model"), this);
+  mpSaveFigureInModelAction->setStatusTip(tr("Saves the current plot as a figure in the model annotation"));
+  connect(mpSaveFigureInModelAction, SIGNAL(triggered()), mpPlotWindowContainer, SLOT(saveFigureInModel()));
   // clear plot window action
   mpClearPlotWindowAction = new QAction(QIcon(":/Resources/icons/clear.svg"), tr("Clear Plot Window"), this);
   mpClearPlotWindowAction->setStatusTip(tr("Clears all the curves from the plot window"));
@@ -5773,6 +5822,8 @@ void MainWindow::createToolbars()
   mpPlotToolBar->addAction(mpExportVariablesAction);
   mpPlotToolBar->addSeparator();
   mpPlotToolBar->addAction(mpClearPlotWindowAction);
+  mpPlotToolBar->addSeparator();
+  mpPlotToolBar->addAction(mpSaveFigureInModelAction);
   connect(mpPlotToolBar, SIGNAL(visibilityChanged(bool)), SLOT(plotToolBarVisibilityChanged(bool)));
   // Debugger Toolbar
   mpDebuggerToolBar = addToolBar(tr("Debugger Toolbar"));

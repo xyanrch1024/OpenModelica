@@ -43,16 +43,11 @@
 #include "Simulation/SimulationOptions.h"
 #include "PlotWindow.h"
 #include "Animation/TimeManager.h"
-#ifdef OM_LEGACY_RESULT_READERS
-#include "util/read_matlab4.h"
-#include "util/read_csv.h"
-typedef ModelicaMatReader ResultFileReader;
-#else
 #include "omc_result.h"
 typedef omc::ResultFile ResultFileReader;
-#endif
 
 #include <QDomDocument>
+#include <QSet>
 #include <QTreeView>
 
 class OMCProxy;
@@ -202,9 +197,12 @@ private:
   VariablesTreeItem *mpRootVariablesTreeItem;
   VariablesTreeItem *mpActiveVariablesTreeItem;
   QHash<QString, ScalarVariable> mScalarVariablesHash;
+  // ArrayVariable elements of model_init.xml, keyed by name without subscripts
+  QHash<QString, ScalarVariable> mArrayVariablesHash;
   void filterVariableTreeItem(VariableNode *pParentVariableNode, VariablesTreeItem *pParentVariablesTreeItem);
   void insertVariablesItems(VariableNode *pParentVariableNode, VariablesTreeItem *pParentVariablesTreeItem);
   static ScalarVariable parseScalarVariable(QXmlStreamReader &xmlReader);
+  static QString removeSubscripts(const QString &name);
   void getVariableInformation(ResultFileReader *pMatReader, QString variableToFind, QString *type, QString *value, bool *changeAble, QString *variability,
                               QString *unit, QString *displayUnit, QString *description);
 signals:
@@ -271,6 +269,7 @@ public:
   void updatePlotWindows();
   void updateBrowserTime(double time);
   QPair<double, bool> readVariableValue(QString variable, double time, bool reportError = true);
+  void warnProtectedVariableNotFound(const QString &modelName, const QString &variable);
   void closeResultFile();
 private:
   TreeSearchFilters *mpTreeSearchFilters;
@@ -293,14 +292,9 @@ private:
   VariablesTreeView *mpVariablesTreeView;
   QVector<PlotParametricCurve> mPlotParametricCurves;
   QMdiSubWindow *mpLastActiveSubWindow;
-#ifdef OM_LEGACY_RESULT_READERS
-  ModelicaMatReader mModelicaMatReader;
-  csv_data *mpCSVData;
-  QFile mPlotFileReader;
-#else
   omc::ResultFile mResultFile;
-#endif
   QString mOpenedResultFileName;
+  QHash<QString, QSet<QString>> mWarnedProtectedVariables;
   void selectInteractivePlotWindow(VariablesTreeItem *pVariablesTreeItem);
   void openResultFile(VariablesTreeItem *pVariablesTreeItem, double &startTime, double &stopTime);
   void checkVariable(const QModelIndex &index, bool checkState);

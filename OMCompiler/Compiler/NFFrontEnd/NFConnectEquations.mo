@@ -62,6 +62,7 @@ import Type = NFType;
 import Call = NFCall;
 import NFBuiltinFuncs;
 import NFInstNode.InstNode;
+import NFInstNode;
 import Class = NFClass;
 import Binding = NFBinding;
 import NFFunction.Function;
@@ -213,6 +214,23 @@ algorithm
                            exp2 = Expression.CREF())
       guard AbsynUtil.isNamedPathIdent(Function.name(call.fn), "actualStream")
       then evaluateActualStreamMul(exp.exp2, listHead(call.arguments), exp.operator, sets, setsArray, variables, ctable, replacements);
+
+    // Only evaluate the branch that is taken if the condition is known, e.g. in an
+    // expanded array constructor {if i <= n then inStream(c[i].h) else ... for i in 1:n+1}
+    // the other branch may refer to connectors that don't exist.
+    case Expression.IF()
+      guard Expression.variability(exp.condition) <= Variability.STRUCTURAL_PARAMETER
+      algorithm
+        // The condition might still contain iterators, e.g. in a for-equation
+        // that hasn't been unrolled yet. Keep both branches then.
+        evalExp := Ceval.tryEvalExp(exp.condition);
+      then
+        if Expression.isTrue(evalExp) then
+          evaluateOperators(exp.trueBranch, sets, setsArray, variables, ctable, replacements)
+        elseif Expression.isFalse(evalExp) then
+          evaluateOperators(exp.falseBranch, sets, setsArray, variables, ctable, replacements)
+        else
+          evaluateOperatorsShallow(exp, sets, setsArray, variables, ctable, replacements);
 
     else evaluateOperatorsShallow(exp, sets, setsArray, variables, ctable, replacements);
   end match;
@@ -372,11 +390,11 @@ algorithm
     exp := Expression.RELATION(lhs_exp, Operator.makeEqual(elem_ty), rhs_exp, -1);
   end if;
 
-  equalityAssert := Equation.ASSERT(exp, EQ_ASSERT_STR, NFBuiltin.ASSERTIONLEVEL_ERROR, InstNode.EMPTY_NODE(), source);
+  equalityAssert := Equation.ASSERT(exp, EQ_ASSERT_STR, NFBuiltin.ASSERTIONLEVEL_ERROR, NFInstNode.NO_SCOPE, source);
 
   // wrap the equation in for loop if necessary
   while not listEmpty(iterators) loop
-    equalityAssert := Equation.FOR(listHead(iterators), SOME(listHead(ranges)), {equalityAssert}, InstNode.EMPTY_NODE(), source);
+    equalityAssert := Equation.FOR(listHead(iterators), SOME(listHead(ranges)), {equalityAssert}, NFInstNode.NO_SCOPE, source);
     iterators := listRest(iterators);
     ranges := listRest(ranges);
   end while;
@@ -441,7 +459,7 @@ algorithm
   equations := {Equation.makeEquality(sum, Expression.REAL(0.0), Type.arrayElementType(c.ty), src)};
 
   while not listEmpty(iterators) loop
-    equations := {Equation.FOR(listHead(iterators), SOME(listHead(ranges)), equations, InstNode.EMPTY_NODE(), src)};
+    equations := {Equation.FOR(listHead(iterators), SOME(listHead(ranges)), equations, NFInstNode.NO_SCOPE, src)};
     iterators := listRest(iterators);
     ranges := listRest(ranges);
   end while;
@@ -1314,14 +1332,15 @@ function associatedFlowCref
 protected
   Type ty;
   ComponentRef rest_cr;
-  InstNode flow_node;
+  NFInstNode.ScopeRef flow_node;
 algorithm
   ComponentRef.CREF(ty = ty, restCref = rest_cr) := streamCref;
 
   flowCref := match Type.arrayElementType(ty)
     // A connector with a single flow, append the flow node to the cref and return it.
     case Type.COMPLEX(complexTy = ComplexType.CONNECTOR(flows = {flow_node}))
-      then ComponentRef.prefixCref(flow_node, InstNode.getType(flow_node), {}, streamCref);
+      then ComponentRef.prefixCref(InstNode.borrow(flow_node),
+        InstNode.getType(InstNode.borrow(flow_node)), {}, streamCref);
 
     // Otherwise, remove the first part of the cref and try again.
     else associatedFlowCref(rest_cr);

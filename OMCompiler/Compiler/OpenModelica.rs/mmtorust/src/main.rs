@@ -1,24 +1,27 @@
 use openmodelica_ast::parser::parse;
-use openmodelica_ast::parser::Grammar;
-use openmodelica_ast::Absyn;
+mod mutfix;
+mod overrides;
 use metamodelica::nil;
+use openmodelica_ast::Absyn;
+use openmodelica_ast::parser::Grammar;
 
 mod MM;
-mod hierarchy;
-mod typedexp;
+mod borrow_params;
 mod codegen;
+mod const_patterns;
+mod dep_analysis;
 mod external_c_calls;
 mod fallibility;
 mod fix;
-mod visibility;
-mod validate;
-mod dep_analysis;
-mod unused_functions;
-mod const_patterns;
+mod hierarchy;
 mod mc_disjoint;
-mod cyclic_fix;
 mod mutable_cycles;
+mod rustfmt;
 mod scripting_api_qt;
+mod typedexp;
+mod unused_functions;
+mod validate;
+mod visibility;
 use rayon::prelude::*;
 
 fn start_compilation(results: Vec<Absyn::Program>, fix: bool, mc_report_path: Option<String>) {
@@ -36,7 +39,12 @@ fn start_compilation(results: Vec<Absyn::Program>, fix: bool, mc_report_path: Op
             }
         }
     }
-    println!("MM conversion: {} files, {} failures {:.2}s", results.len(), failures, t0.elapsed().as_secs_f64());
+    println!(
+        "MM conversion: {} files, {} failures {:.2}s",
+        results.len(),
+        failures,
+        t0.elapsed().as_secs_f64()
+    );
     let t0 = std::time::Instant::now();
     let retired = MM::strip_retired(&mut all_classes);
     MM::set_retired(retired.clone());
@@ -70,8 +78,10 @@ fn start_compilation(results: Vec<Absyn::Program>, fix: bool, mc_report_path: Op
     hierarchy::detect_types_containing_mutable(&mut hier);
     hierarchy::detect_types_containing_array(&mut hier);
     hierarchy::detect_types_containing_dyn_fn(&mut hier);
-    mutable_cycles::detect_traced_types(&mut hier);
-    println!("Hierarchy recursive+mutable detection: {:.2}s", t0.elapsed().as_secs_f64());
+    println!(
+        "Hierarchy recursive+mutable detection: {:.2}s",
+        t0.elapsed().as_secs_f64()
+    );
     // println!("{hier}");
 
     // Fallibility analysis: classify every user-defined function as fallible
@@ -81,6 +91,17 @@ fn start_compilation(results: Vec<Absyn::Program>, fix: bool, mc_report_path: Op
     let t0 = std::time::Instant::now();
     let info = fallibility::analyze(&hier);
     hier.fallible_functions = info.fallible_functions.clone();
+    let susan_pkgs = codegen::susan_packages(&hier.top_level);
+    if !susan_pkgs.is_empty() {
+        let mut fns = Vec::new();
+        codegen::collect_all_function_nodes(&hier.top_level, "", &mut fns);
+        let susan_fns: Vec<String> = fns
+            .iter()
+            .filter(|(q, _)| q.split('.').next().is_some_and(|t| susan_pkgs.contains(t)))
+            .map(|(q, _)| q.clone())
+            .collect();
+        hier.fallible_functions.extend(susan_fns);
+    }
     let infallible_count = info.total_functions.saturating_sub(info.fallible_functions.len());
     println!(
         "Fallibility analysis: {} functions ({} fallible, {} infallible), {} externals; {} ext registry entries; {:.2}s",
@@ -104,7 +125,9 @@ fn start_compilation(results: Vec<Absyn::Program>, fix: bool, mc_report_path: Op
             Ok(()) => println!("--mc-report: wrote {} line(s) to {path}", info.mc_report.len()),
             Err(e) => eprintln!("--mc-report: {path}: {e}"),
         }
-        if !fix { return; }
+        if !fix {
+            return;
+        }
     }
     if !info.matchcontinue_as_match.is_empty() {
         println!(
@@ -181,10 +204,12 @@ fn start_compilation(results: Vec<Absyn::Program>, fix: bool, mc_report_path: Op
     // it joins the same concurrent batch.
     let (partial_eq_required, (default_required, reference_eq_required)) = rayon::join(
         || codegen::analyze_partial_eq(&hier.top_level),
-        || rayon::join(
-            || codegen::analyze_default(&hier.top_level),
-            || codegen::analyze_reference_eq(&hier.top_level),
-        ),
+        || {
+            rayon::join(
+                || codegen::analyze_default(&hier.top_level),
+                || codegen::analyze_reference_eq(&hier.top_level),
+            )
+        },
     );
     hier.partial_eq_required = partial_eq_required;
     hier.default_required = default_required;
@@ -242,7 +267,10 @@ fn render_dot_if_available(dot_file: &str, svg_file: &str) {
                 if start.elapsed() >= TIMEOUT {
                     let _ = child.kill();
                     let _ = child.wait();
-                    eprintln!("dot timed out after {}s on {dot_file}; render manually: dot -Tsvg {dot_file} -o {svg_file}", TIMEOUT.as_secs());
+                    eprintln!(
+                        "dot timed out after {}s on {dot_file}; render manually: dot -Tsvg {dot_file} -o {svg_file}",
+                        TIMEOUT.as_secs()
+                    );
                 } else {
                     std::thread::sleep(std::time::Duration::from_millis(100));
                     continue;
@@ -327,17 +355,11 @@ fn run_unused_functions(programs: Vec<Absyn::Program>) {
     hierarchy::flatten_extends(&mut hier);
     let mut warnings = std::collections::BTreeSet::new();
     while hierarchy::resolve_pass(&mut hier, &mut warnings) {}
-    println!(
-        "Hierarchy extends+resolve types: {:.2}s",
-        t0.elapsed().as_secs_f64()
-    );
+    println!("Hierarchy extends+resolve types: {:.2}s", t0.elapsed().as_secs_f64());
 
     let t0 = std::time::Instant::now();
     let report = unused_functions::analyze(&hier);
-    println!(
-        "Unused-function reachability: {:.2}s",
-        t0.elapsed().as_secs_f64()
-    );
+    println!("Unused-function reachability: {:.2}s", t0.elapsed().as_secs_f64());
     println!();
     unused_functions::print_report(&report);
 }
@@ -370,67 +392,13 @@ fn run_const_patterns(programs: Vec<Absyn::Program>) {
     hierarchy::flatten_extends(&mut hier);
     let mut warnings = std::collections::BTreeSet::new();
     while hierarchy::resolve_pass(&mut hier, &mut warnings) {}
-    println!(
-        "Hierarchy extends+resolve types: {:.2}s",
-        t0.elapsed().as_secs_f64()
-    );
+    println!("Hierarchy extends+resolve types: {:.2}s", t0.elapsed().as_secs_f64());
 
     let t0 = std::time::Instant::now();
     let report = const_patterns::analyze(&hier);
-    println!(
-        "Constant-pattern scan: {:.2}s",
-        t0.elapsed().as_secs_f64()
-    );
+    println!("Constant-pattern scan: {:.2}s", t0.elapsed().as_secs_f64());
     println!();
     const_patterns::print_report(&report);
-}
-
-/// `cyclic-cells [--fix]`: report, or migrate, the cells that can sit on a
-/// reference cycle. Without `--fix` it only prints what it would change.
-fn run_cyclic_cells(programs: Vec<Absyn::Program>, fix: bool, sources: Vec<String>) {
-    let mut all_classes: Vec<MM::Class> = Vec::new();
-    for program in &programs {
-        match MM::from_program(program) {
-            Ok(p) => all_classes.extend(p),
-            Err(e) => eprintln!("MM ERR: {e}"),
-        }
-    }
-    let retired = MM::strip_retired(&mut all_classes);
-    MM::set_retired(retired.clone());
-    let mut hier = hierarchy::InstanceHierarchy::from_program(&all_classes);
-    hier.retired = retired;
-    hierarchy::flatten_extends(&mut hier);
-    let mut warnings = std::collections::BTreeSet::new();
-    while hierarchy::resolve_pass(&mut hier, &mut warnings) {}
-    hierarchy::detect_types_containing_dyn_fn(&mut hier);
-    mutable_cycles::detect_traced_types(&mut hier);
-
-    let report = mutable_cycles::analyze(&hier);
-    // Declarations are matched on the simple name: MetaModelica writes a type
-    // reference unqualified (`Mutable<InstNode>`), not by qname.
-    let simple: std::collections::BTreeSet<String> = report
-        .gc_types_full
-        .iter()
-        .filter_map(|q| q.rsplit('.').next().map(str::to_owned))
-        .collect();
-    println!(
-        "cyclic cells: {} call sites over {} cyclic types",
-        report.cyclic_uses.len(),
-        report.gc_types_full.len()
-    );
-    if !fix {
-        println!("(dry run; pass --fix to rewrite the sources)");
-        return;
-    }
-    let stats = cyclic_fix::apply(report.cyclic_uses, &simple, &sources);
-    println!(
-        "  {} files changed, {} declarations, {} calls, {} ambiguous spans, {} calls without a position",
-        stats.files_changed,
-        stats.decls_rewritten,
-        stats.calls_rewritten,
-        stats.ambiguous_spans,
-        stats.calls_without_position
-    );
 }
 
 fn run_mutable_cycles(programs: Vec<Absyn::Program>) {
@@ -463,18 +431,11 @@ fn run_mutable_cycles(programs: Vec<Absyn::Program>) {
     while hierarchy::resolve_pass(&mut hier, &mut warnings) {}
     // Needed for the dyn-fn overlap section of the report.
     hierarchy::detect_types_containing_dyn_fn(&mut hier);
-    mutable_cycles::detect_traced_types(&mut hier);
-    println!(
-        "Hierarchy extends+resolve types: {:.2}s",
-        t0.elapsed().as_secs_f64()
-    );
+    println!("Hierarchy extends+resolve types: {:.2}s", t0.elapsed().as_secs_f64());
 
     let t0 = std::time::Instant::now();
     let report = mutable_cycles::analyze(&hier);
-    println!(
-        "Mutable-cycle analysis: {:.2}s",
-        t0.elapsed().as_secs_f64()
-    );
+    println!("Mutable-cycle analysis: {:.2}s", t0.elapsed().as_secs_f64());
     println!();
     mutable_cycles::print_report(&report);
 }
@@ -487,7 +448,8 @@ fn main() {
     // `--fix` rewrites provably-safe `matchcontinue`s to `match` in the sources
     // (see `crate::fix`) instead of generating code.
     let fix = args.iter().any(|a| a == "--fix");
-    let mc_report_path: Option<String> = args.iter()
+    let mc_report_path: Option<String> = args
+        .iter()
         .position(|a| a == "--mc-report")
         .and_then(|i| args.get(i + 1))
         .cloned();
@@ -509,10 +471,10 @@ fn main() {
         });
     let t0 = std::time::Instant::now();
     rayon::ThreadPoolBuilder::new()
-    .stack_size(16 * 1024 * 1024) // 16 MiB stack size, to avoid "thread stack overflow" on large files, especially on debug builds
-    .num_threads(12)
-    .build_global()
-    .unwrap();
+        .stack_size(16 * 1024 * 1024) // 16 MiB stack size, to avoid "thread stack overflow" on large files, especially on debug builds
+        .num_threads(12)
+        .build_global()
+        .unwrap();
 
     let grammar = Grammar::MetaModelica;
     let sources = std::fs::read_to_string(&source_path)
@@ -525,22 +487,38 @@ fn main() {
         .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty() && !l.starts_with("//") && !l.starts_with('#'))
-        .map(|f| {i += 1;(f,i-1)})
+        .map(|f| {
+            i += 1;
+            (f, i - 1)
+        })
         .collect();
 
-    let programs: Vec<std::sync::Mutex<Absyn::Program>> = files.iter().map(|_| std::sync::Mutex::new(Absyn::Program{classes: nil(), within_: Absyn::Within::TOP})).collect();
+    let programs: Vec<std::sync::Mutex<Absyn::Program>> = files
+        .iter()
+        .map(|_| {
+            std::sync::Mutex::new(Absyn::Program {
+                classes: nil(),
+                within_: Absyn::Within::TOP,
+            })
+        })
+        .collect();
 
     let results: Vec<Result<(), String>> = files
         .par_iter()
         .map(|(path, ix)| {
             let result = std::fs::read_to_string(path)
                 .map_err(|e| format!("read error: {e}"))
-                .and_then(|code: String| parse(&code, path, path, grammar, /*readonly=*/false, /*timestamp=*/0.0).map_err(|e| format!("{e}")));
+                .and_then(|code: String| {
+                    parse(
+                        &code, path, path, grammar, /*readonly=*/ false, /*timestamp=*/ 0.0,
+                    )
+                    .map_err(|e| format!("{e}"))
+                });
             match result {
                 Ok(program) => {
                     *programs[*ix].lock().unwrap() = program;
                     Ok(())
-                },
+                }
                 Err(e) => Err(e),
             }
         })
@@ -558,17 +536,42 @@ fn main() {
         }
     }
 
-    println!("OpenModelica: {} files, {} failures, {:.2}s", results.len(), failures, elapsed.as_secs_f64());
-    let parsed: Vec<Absyn::Program> = programs.iter().map(|p| p.lock().unwrap().clone()).collect();
+    println!(
+        "OpenModelica: {} files, {} failures, {:.2}s",
+        results.len(),
+        failures,
+        elapsed.as_secs_f64()
+    );
+    let mut parsed: Vec<Absyn::Program> = programs.iter().map(|p| p.lock().unwrap().clone()).collect();
+
+    // Per-target declarations: `X.rust.mo` next to `X.mo` replaces the items
+    // the Rust port represents differently. Spliced here, before any analysis
+    // runs, so fallibility, recursion, traced types and the generated code all
+    // see the Rust view -- the C compiler only ever reads `X.mo`.
+    for ((path, ix), _) in files.iter().zip(0..) {
+        let ovr_path = match path.strip_suffix(".mo") {
+            Some(stem) => format!("{stem}.rust.mo"),
+            None => continue,
+        };
+        let code = match std::fs::read_to_string(&ovr_path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => panic!("could not read override {ovr_path:?}: {e}"),
+        };
+        let ovr = parse(&code, &ovr_path, &ovr_path, grammar, false, 0.0)
+            .unwrap_or_else(|e| panic!("could not parse override {ovr_path:?}: {e}"));
+        let applied = overrides::apply(&mut parsed[*ix], &ovr);
+        if applied.is_empty() {
+            panic!("{ovr_path} overrode nothing: every item must name one in {path}");
+        }
+        eprintln!("mmtorust: {ovr_path} overrides {}", applied.join(" "));
+    }
+    let parsed = parsed;
     match subcommand {
         Some("dep-analysis") => run_dep_analysis(parsed),
         Some("unused-functions") => run_unused_functions(parsed),
         Some("const-patterns") => run_const_patterns(parsed),
         Some("mutable-cycles") => run_mutable_cycles(parsed),
-        Some("cyclic-cells") => {
-            let paths: Vec<String> = files.iter().map(|(f, _)| (*f).to_owned()).collect();
-            run_cyclic_cells(parsed, fix, paths)
-        }
         _ => start_compilation(parsed, fix, mc_report_path),
     }
 }

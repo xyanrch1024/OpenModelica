@@ -31,14 +31,14 @@ equation
   annotation(__OpenModelica_HGT(tearingPairs(
     Pair(residualEquation(nominal = 10, hold = subSystem2Hold) = b.res2,
          iterationVariable(start = 2, hold = subSystem2Hold) = c.q),
-    Pair(residualEquation = ba[2].res, iterationVariable = ba[2].x, level = 2))));
+    Pair(residualEquation = ba[2].res, iterationVariable = ba[2].x, level = 1))));
 end HGTSystemPair1;
 
 // Result:
 // Hand guided tearing:
-//   pair: residual equation b.res (level 1), iteration variable c.z (level 1)
-//   pair: residual equation b.res2 (level 1, nominal = 10.0, hold = subSystem2Hold), iteration variable c.q (level 1, start = 2.0, hold = subSystem2Hold)
-//   pair: residual equation ba[2].res (level 2), iteration variable ba[2].x (level 2)
+//   pair: residual equation b.res, iteration variable c.z
+//   pair: residual equation b.res2 (nominal = 10.0, hold = subSystem2Hold), iteration variable c.q (start = 2.0, hold = subSystem2Hold)
+//   pair: residual equation ba[2].res, iteration variable ba[2].x
 // class HGTSystemPair1
 //   parameter Boolean subSystem2Hold = true;
 //   Real b.x;

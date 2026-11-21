@@ -325,7 +325,12 @@ algorithm
        */
       Error.clearCurrentComponent();
     end if;
-    Error.addMessage(Error.STACK_OVERFLOW_DETAILED, {GlobalScriptDump.printIstmtStr(inStatement), str});
+    str_1 := StackOverflow.outOfMemoryMessage();
+    if stringEmpty(str_1) then
+      Error.addMessage(Error.STACK_OVERFLOW_DETAILED, {GlobalScriptDump.printIstmtStr(inStatement), str});
+    else
+      Error.addMessage(Error.OUT_OF_MEMORY_DETAILED, {GlobalScriptDump.printIstmtStr(inStatement), str_1, str});
+    end if;
     Error.clearCurrentComponent();
     outString := "";
   end try annotation(__OpenModelica_stackOverflowCheckpoint=true);
@@ -2148,53 +2153,15 @@ algorithm
 end restComponentReplacementRules;
 
 protected function getComponentsWithType
-"author: x02lucpo
- extracts all the components that have the type"
+  "extracts all the components that have the type"
   input InteractiveTypes.Components inComponents;
   input Absyn.Path inPath;
   output InteractiveTypes.Components outComponents;
+protected
+  list<InteractiveTypes.Component> comps;
 algorithm
-  outComponents:=
-  matchcontinue (inComponents,inPath)
-    local
-      InteractiveTypes.Components comps,res,comps_1,comps_2;
-      InteractiveTypes.Component comp;
-      Absyn.Path comp_path,path;
-    case (comps,_) /* rule  Absyn.path_string(path) => comp_path & print \"extracting comps for: \" & print comp_path & print \"\\n\" & int_eq(1,2) => true --------------------------- get_components_with_type(comps,path) => comps */
-      algorithm
-        true := emptyComponents(comps);
-      then
-        InteractiveTypes.COMPONENTS({},0);
-    case (comps,path)
-      algorithm
-        comp as InteractiveTypes.COMPONENTITEM(_,comp_path,_) := firstComponent(comps);
-        true := AbsynUtil.pathEqual(comp_path, path);
-        res := restComponents(comps);
-        comps_1 := getComponentsWithType(res, path);
-        comps_2 := addComponentToComponents(comp, comps_1);
-      then
-        comps_2;
-    case (comps,path)
-      algorithm
-        comp as InteractiveTypes.EXTENDSITEM(_,comp_path) := firstComponent(comps);
-        true := AbsynUtil.pathEqual(comp_path, path);
-        res := restComponents(comps);
-        comps_1 := getComponentsWithType(res, path);
-        comps_2 := addComponentToComponents(comp, comps_1);
-      then
-        comps_2;
-    case (comps,path)
-      algorithm
-        res := restComponents(comps);
-        comps_1 := getComponentsWithType(res, path);
-      then
-        comps_1;
-    else
-      algorithm
-        print("-get_components_with_type failed\n");
-      then
-        InteractiveTypes.COMPONENTS({},0);
-  end matchcontinue;
+  comps := list(comp for comp guard AbsynUtil.pathEqual(inPath, componentTypePath(comp)) in inComponents.componentLst);
+  outComponents := InteractiveTypes.COMPONENTS(comps, listLength(comps));
 end getComponentsWithType;
 
 protected function extractAllComponents
@@ -2629,6 +2596,16 @@ algorithm
         InteractiveTypes.COMPONENTS((comp :: comps),len_1);
   end match;
 end addComponentToComponents;
+
+function componentTypePath
+  input InteractiveTypes.Component comp;
+  output Absyn.Path path;
+algorithm
+  path := match comp
+    case InteractiveTypes.COMPONENTITEM() then comp.the2;
+    case InteractiveTypes.EXTENDSITEM() then comp.the2;
+  end match;
+end componentTypePath;
 
 protected function isParameterElement
 " Returns true if Element is a component of
@@ -6364,7 +6341,7 @@ algorithm
   try
     cls := ProgramUtil.getPathedClassInProgram(classPath, program);
     comp := InteractiveUtil.getNthComponentInClass(cls, n);
-    str := getComponentCondition(comp);
+    str := getComponentConditionStr(comp);
     str := System.trim(str, " ");
     result := ValuesMake.makeString(str);
   else
@@ -6372,8 +6349,51 @@ algorithm
   end try;
 end getNthComponentCondition;
 
-protected function getComponentCondition
-" Helper function to getNthComponentCondition."
+public function getComponentCondition
+" Returns the condition of the given component in the given class as a string.
+  An empty string is returned for components without a condition."
+  input Absyn.Path classPath;
+  input Absyn.Path componentName;
+  input Absyn.Program program;
+  output Values.Value result;
+protected
+  Absyn.Path path;
+  Absyn.Element elem;
+  list<Absyn.ComponentItem> comps;
+  Absyn.ComponentItem comp;
+  String comp_name, str;
+algorithm
+  try
+    path := AbsynUtil.joinPaths(classPath, componentName);
+    comp_name := AbsynUtil.pathLastIdent(componentName);
+    elem := InteractiveUtil.getPathedElementInProgram(path, program);
+    comps := AbsynUtil.getComponentItemsFromElement(elem);
+    comp := List.find(comps, function AbsynUtil.isComponentItemNamed(name = comp_name));
+    str := getComponentitemConditionStr(comp);
+    str := System.trim(str, " ");
+    result := ValuesMake.makeString(str);
+  else
+    result := ValuesMake.makeBoolean(false);
+  end try;
+end getComponentCondition;
+
+protected function getComponentitemConditionStr
+" Helper function to getComponentCondition. Returns the condition expression of
+  a component item without the leading if keyword."
+  input Absyn.ComponentItem item;
+  output String str;
+algorithm
+  str := match item
+    local
+      Absyn.Exp exp;
+    case Absyn.ComponentItem.COMPONENTITEM(condition = SOME(exp))
+      then Dump.printExpStr(exp);
+    else "";
+  end match;
+end getComponentitemConditionStr;
+
+protected function getComponentConditionStr
+" Helper function to getNthComponentCondition and getComponentCondition."
   input Absyn.Element inElement;
   output String outString;
 algorithm
@@ -6389,7 +6409,7 @@ algorithm
         str;
     else "";
   end matchcontinue;
-end getComponentCondition;
+end getComponentConditionStr;
 
 protected function getComponentitemsCondition
 "Helper function to getNthComponentCondition."
@@ -6964,6 +6984,64 @@ algorithm
         ();
   end match;
 end setComponentCommentInElement;
+
+public function setComponentCondition
+" Sets the condition of a component in a class. Pass an empty string to remove
+  the condition."
+  input Absyn.Path classPath;
+  input Absyn.Path componentName;
+  input String condition;
+  input output Absyn.Program program;
+        output Boolean success;
+protected
+  Absyn.Path path;
+  String comp_name;
+  Option<Absyn.Exp> condExp;
+  Absyn.Exp cond;
+algorithm
+  try
+    condExp := NONE();
+    if not stringEmpty(condition) then
+      // parse the condition string to make it an EXP.
+      GlobalScript.ISTMTS({GlobalScript.IEXP(cond, _)}, _) := Parser.parsestringexp(condition);
+      condExp := SOME(cond);
+    end if;
+    path := AbsynUtil.joinPaths(classPath, componentName);
+    comp_name := AbsynUtil.pathLastIdent(componentName);
+    (program, _, success) := InteractiveUtil.transformPathedElementInProgram(path,
+      function setComponentConditionInElement(componentName = comp_name, condExp = condExp), program);
+  else
+    success := false;
+  end try;
+end setComponentCondition;
+
+protected function setComponentConditionInElement
+  input output Absyn.Element element;
+  input String componentName;
+  input Option<Absyn.Exp> condExp;
+protected
+  Absyn.ElementSpec spec;
+  list<Absyn.ComponentItem> comps;
+
+  function set_condition
+    input output Absyn.ComponentItem item;
+    input Option<Absyn.Exp> condExp;
+  algorithm
+    item.condition := condExp;
+  end set_condition;
+algorithm
+  () := match element
+    case Absyn.Element.ELEMENT(specification = spec as Absyn.ElementSpec.COMPONENTS())
+      algorithm
+        (comps, true) := List.findAndMap(spec.components,
+          function AbsynUtil.isComponentItemNamed(name = componentName),
+          function set_condition(condExp = condExp));
+        spec.components := comps;
+        element.specification := spec;
+      then
+        ();
+  end match;
+end setComponentConditionInElement;
 
 public function setConnectionComment
   input Absyn.Path classPath;

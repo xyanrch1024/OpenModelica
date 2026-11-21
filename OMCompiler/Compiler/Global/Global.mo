@@ -95,6 +95,41 @@ constant Integer extLibraryBuildIndex = 36;
 // SOME(HashTableExpToExp.HashTable). See BackendDAEUtil.simplifyIfCondCached.
 constant Integer adjacencyIfCondCache = 37;
 
+// The NF top scope of the current frontend run: list<NFInstNode.InstNode>,
+// empty or a single node. Every other NF node refers to its enclosing scope
+// weakly, so without this root the top scope has no owner at all.
+constant Integer nfTopScope = 38;
+
+// Every backend variable made by NBVariable.makeVarPtr. A variable and
+// its own cref refer to each other, so the cref's side is weak and the run
+// owns the variables until they reach `VariablePointers`.
+constant Integer nbCreatedVars = 39;
+
+// The icon annotation JSON of each class a diagram has drawn a component of,
+// for the documentation generator. A diagram dumps the icon of every one of its
+// components, and a library draws the same few dozen types across thousands of
+// diagrams; the dump depends only on the class, since the component's own
+// modifications are not applied to it. Dropped with the top scope by
+// NFInstanceAPI.clearTopScopeCache.
+constant Integer nfDiagramIconCache = 40;
+// SOME(true) while the old uncertainty extraction (modelEquationsUC) lowers a
+// model, which, like data reconciliation, must keep its uncertain=refine
+// variables out of alias elimination.
+constant Integer uncertaintyExtraction = 41;
+// C names of the records whose members own nothing, so the generated C code
+// neither retains nor releases them. Set by SimCodeFunctionUtil.setTrivialRecords.
+constant Integer trivialRecords = 42;
+// The variables the old backend only computes at initialization, which
+// SimCodeCodegenUtil.timeEventTrigger treats like parameters:
+// SOME(UnorderedSet<DAE.ComponentRef>). Set by SimCodeUtil.createSimCode.
+constant Integer timeIndependentVars = 43;
+// Names of the parameters translateModel makes the frontend evaluate, since a
+// coefficient the backend solved an equation with is zero for their values.
+constant Integer structuralParameters = 44;
+// The positions of the variables of the last few Jacobians, see
+// SimCodeCodegenUtil.jacobianIndexExp: list<tuple<HashTable, offsets>>.
+constant Integer jacobianOffsets = 45;
+
 // indexes in System.tick
 // ----------------------
 // temp vars index
@@ -135,6 +170,14 @@ algorithm
   setGlobalRoot(fmuTranslation, NONE());
   setGlobalRoot(extLibraryBuildIndex, {});
   setGlobalRoot(adjacencyIfCondCache, NONE());
+  setGlobalRoot(nfTopScope, {});
+  setGlobalRoot(nbCreatedVars, {});
+  setGlobalRoot(nfDiagramIconCache, NONE());
+  setGlobalRoot(uncertaintyExtraction, NONE());
+  setGlobalRoot(trivialRecords, {});
+  setGlobalRoot(timeIndependentVars, NONE());
+  setGlobalRoot(structuralParameters, {});
+  setGlobalRoot(jacobianOffsets, {});
 end initialize;
 
 annotation(__OpenModelica_Interface="util");

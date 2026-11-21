@@ -38,6 +38,7 @@
  */
 
 #include "Utilities.h"
+#include "Style.h"
 #include "Helper.h"
 #if defined(__EMSCRIPTEN__)
 #include "PersistentStorage.h"
@@ -244,6 +245,15 @@ TreeSearchFilters::TreeSearchFilters(QWidget *pParent)
   mpCollapseAllButton->setIcon(QIcon(":/Resources/icons/top.svg"));
   mpCollapseAllButton->setToolTip(Helper::collapseAll);
   mpCollapseAllButton->setAutoRaise(true);
+  // show hide button
+  mpShowHideButton = new QToolButton;
+  QString showHideButtonText = tr("Filter Setup");
+  mpShowHideButton->setText(showHideButtonText);
+  mpShowHideButton->setIcon(QIcon(":/Resources/icons/settings.svg"));
+  mpShowHideButton->setToolTip(showHideButtonText);
+  mpShowHideButton->setAutoRaise(true);
+  mpShowHideButton->setCheckable(true);
+  connect(mpShowHideButton, SIGNAL(toggled(bool)), SLOT(showHideFilters(bool)));
   // filters widget
   mpFiltersWidget = new QWidget;
   // create the case sensitivity checkbox
@@ -271,6 +281,7 @@ TreeSearchFilters::TreeSearchFilters(QWidget *pParent)
   pFiltersWidgetLayout->addWidget(mpSyntaxComboBox, 0, 1);
   pFiltersWidgetLayout->addWidget(mpFiltersHelpButton, 0, 2);
   mpFiltersWidget->setLayout(pFiltersWidgetLayout);
+  mpFiltersWidget->hide();
   // create the layout
   QGridLayout *pMainLayout = new QGridLayout;
   pMainLayout->setContentsMargins(0, 0, 0, 0);
@@ -280,8 +291,23 @@ TreeSearchFilters::TreeSearchFilters(QWidget *pParent)
   pMainLayout->addWidget(mpScrollToActiveButton, 0, 1);
   pMainLayout->addWidget(mpExpandAllButton, 0, 2);
   pMainLayout->addWidget(mpCollapseAllButton, 0, 3);
-  pMainLayout->addWidget(mpFiltersWidget, 1, 0, 1, 4);
+  pMainLayout->addWidget(mpShowHideButton, 0, 4);
+  pMainLayout->addWidget(mpFiltersWidget, 1, 0, 1, 5);
   setLayout(pMainLayout);
+}
+
+/*!
+ * \brief TreeSearchFilters::showHideFilters
+ * Shows or hides the filters widget.
+ * \param On
+ */
+void TreeSearchFilters::showHideFilters(bool On)
+{
+  if (On) {
+    mpFiltersWidget->show();
+  } else {
+    mpFiltersWidget->hide();
+  }
 }
 
 /*!
@@ -308,23 +334,7 @@ QRegularExpression TreeSearchFilters::getFilterRegularExpression(const QString &
   QRegularExpression regExp;
   switch (syntax) {
     case TreeSearchFilters::Wildcard: {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
       regExp = QRegularExpression::fromWildcard(filterText, caseSensitivity, QRegularExpression::UnanchoredWildcardConversion);
-#else
-      QString pattern = QRegularExpression::wildcardToRegularExpression(filterText);
-      /* Qt 5 has no UnanchoredWildcardConversion option, and wildcardToRegularExpression()
-       * always returns a fully anchored pattern wrapped as "\A(?:...)\z" (i.e. exact-match
-       * behavior). Strip the \A and \z anchors so the pattern can match anywhere in the
-       * string, matching the behavior of UnanchoredWildcardConversion on Qt 6.
-       */
-      if (pattern.startsWith("\\A")) {
-        pattern.remove(0, 2);
-      }
-      if (pattern.endsWith("\\z")) {
-        pattern.chop(2);
-      }
-      regExp = QRegularExpression(pattern, caseSensitivity == Qt::CaseInsensitive ? QRegularExpression::CaseInsensitiveOption : QRegularExpression::NoPatternOption);
-#endif
       break;
     }
     case TreeSearchFilters::FixedString:
@@ -416,37 +426,21 @@ Label::Label(const QString &text, QWidget *parent, Qt::WindowFlags flags)
 
 QSize Label::minimumSizeHint() const
 {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
   if (!pixmap(Qt::ReturnByValue).isNull() || mElideMode == Qt::ElideNone) {
-#else // QT_VERSION_CHECK
-  if (pixmap() != NULL || mElideMode == Qt::ElideNone) {
-#endif // QT_VERSION_CHECK
     return QLabel::minimumSizeHint();
   }
   const QFontMetrics &fm = fontMetrics();
-#if QT_VERSION >= QT_VERSION_CHECK(5, 11, 0)
   QSize size(fm.horizontalAdvance("..."), fm.height()+5);
-#else // QT_VERSION_CHECK
-  QSize size(fm.width("..."), fm.height()+5);
-#endif // QT_VERSION_CHECK
   return size;
 }
 
 QSize Label::sizeHint() const
 {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
   if (!pixmap(Qt::ReturnByValue).isNull() || mElideMode == Qt::ElideNone) {
-#else // QT_VERSION_CHECK
-  if (pixmap() != NULL || mElideMode == Qt::ElideNone) {
-#endif // QT_VERSION_CHECK
     return QLabel::sizeHint();
   }
   const QFontMetrics& fm = fontMetrics();
-#if QT_VERSION >= QT_VERSION_CHECK(5, 11, 0)
   QSize size(fm.horizontalAdvance(mText), fm.height()+5);
-#else // QT_VERSION_CHECK
-  QSize size(fm.width(mText), fm.height()+5);
-#endif // QT_VERSION_CHECK
   return size;
 }
 
@@ -711,19 +705,6 @@ void QDetachableProcess::start(const QString &program, const QStringList &argume
   finishStart();
 }
 
-#if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
-/*!
- * \brief QDetachableProcess::start
- * Starts a process and detaches from it.
- * \param command
- * \param mode
- */
-void QDetachableProcess::start(const QString &command, QIODevice::OpenMode mode)
-{
-  QProcess::start(command, mode);
-  finishStart();
-}
-#endif
 
 void QDetachableProcess::finishStart()
 {
@@ -898,9 +879,6 @@ QSettings* Utilities::getApplicationSettings()
     pSettings = new QSettings(QString("%1/%2.ini").arg(PersistentStorage::root(), Helper::application), QSettings::IniFormat);
 #else
     pSettings = new QSettings(QSettings::IniFormat, QSettings::UserScope, Helper::organization, Helper::application);
-#endif
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    pSettings->setIniCodec(Helper::utf8.toUtf8().constData());
 #endif
   }
   return pSettings;
@@ -1085,8 +1063,7 @@ void Utilities::highlightCurrentLine(QPlainTextEdit *pPlainTextEdit)
 {
   QList<QTextEdit::ExtraSelection> selections = pPlainTextEdit->extraSelections();
   QTextEdit::ExtraSelection selection;
-  QColor lineColor = QColor(232, 242, 254);
-  selection.format.setBackground(lineColor);
+  selection.format.setBackground(Style::currentLineHighlightColor());
   selection.format.setProperty(QTextFormat::FullWidthSelection, true);
   selection.cursor = pPlainTextEdit->textCursor();
   selection.cursor.clearSelection();
@@ -1169,18 +1146,9 @@ qint64 Utilities::getProcessId(QProcess *pProcess)
   qint64 processId = 0;
 #if !QT_CONFIG(process)
   Q_UNUSED(pProcess); /* no QProcess on wasm */
-#elif QT_VERSION >= QT_VERSION_CHECK(5, 3, 0)
-  processId = pProcess->processId();
-#else /* Qt4 */
-#if defined(_WIN32)
-  _PROCESS_INFORMATION *procInfo = pProcess->pid();
-  if (procInfo) {
-    processId = procInfo->dwProcessId;
-  }
 #else
-  processId = pProcess->pid();
-#endif /* WIN32 */
-#endif /* QT_VERSION */
+  processId = pProcess->processId();
+#endif
   return processId;
 }
 

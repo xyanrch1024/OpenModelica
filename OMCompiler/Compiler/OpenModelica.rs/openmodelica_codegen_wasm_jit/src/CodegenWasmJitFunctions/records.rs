@@ -7,9 +7,9 @@ use super::*;
 /// is what [`emit_record_default`] builds the default constructor from.
 pub(crate) struct RecDeclField {
     pub(super) name: ArcStr,
-    pub(super) ty: Arc<DAE::Type>,
+    pub(super) ty: metamodelica::Ref<DAE::Type>,
     /// The declared binding, evaluated in the record's own scope.
-    value: Option<Arc<DAE::Exp>>,
+    value: Option<metamodelica::Ref<DAE::Exp>>,
     /// The binding came from a derived record (`record A = B(k=exp)`) and is
     /// evaluated in the using scope instead.
     bind_outside: bool,
@@ -21,14 +21,14 @@ std::thread_local! {
     /// its consumer's about a field type, which would give the two ends different
     /// field offsets; the declaration decides for both.
     static RECORD_DECLS: std::cell::RefCell<HashMap<String, Arc<Vec<RecDeclField>>>> =
-        std::cell::RefCell::new(HashMap::new());
+        std::cell::RefCell::new(HashMap::default());
 }
 
 /// Install the module's record declarations (see [`RECORD_DECLS`]).
 pub(crate) fn set_record_decls(
     decls: &List<SimCodeFunction::RecordDeclaration>,
 ) -> Result<()> {
-    let mut map = HashMap::new();
+    let mut map = HashMap::default();
     for d in decls {
         // Only `RECORD_DECL_FULL` declares a layout.
         let SimCodeFunction::RecordDeclaration::RECORD_DECL_FULL { defPath, variables, .. } = d else {
@@ -130,26 +130,12 @@ pub(super) fn emit_record_alloc(ctx: &mut FnCtx, layout: &RecordLayout) -> Resul
 /// table, then store each field value (`field_exps` in declaration order). The
 /// record owns heap field values. Leaves the owned (+1) record handle on the
 /// stack.
-pub(super) fn emit_record_construction(ctx: &mut FnCtx, fields: &[(ArcStr, SigTy)], field_exps: &[&Arc<DAE::Exp>]) -> Result<()> {
+pub(super) fn emit_record_construction(ctx: &mut FnCtx, fields: &[(ArcStr, SigTy)], field_exps: &[&metamodelica::Ref<DAE::Exp>]) -> Result<()> {
     let layout = record_layout(fields);
     let obj = emit_record_alloc(ctx, &layout)?;
     for (i, (_, fty)) in fields.iter().enumerate() {
-        let w = compile_exp(ctx, field_exps[i])?;
+        let w = compile_private_value(ctx, field_exps[i], fty)?;
         coerce(ctx, w, fty.wty());
-        // Value semantics: a record/array field built from a non-fresh source
-        // (a variable, a field read) aliases that source's mutable object — copy
-        // it so the record owns a private value. Fresh constructors/calls/ranges
-        // are already privately owned and move in. (Strings are immutable.)
-        if let Some((copy_fn, rel_fn)) = value_copy_fns(fty) {
-            if !value_rhs_is_fresh(field_exps[i]) {
-                let t = ctx.alloc_temp(WTy::I32);
-                ctx.emit(we::Instruction::LocalSet(t));
-                ctx.emit(we::Instruction::LocalGet(t));
-                ctx.emit(we::Instruction::Call(rt_index(copy_fn)?));
-                ctx.emit(we::Instruction::LocalGet(t));
-                ctx.emit(we::Instruction::Call(rt_index(rel_fn)?));
-            }
-        }
         // Store the owned (private) value into the field: address then value.
         let vt = ctx.alloc_temp(fty.wty());
         ctx.emit(we::Instruction::LocalSet(vt));
@@ -164,7 +150,7 @@ pub(super) fn emit_record_construction(ctx: &mut FnCtx, fields: &[(ArcStr, SigTy
 /// The class default of record field `v` — the C target's `<Rec>_construct_p`
 /// field init plus `recordInitOutsideBindings`. A binding synthesized from a
 /// variable's own submods (`R r(i=2)`) is applied at its declaration, not here.
-fn record_field_default(v: &DAE::Var) -> Option<Arc<DAE::Exp>> {
+fn record_field_default(v: &DAE::Var) -> Option<metamodelica::Ref<DAE::Exp>> {
     match &*v.binding {
         DAE::Binding::EQBOUND { source: DAE::BindingSource::BINDING_FROM_RECORD_SUBMODS, .. }
             if !v.bind_from_outside => None,
@@ -178,8 +164,8 @@ fn record_field_default(v: &DAE::Var) -> Option<Arc<DAE::Exp>> {
 pub(super) struct RecField {
     pub(super) name: ArcStr,
     pub(super) sig: SigTy,
-    pub(super) ty: Arc<DAE::Type>,
-    default: Option<Arc<DAE::Exp>>,
+    pub(super) ty: metamodelica::Ref<DAE::Type>,
+    default: Option<metamodelica::Ref<DAE::Exp>>,
     /// This use site binds the field from outside, so `default` belongs to the
     /// using scope (see [`RecDeclField::bind_outside`]).
     bind_outside: bool,
@@ -192,8 +178,8 @@ pub(super) fn record_fields(ty: &DAE::Type) -> Result<Option<Vec<RecField>>> {
         return Ok(None);
     };
     let path_str = AbsynUtil::pathString(path.clone(), arcstr::literal!("."), true, false)?;
-    let vars: Vec<&Arc<DAE::Var>> = (&**varLst).into_iter().collect();
-    let declared: Vec<(ArcStr, Arc<DAE::Type>)> = match record_decl_fields(&path_str) {
+    let vars: Vec<&metamodelica::Ref<DAE::Var>> = (&**varLst).into_iter().collect();
+    let declared: Vec<(ArcStr, metamodelica::Ref<DAE::Type>)> = match record_decl_fields(&path_str) {
         Some(d) => d.iter().map(|f| (f.name.clone(), f.ty.clone())).collect(),
         None => vars.iter().map(|v| (v.name.clone(), v.ty.clone())).collect(),
     };
@@ -222,17 +208,31 @@ pub(super) fn rec_layout(fields: &[RecField]) -> RecordLayout {
 }
 
 /// Default-construct a record value of type `ty` (the C target's
-/// `<Rec>_construct`), leaving the owned handle on the stack. A declared field
-/// binding is evaluated in the record's own scope (C's `ths->_x`), a
-/// `bind_from_outside` one in this scope; the constructor is inlined here, so
-/// the first scope is made by binding each finished field under its own name.
+/// `<Rec>_construct`), leaving the owned handle on the stack.
 pub(super) fn emit_record_default(ctx: &mut FnCtx, ty: &DAE::Type) -> Result<()> {
+    let (fields, vals) = record_default_values(ctx, ty)?;
+    let layout = rec_layout(&fields);
+    let obj = emit_record_alloc(ctx, &layout)?;
+    for (i, f) in fields.iter().enumerate() {
+        ctx.emit(we::Instruction::LocalGet(obj));
+        ctx.emit(we::Instruction::LocalGet(vals[i]));
+        field_store(ctx, f.sig.wty(), layout.data_off + layout.field_off[i]);
+    }
+    ctx.emit(we::Instruction::LocalGet(obj));
+    Ok(())
+}
+
+/// The field values [`emit_record_default`] builds, one owned value per field in
+/// a fresh local. A declared field binding is evaluated in the record's own scope
+/// (C's `ths->_x`), a `bind_from_outside` one in this scope; the constructor is
+/// inlined here, so the first scope is made by binding each finished field under
+/// its own name.
+pub(super) fn record_default_values(ctx: &mut FnCtx, ty: &DAE::Type) -> Result<(Vec<RecField>, Vec<u32>)> {
     let Some(fields) = record_fields(ty)? else {
         return Err("CodegenWasmJit: default construction of a non-record type");
     };
     let decl = record_decl_of(ty)?;
     let decl_of = |name: &ArcStr| decl.as_ref().and_then(|d| d.iter().find(|f| &f.name == name));
-    let layout = rec_layout(&fields);
     // Evaluated before any field name is shadowed below.
     let mut outside: Vec<Option<u32>> = Vec::with_capacity(fields.len());
     for f in &fields {
@@ -246,7 +246,7 @@ pub(super) fn emit_record_default(ctx: &mut FnCtx, ty: &DAE::Type) -> Result<()>
             _ => None,
         });
     }
-    let obj = emit_record_alloc(ctx, &layout)?;
+    let mut vals = Vec::with_capacity(fields.len());
     let mut shadowed: Vec<(String, Option<(u32, SigTy)>)> = Vec::new();
     let result = (|ctx: &mut FnCtx| -> Result<()> {
         for (i, f) in fields.iter().enumerate() {
@@ -266,9 +266,7 @@ pub(super) fn emit_record_default(ctx: &mut FnCtx, ty: &DAE::Type) -> Result<()>
             }
             let vt = ctx.alloc_temp(fty.wty());
             ctx.emit(we::Instruction::LocalSet(vt));
-            ctx.emit(we::Instruction::LocalGet(obj));
-            ctx.emit(we::Instruction::LocalGet(vt));
-            field_store(ctx, fty.wty(), layout.data_off + layout.field_off[i]);
+            vals.push(vt);
             let name = f.name.to_string();
             let prev = ctx.locals.insert(name.clone(), (vt, fty));
             shadowed.push((name, prev));
@@ -282,24 +280,13 @@ pub(super) fn emit_record_default(ctx: &mut FnCtx, ty: &DAE::Type) -> Result<()>
         };
     }
     result?;
-    ctx.emit(we::Instruction::LocalGet(obj));
-    Ok(())
+    Ok((fields, vals))
 }
 
 /// One record-field binding, copied if it came from an alias (value semantics).
 fn emit_field_value(ctx: &mut FnCtx, fty: &SigTy, exp: &DAE::Exp) -> Result<()> {
-    let w = compile_exp(ctx, exp)?;
+    let w = compile_private_value(ctx, exp, fty)?;
     coerce(ctx, w, fty.wty());
-    if let Some((copy_fn, rel_fn)) = value_copy_fns(fty) {
-        if !value_rhs_is_fresh(exp) {
-            let t = ctx.alloc_temp(WTy::I32);
-            ctx.emit(we::Instruction::LocalSet(t));
-            ctx.emit(we::Instruction::LocalGet(t));
-            ctx.emit(we::Instruction::Call(rt_index(copy_fn)?));
-            ctx.emit(we::Instruction::LocalGet(t));
-            ctx.emit(we::Instruction::Call(rt_index(rel_fn)?));
-        }
-    }
     Ok(())
 }
 
@@ -365,11 +352,11 @@ pub(super) fn emit_array_record_defaults(ctx: &mut FnCtx, slot: u32, elem: &DAE:
 
 /// A record literal `R(field=…, …)` (`E::RECORD`): the field values are matched
 /// to the type's declaration order by component name.
-pub(super) fn compile_record(ctx: &mut FnCtx, ty: &DAE::Type, exps: &List<Arc<DAE::Exp>>, comp: &List<ArcStr>) -> Result<()> {
+pub(super) fn compile_record(ctx: &mut FnCtx, ty: &DAE::Type, exps: &List<metamodelica::Ref<DAE::Exp>>, comp: &List<ArcStr>) -> Result<()> {
     let SigTy::Record { fields, .. } = sig_ty(ty)? else {
         return Err("CodegenWasmJit: record constructor with non-record type");
     };
-    let expv: Vec<&Arc<DAE::Exp>> = (&**exps).into_iter().collect();
+    let expv: Vec<&metamodelica::Ref<DAE::Exp>> = (&**exps).into_iter().collect();
     let compv: Vec<&ArcStr> = (&**comp).into_iter().collect();
     if expv.len() != compv.len() || expv.len() != fields.len() {
         return Err("CodegenWasmJit: record constructor arity mismatch");
@@ -387,7 +374,7 @@ pub(super) fn compile_record(ctx: &mut FnCtx, ty: &DAE::Type, exps: &List<Arc<DA
 
 /// A `METARECORDCALL` carries no `T_COMPLEX`, so its layout comes from the
 /// module's record declarations.
-pub(super) fn metarecord_sigty(path: &Arc<Absyn::Path>) -> Result<SigTy> {
+pub(super) fn metarecord_sigty(path: &metamodelica::Ref<Absyn::Path>) -> Result<SigTy> {
     let path_str = AbsynUtil::pathString(path.clone(), arcstr::literal!("."), true, false)?;
     let Some(declared) = record_decl_fields(&path_str) else {
         crate::CodegenWasmJit::record_error(format!(
@@ -407,14 +394,14 @@ pub(super) fn metarecord_sigty(path: &Arc<Absyn::Path>) -> Result<SigTy> {
 /// args…)`). Our closures hold values unboxed, so it builds a plain record.
 pub(super) fn compile_metarecord(
     ctx: &mut FnCtx,
-    path: &Arc<Absyn::Path>,
-    args: &List<Arc<DAE::Exp>>,
+    path: &metamodelica::Ref<Absyn::Path>,
+    args: &List<metamodelica::Ref<DAE::Exp>>,
     fieldNames: &List<ArcStr>,
 ) -> Result<()> {
     let SigTy::Record { fields, .. } = metarecord_sigty(path)? else {
         return Err("CodegenWasmJit: boxed record constructor with non-record type");
     };
-    let argv: Vec<&Arc<DAE::Exp>> = (&**args).into_iter().collect();
+    let argv: Vec<&metamodelica::Ref<DAE::Exp>> = (&**args).into_iter().collect();
     let namev: Vec<&ArcStr> = (&**fieldNames).into_iter().collect();
     if argv.len() != fields.len() || namev.len() != argv.len() {
         return Err("CodegenWasmJit: boxed record constructor arity mismatch");
@@ -433,11 +420,11 @@ pub(super) fn compile_metarecord(
 /// A record-constructor *call* `R(v1, v2, …)` (a `CALL` whose result is a record
 /// and which is not a generated function): the positional arguments are the
 /// fields in declaration order.
-pub(super) fn compile_record_call(ctx: &mut FnCtx, ty: &DAE::Type, args: &List<Arc<DAE::Exp>>) -> Result<()> {
+pub(super) fn compile_record_call(ctx: &mut FnCtx, ty: &DAE::Type, args: &List<metamodelica::Ref<DAE::Exp>>) -> Result<()> {
     let SigTy::Record { fields, .. } = sig_ty(ty)? else {
         return Err("CodegenWasmJit: record constructor call with non-record type");
     };
-    let argv: Vec<&Arc<DAE::Exp>> = (&**args).into_iter().collect();
+    let argv: Vec<&metamodelica::Ref<DAE::Exp>> = (&**args).into_iter().collect();
     if argv.len() != fields.len() {
         return Err("CodegenWasmJit: record constructor call arity mismatch");
     }
@@ -448,7 +435,16 @@ pub(super) fn compile_record_call(ctx: &mut FnCtx, ty: &DAE::Type, args: &List<A
 /// expression is owned (retained if it was a variable) and released after the
 /// field is read; a heap field is retained so the returned value is owned.
 pub(super) fn compile_rsub(ctx: &mut FnCtx, exp: &DAE::Exp, name: &str) -> Result<WTy> {
-    let SigTy::Record { fields, .. } = exp_sigty(exp)? else {
+    let sty = exp_sigty(exp)?;
+    if let Some(flat) = flat_fields(&sty)
+        && let Some(i) = flat.iter().position(|(n, _)| n.as_str() == name)
+    {
+        let flat = flat.clone();
+        let vals = compile_flat(ctx, exp, &flat)?;
+        ctx.emit(we::Instruction::LocalGet(vals[i]));
+        return Ok(flat[i].1.wty());
+    }
+    let SigTy::Record { fields, .. } = sty else {
         return Err("CodegenWasmJit: field access `.` on a non-record expression");
     };
     let (off, fty) = record_field(&fields, name)?;
@@ -484,20 +480,10 @@ fn compile_record_field_assign(ctx: &mut FnCtx, rec_idx: u32, fields: &[(ArcStr,
         return Ok(());
     };
     // Heap field: compute the new owned value into a temp.
-    let w = compile_exp(ctx, rhs)?;
+    let w = compile_private_value(ctx, rhs, &fty)?;
     coerce(ctx, w, fty.wty());
     let val_t = ctx.alloc_temp(WTy::I32);
     ctx.emit(we::Instruction::LocalSet(val_t));
-    // Value semantics: a mutable array/record from a non-fresh source aliases it.
-    if let Some((copy_fn, rel_fn)) = value_copy_fns(&fty) {
-        if !value_rhs_is_fresh(rhs) {
-            ctx.emit(we::Instruction::LocalGet(val_t));
-            ctx.emit(we::Instruction::Call(rt_index(copy_fn)?));
-            ctx.emit(we::Instruction::LocalGet(val_t));
-            ctx.emit(we::Instruction::Call(rt_index(rel_fn)?));
-            ctx.emit(we::Instruction::LocalSet(val_t));
-        }
-    }
     // Release the previous field value (now that the new one is computed).
     ctx.emit(we::Instruction::LocalGet(rec_idx));
     field_load(ctx, fty.wty(), off);
@@ -516,7 +502,7 @@ fn compile_record_field_assign(ctx: &mut FnCtx, rec_idx: u32, fields: &[(ArcStr,
 fn push_record_base(
     ctx: &mut FnCtx,
     ident: &str,
-    subs: &List<Arc<DAE::Subscript>>,
+    subs: &List<metamodelica::Ref<DAE::Subscript>>,
 ) -> Result<(u32, Arc<Vec<(ArcStr, SigTy)>>)> {
     let (idx, sty) = ctx
         .locals
@@ -540,7 +526,7 @@ fn push_record_base(
             return Err("CodegenWasmJit: slicing an array of records before field access is not supported");
         }
         let idx_exps = index_subscripts(subs, rank)?;
-        emit_elem_addr(ctx, idx, &elem, &idx_exps)?;
+        emit_elem_addr(ctx, idx, &elem, &idx_exps, None)?;
         elem_load(ctx, &elem);
         let t = ctx.alloc_temp(WTy::I32);
         ctx.emit(we::Instruction::LocalSet(t));
@@ -586,7 +572,7 @@ fn step_into_record(
     rec: u32,
     fields: &[(ArcStr, SigTy)],
     field: &str,
-    fsubs: &List<Arc<DAE::Subscript>>,
+    fsubs: &List<metamodelica::Ref<DAE::Subscript>>,
 ) -> Result<(u32, Arc<Vec<(ArcStr, SigTy)>>)> {
     let (vt, fty) = load_field(ctx, rec, fields, field)?;
     if fsubs.is_empty() {
@@ -606,7 +592,7 @@ fn step_into_record(
             return Err("CodegenWasmJit: slicing an array of records before field access is not supported");
         }
         let idx_exps = index_subscripts(fsubs, rank)?;
-        emit_elem_addr(ctx, vt, &elem, &idx_exps)?;
+        emit_elem_addr(ctx, vt, &elem, &idx_exps, None)?;
         elem_load(ctx, &elem);
         let t = ctx.alloc_temp(WTy::I32);
         ctx.emit(we::Instruction::LocalSet(t));
@@ -638,7 +624,7 @@ pub(super) fn compile_cref_read_qual(ctx: &mut FnCtx, cref: &DAE::ComponentRef) 
                 };
                 return if is_scalar_index(fsubs, rank) {
                     let idx_exps = index_subscripts(fsubs, rank)?;
-                    emit_elem_addr(ctx, vt, &elem, &idx_exps)?;
+                    emit_elem_addr(ctx, vt, &elem, &idx_exps, None)?;
                     elem_load(ctx, &elem);
                     retain_on_stack(ctx, &elem)?;
                     Ok(elem.wty())
@@ -667,7 +653,7 @@ pub(super) fn compile_cref_read_qual(ctx: &mut FnCtx, cref: &DAE::ComponentRef) 
 pub(super) fn navigate_qual<'c>(
     ctx: &mut FnCtx,
     cref: &'c DAE::ComponentRef,
-) -> Result<(u32, Arc<Vec<(ArcStr, SigTy)>>, &'c str, &'c List<Arc<DAE::Subscript>>)> {
+) -> Result<(u32, Arc<Vec<(ArcStr, SigTy)>>, &'c str, &'c List<metamodelica::Ref<DAE::Subscript>>)> {
     let DAE::ComponentRef::CREF_QUAL { ident, subscriptLst, componentRef: rest, .. } = cref else {
         return Err("CodegenWasmJit: navigate_qual on non-qualified cref");
     };
@@ -711,7 +697,7 @@ pub(super) fn compile_cref_assign_qual(ctx: &mut FnCtx, cref: &DAE::ComponentRef
             return compile_slice_assign(ctx, arr_t, lsubs, RhsSource::Exp(rhs));
         }
         let idx_exps = index_subscripts(lsubs, rank)?;
-        compile_elem_assign(ctx, arr_t, &elem, &idx_exps, rhs)?;
+        compile_elem_assign(ctx, arr_t, &elem, &idx_exps, None, rhs)?;
     }
     Ok(())
 }
@@ -720,8 +706,15 @@ pub(super) fn compile_cref_assign_qual(ctx: &mut FnCtx, cref: &DAE::ComponentRef
 /// (which privately owns its buffer). For a heap element the previous handle in
 /// the slot is released and the new owned value moved in; the old value is
 /// released only *after* the rhs is computed, in case the rhs reads it.
-pub(super) fn compile_elem_assign(ctx: &mut FnCtx, arr_idx: u32, elem: &SigTy, idx_exps: &[Arc<DAE::Exp>], rhs: &DAE::Exp) -> Result<()> {
-    emit_elem_addr(ctx, arr_idx, elem, idx_exps)?;
+pub(super) fn compile_elem_assign(
+    ctx: &mut FnCtx,
+    arr_idx: u32,
+    elem: &SigTy,
+    idx_exps: &[metamodelica::Ref<DAE::Exp>],
+    dims: Option<&[i32]>,
+    rhs: &DAE::Exp,
+) -> Result<()> {
+    emit_elem_addr(ctx, arr_idx, elem, idx_exps, dims)?;
     let addr_t = ctx.alloc_temp(WTy::I32);
     ctx.emit(we::Instruction::LocalSet(addr_t));
     if let Some(release_fn) = elem.release_fn() {
@@ -746,10 +739,57 @@ pub(super) fn compile_elem_assign(ctx: &mut FnCtx, arr_idx: u32, elem: &SigTy, i
     Ok(())
 }
 
+/// The sizes of an array type when every one is a literal, i.e. its layout is
+/// known at compile time.
+pub(super) fn static_dims(ty: &DAE::Type) -> Option<Vec<i32>> {
+    let dims = type_array_dims(ty);
+    if dims.is_empty() {
+        return None;
+    }
+    dims.iter()
+        .map(|d| match &**d {
+            DAE::Dimension::DIM_INTEGER { integer } => Some(*integer),
+            DAE::Dimension::DIM_BOOLEAN => Some(2),
+            DAE::Dimension::DIM_ENUM { size, .. } => Some(*size),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The byte offset of `a[idx_exps...]` from the array handle, when the indices are
+/// constants inside `dims` (which the frontend has then already checked).
+fn const_elem_offset(dims: &[i32], elem: &SigTy, idx_exps: &[metamodelica::Ref<DAE::Exp>]) -> Option<u32> {
+    if dims.len() != idx_exps.len() {
+        return None;
+    }
+    let mut flat: u32 = 0;
+    for (d, e) in dims.iter().zip(idx_exps) {
+        let k = const_index_value(e)?;
+        if k < 1 || k > *d {
+            return None;
+        }
+        flat = flat * *d as u32 + (k - 1) as u32;
+    }
+    Some(arr_data_off(dims.len() as u32) + flat * elem_stride(elem))
+}
+
 /// Emit the byte address of array element `a[idx_exps...]`, reading the array
 /// handle from local `arr_idx` (the local owns it — no retain/release). Leaves
 /// the address on the stack. Same row-major linear index as [`index_loaded`].
-pub(super) fn emit_elem_addr(ctx: &mut FnCtx, arr_idx: u32, elem: &SigTy, idx_exps: &[Arc<DAE::Exp>]) -> Result<()> {
+/// `dims` are the array's [`static_dims`], when the caller knows them.
+pub(super) fn emit_elem_addr(
+    ctx: &mut FnCtx,
+    arr_idx: u32,
+    elem: &SigTy,
+    idx_exps: &[metamodelica::Ref<DAE::Exp>],
+    dims: Option<&[i32]>,
+) -> Result<()> {
+    if let Some(off) = dims.and_then(|d| const_elem_offset(d, elem, idx_exps)) {
+        ctx.emit(we::Instruction::LocalGet(arr_idx));
+        ctx.emit(we::Instruction::I32Const(off as i32));
+        ctx.emit(we::Instruction::I32Add);
+        return Ok(());
+    }
     let acc = ctx.alloc_temp(WTy::I32);
     emit_subscript_index(ctx, &idx_exps[0])?;
     ctx.emit(we::Instruction::I32Const(1));
@@ -770,7 +810,7 @@ pub(super) fn emit_elem_addr(ctx: &mut FnCtx, arr_idx: u32, elem: &SigTy, idx_ex
     ctx.emit(we::Instruction::LocalGet(acc));
     ctx.emit(we::Instruction::I32Const(1));
     ctx.emit(we::Instruction::I32Add);
-    emit_elem_ptr(ctx, elem)
+    emit_elem_ptr_ranked(ctx, elem, Some(idx_exps.len() as u32))
 }
 
 /// Evaluate a call for its side effects and discard any results. A discarded

@@ -20,15 +20,14 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/mo
 ## Disable colors if you do not want them.
 # set(CMAKE_COLOR_MAKEFILE OFF)
 
-# Variable for signifying that we are using the new CMake configuration.
-# We use this to selectively include some cmake source files
-# e.g. simulationRuntime/c/ has two cmake sources that are conditionally
-# included. The old (cmake 2.8) cmake source in there is used by the legacy
-# standalone Autoconf/Make build.
+# Tells subprojects that can also be configured on their own that they are part
+# of the OpenModelica build, so they reuse its targets (e.g. SUNDIALS) instead of
+# building their own. Read by the OMSimulator submodule.
 set(OPENMODELICA_NEW_CMAKE_BUILD ON)
 
 # include utility macros.
 include(cmake/omc_utils.cmake)
+include(cmake/omc_job_server.cmake)
 include(cmake/omc_target_info.cmake)
 include(cmake/omc_check_exists.cmake)
 
@@ -39,6 +38,9 @@ include(cmake/omc_git_revision.cmake)
 # build tree to survive a wipe, or in-source to bundle for an offline tarball.
 set(OM_DOWNLOADS_DIR "${CMAKE_BINARY_DIR}/downloads" CACHE PATH
     "Cache for everything the configure step downloads.")
+
+## Source hygiene targets (bom-error, utf8-error, tab-error, spellcheck, ...).
+include(cmake/omc_source_checks.cmake)
 
 # Cross-compiling to Windows (xwin toolchain): fetch PThreads4W and OpenBLAS.
 # Before OMCPThreads.cmake, which find_package(pthreads CONFIG REQUIRED).
@@ -129,10 +131,26 @@ omc_add_to_report(OM_ENABLE_OMSIMULATOR)
 # 'usersguide' target. See doc/UsersGuide/CMakeLists.txt.
 omc_option(OM_ENABLE_DOCS "Enable the User's Guide target. Needs Sphinx, pandoc, inkscape and gnuplot." OFF)
 
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/testsuite/CMakeLists.txt")
+  set(OM_TESTSUITE_DEFAULT ON)
+else()
+  set(OM_TESTSUITE_DEFAULT OFF)
+endif()
+cmake_dependent_option(OM_ENABLE_TESTSUITE
+  "Configure the testsuite and the C runtime unit tests (testsuite-depends, ctestsuite-depends, omc-diff)."
+  ${OM_TESTSUITE_DEFAULT} "NOT OM_OMC_WASM" OFF)
+omc_add_to_report(OM_ENABLE_TESTSUITE)
+if(OM_ENABLE_TESTSUITE AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/testsuite/CMakeLists.txt")
+  message(FATAL_ERROR
+    "OM_ENABLE_TESTSUITE is ON, but ${CMAKE_CURRENT_SOURCE_DIR} has no testsuite/ "
+    "(source tarballs do not include it). Configure with -DOM_ENABLE_TESTSUITE=OFF.")
+endif()
+
 # GUI options
 omc_option(OM_ENABLE_GUI_CLIENTS "Enable, build, and install the qt based GUI clients." ON)
-# Qt version (5/6) used by the GUI clients.
-set(OM_QT_MAJOR_VERSION 6 CACHE STRING "Qt version")
+# The OMOptim and OMSens_Qt submodules still spell their Qt targets
+# Qt${OM_QT_MAJOR_VERSION}::; everything else asks for Qt6 directly.
+set(OM_QT_MAJOR_VERSION 6)
 # The Qt clients are unused in the wasm build, so force them off when OM_OMC_WASM is set.
 cmake_dependent_option(OM_ENABLE_OMSHELL    "Enable OMShell gui client"    ON "NOT OM_OMC_WASM;OM_ENABLE_GUI_CLIENTS" OFF)
 cmake_dependent_option(OM_ENABLE_OMNOTEBOOK "Enable OMNotebook gui client" ON "NOT OM_OMC_WASM;OM_ENABLE_GUI_CLIENTS" OFF)
@@ -144,28 +162,6 @@ omc_add_to_report(OM_ENABLE_OMNOTEBOOK)
 omc_add_to_report(OM_ENABLE_OMEDIT)
 omc_add_to_report(OM_ENABLE_OMSENS_QT)
 omc_add_to_report(OM_OMOPTIM_ENABLE)
-# libomc_result is built with cargo, which a C-only toolchain does not have (the
-# OMDev Windows build is one), so both options default to whether cargo is on
-# PATH rather than to plain ON. Without it the build falls back to the C readers
-# and writers, which cannot handle .arrow. Turning either option on explicitly
-# without a cargo is still a hard error, see rust_result_reader.cmake.
-find_program(CARGO_EXECUTABLE cargo)
-if(CARGO_EXECUTABLE)
-  set(OM_RUST_RESULT_DEFAULT ON)
-else()
-  set(OM_RUST_RESULT_DEFAULT OFF)
-  message(STATUS "cargo not found: defaulting OM_RUST_RESULT_READERS/OM_RUST_RESULT_WRITERS to OFF. "
-                 "The C result readers and writers can not read or write .arrow result files; "
-                 "install a stable Rust toolchain to get them.")
-endif()
-# The GUI clients read result files through libomc_result (needs cargo); OFF
-# compiles the C readers (OM_LEGACY_RESULT_READERS), which cannot open .arrow.
-cmake_dependent_option(OM_RUST_RESULT_READERS "Read result files in the GUI clients through the Rust omc_result library." ${OM_RUST_RESULT_DEFAULT} "NOT OM_OMC_WASM;OM_ENABLE_GUI_CLIENTS" OFF)
-omc_add_to_report(OM_RUST_RESULT_READERS)
-# The C simulation runtime writes its result files through the same library;
-# OFF keeps the C writers, which cannot write .arrow.
-cmake_dependent_option(OM_RUST_RESULT_WRITERS "Write result files from the C simulation runtime through the Rust omc_result library." ${OM_RUST_RESULT_DEFAULT} "NOT OM_OMC_WASM" OFF)
-omc_add_to_report(OM_RUST_RESULT_WRITERS)
 
 ## Use ccache to speedup compilation! It is important to use ccache if you can.
 ## You get almost no op compilations (for unmodified files) at the cost of some memory.
@@ -173,7 +169,11 @@ omc_add_to_report(OM_RUST_RESULT_WRITERS)
 ## for some reason. However, it is even more important with OMC because we generate C sources
 ## from MetaModelica files whenever they change. This causes CMake to issue compilations of
 ## dependent source files because headers are changed. ccache will essentially eliminate that cost.
-omc_option(OM_USE_CCACHE "Use ccache to speedup compilations." ON)
+omc_option(OM_USE_CCACHE "Use a compiler cache to speedup compilations." ON)
+set(OM_COMPILER_CACHE "" CACHE STRING
+    "Compiler cache to use: ccache, sccache or none. Empty follows OM_USE_CCACHE; an explicit value overrides it.")
+set_property(CACHE OM_COMPILER_CACHE PROPERTY STRINGS "" ccache sccache none)
+omc_add_to_report(OM_COMPILER_CACHE)
 
 
 ### Standards ###############################################################################################
@@ -202,15 +202,28 @@ omc_add_to_report(CMAKE_BUILD_TYPE)
 ## Set position independent code for everything built in OpenModelica.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-if(OM_USE_CCACHE)
-  find_program(CCACHE_PROGRAM ccache)
-  if(CCACHE_PROGRAM)
-    message(STATUS "Found ccache. It will be used for compilation C/C++ sources")
-    set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
-    set(CMAKE_C_COMPILER_LAUNCHER   ${CCACHE_PROGRAM})
-    omc_add_to_report(CCACHE_PROGRAM)
+if(OM_COMPILER_CACHE STREQUAL "")
+  if(OM_USE_CCACHE)
+    set(_om_compiler_cache ccache)
   else()
-    message(FATAL_ERROR "ccache program not found. It is highly recommended to use ccache for compilation of OpenModelica. Please install ccache and rerun configuration.
+    set(_om_compiler_cache none)
+  endif()
+else()
+  set(_om_compiler_cache ${OM_COMPILER_CACHE})
+endif()
+
+if(NOT _om_compiler_cache STREQUAL "none")
+  if(NOT _om_compiler_cache MATCHES "^(ccache|sccache)$")
+    message(FATAL_ERROR "OM_COMPILER_CACHE must be ccache, sccache or none, not '${_om_compiler_cache}'.")
+  endif()
+  find_program(COMPILER_CACHE_PROGRAM ${_om_compiler_cache})
+  if(COMPILER_CACHE_PROGRAM)
+    message(STATUS "Found ${_om_compiler_cache}. It will be used for compilation C/C++ sources")
+    set(CMAKE_CXX_COMPILER_LAUNCHER ${COMPILER_CACHE_PROGRAM})
+    set(CMAKE_C_COMPILER_LAUNCHER   ${COMPILER_CACHE_PROGRAM})
+    omc_add_to_report(COMPILER_CACHE_PROGRAM)
+  else()
+    message(FATAL_ERROR "${_om_compiler_cache} program not found. It is highly recommended to use a compiler cache for compilation of OpenModelica. Please install ${_om_compiler_cache} and rerun configuration.
             You can disable this check by specifying -DOM_USE_CCACHE=OFF to CMake configuration command.")
   endif()
 endif()
@@ -293,7 +306,7 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME "unknown-install-component")
 ## (Intel MKL, ACML, ARMPL, Apple, OpenBLAS, BLIS, ATLAS, Goto, Generic, ...), issuing hundreds of
 ## find_library() calls. On a machine without a vendor BLAS this all-vendor sweep dominates the configure
 ## (see issue #15904: ~200s of a ~285s configure). There are 18+ find_package(BLAS|LAPACK) call sites across
-## the tree (SimulationRuntime/c, Compiler/runtime, sundials, primme, CMinpack, Ipopt/MUMPS, OMSI, OMSICpp,
+## the tree (SimulationRuntime/c, Compiler/runtime, sundials, primme, CMinpack, Ipopt/MUMPS,
 ## ...), and each one can re-trigger the full sweep, compounding the cost.
 ##
 ## FindBLAS/FindLAPACK clear the *normal* variables BLAS_LIBRARIES/LAPACK_LIBRARIES at entry, then guard
@@ -360,7 +373,7 @@ enable_testing()
 include(cmake/modules/OpenModelicaCoverage.cmake)
 
 # libomc_result, after CMAKE_INSTALL_LIBDIR is final and before its users.
-if(OM_RUST_RESULT_READERS OR OM_RUST_RESULT_WRITERS)
+if(NOT OM_OMC_WASM)
   include(OMCompiler/Compiler/.cmake/rust_result_reader.cmake)
   omc_result_reader_library()
 endif()
@@ -409,12 +422,25 @@ endif()
 
 # The Modelica libraries and the testsuite are not part of the wasm/web bundle;
 # skip them so `make all` builds only the wasm target in that mode.
+# OM_ENABLE_TESTSUITE is forced OFF there already.
 if(NOT OM_OMC_WASM)
   omc_add_subdirectory(libraries)
+endif()
+
+if(OM_ENABLE_TESTSUITE)
   omc_add_subdirectory(testsuite)
 endif()
 
-omc_add_subdirectory(doc)
+# doc/ holds the shipped PDFs and the User's Guide, and like testsuite/ it is not in the
+# source tarballs. Unlike the testsuite it costs nothing to configure -- the expensive part,
+# the User's Guide, is already behind OM_ENABLE_DOCS -- so it needs no option of its own.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/doc/CMakeLists.txt")
+  omc_add_subdirectory(doc)
+elseif(OM_ENABLE_DOCS)
+  message(FATAL_ERROR
+    "OM_ENABLE_DOCS is ON, but ${CMAKE_CURRENT_SOURCE_DIR} has no doc/ "
+    "(source tarballs do not include it). Configure with -DOM_ENABLE_DOCS=OFF.")
+endif()
 
 ## Packaging ##########################################################################################
 # Settings that hold for every package generator. These have to be set *before*

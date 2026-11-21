@@ -63,6 +63,12 @@ pub const os: &str = if cfg!(windows) {
 
 pub const is64Bit: bool = cfg!(target_pointer_width = "64");
 
+/// Whether omc itself was built as a wasm module (the browser build). It has no
+/// dlopen and no native toolchain: a shared library is a wasm side module, and
+/// the only simulation target is `wasm-jit`. Mirrored in `Autoconf.mo.in` as
+/// `dllExt == ".wasm"`, which no configure run produces.
+pub const isWasm: bool = cfg!(target_arch = "wasm32");
+
 pub const isWindows: bool = cfg!(windows);
 
 pub const platform: &str = if isWindows && is64Bit {
@@ -82,7 +88,9 @@ pub const cmake: &str = "cmake";
 pub const exeExt: &str = if isWindows { ".exe" } else { "" };
 
 /// `@SHREXT@`.
-pub const dllExt: &str = if isWindows {
+pub const dllExt: &str = if isWasm {
+    ".wasm"
+} else if isWindows {
     ".dll"
 } else if cfg!(target_os = "macos") {
     ".dylib"
@@ -154,6 +162,21 @@ pub const ldflags_runtime: &str = match option_env!("OMC_RT_LDFLAGS_GENERATED_CO
     },
 };
 
+/// `@RT_LDFLAGS_GENERATED_CODE_MMC@`: a MetaModelica function library is
+/// dlopened into omc and shares its runtime.
+pub const ldflags_runtime_mmc: &str = match option_env!("OMC_RT_LDFLAGS_GENERATED_CODE_MMC") {
+    Some(s) => s,
+    None => if msvc_is_target {
+        const_str::concat!("OpenModelicaRuntimeMMC.lib omcgc.lib ", msvc_ldflags_basic)
+    } else if cfg!(windows) {
+        const_str::concat!(" -lOpenModelicaRuntimeMMC -lomcgc", win_ldflags_basic)
+    } else if cfg!(target_os = "macos") {
+        " -lOpenModelicaRuntimeMMC -lomcgc -llapack -lblas -lm"
+    } else {
+        " -lOpenModelicaRuntimeMMC -lomcgc -llapack -lblas -lm -lpthread -rdynamic"
+    },
+};
+
 /// `@RT_LDFLAGS_GENERATED_CODE_SIM@` (CMake-configured via OMC_RT_LDFLAGS_*; the
 /// fallback matches the C runtime build per platform).
 pub const ldflags_runtime_sim: &str = match option_env!("OMC_RT_LDFLAGS_GENERATED_CODE_SIM") {
@@ -172,7 +195,7 @@ pub const ldflags_runtime_sim: &str = match option_env!("OMC_RT_LDFLAGS_GENERATE
     } else if cfg!(target_os = "macos") {
         " -lSimulationRuntimeC -lOpenModelicaRuntimeC -lomcgc -llapack -lblas -lm"
     } else {
-        " -lSimulationRuntimeC -lOpenModelicaRuntimeC -lomcgc -lzlib -llapack -lblas -lm -ldl -lpthread -lgfortran -lstdc++ -rdynamic "
+        " -lSimulationRuntimeC -lOpenModelicaRuntimeC -lomcgc -lzlib -llapack -lblas -lm -ldl -lpthread -rdynamic "
     },
 };
 
@@ -194,7 +217,7 @@ pub const ldflags_runtime_sim_rust: &str = match option_env!("OMC_RT_LDFLAGS_GEN
     } else if cfg!(target_os = "macos") {
         " -lSimulationRuntimeRust -lOpenModelicaRuntimeC -lomcgc -llapack -lblas -lm"
     } else {
-        " -lSimulationRuntimeRust -lOpenModelicaRuntimeC -lomcgc -lzlib -llapack -lblas -lm -ldl -lpthread -lgfortran -lstdc++ -rdynamic "
+        " -lSimulationRuntimeRust -lOpenModelicaRuntimeC -lomcgc -lzlib -llapack -lblas -lm -ldl -lpthread -rdynamic "
     },
 };
 
@@ -213,24 +236,16 @@ pub const ldflags_runtime_fmu: &str = match option_env!("OMC_RT_LDFLAGS_GENERATE
     },
 };
 
-/// `@RT_LDFLAGS_GENERATED_CODE_SOURCE_FMU_STATIC@` (CMake-configured via
-/// OMC_RT_LDFLAGS_*; the fallback matches the C runtime build per platform).
-pub const ldflags_runtime_fmu_static: &str = match option_env!("OMC_RT_LDFLAGS_GENERATED_CODE_SOURCE_FMU_STATIC") {
-    Some(s) => s,
-    None => if msvc_is_target {
-        "SimulationRuntimeFMI.lib libopenblas.lib pthreadVC3.lib"
-    } else if cfg!(windows) {
-        const_str::concat!(" -lSimulationRuntimeFMI ", win_ldflags_runtime_fmu)
-    } else if cfg!(target_os = "macos") {
-        " -lSimulationRuntimeFMI -llapack -lblas -lm"
-    } else {
-        "-Wl,-Bstatic -lSimulationRuntimeFMI -Wl,-Bdynamic -llapack -lblas -lm -ldl -lpthread -lgfortran -lstdc++ -rdynamic "
-    },
-};
-
 /// `@OMC_HDF5_LDFLAGS@`: the HDF5 a link line naming ModelicaMatIO needs, empty
 /// unless CMake found HDF5 (`OM_ENABLE_HDF5`).
 pub const hdf5Libs: &str = match option_env!("OMC_HDF5_LDFLAGS") {
+    Some(s) => s,
+    None => "",
+};
+
+/// `@OMC_FMILIB_LDFLAGS@`: what a link line naming fmilib needs besides it, space-separated --
+/// the system expat and minizip, empty unless OM_USE_SYSTEM_EXPAT/OM_USE_SYSTEM_MINIZIP.
+pub const fmilibLibs: &str = match option_env!("OMC_FMILIB_LDFLAGS") {
     Some(s) => s,
     None => "",
 };
@@ -264,7 +279,9 @@ pub static systemLibs: std::sync::LazyLock<metamodelica::List<ArcStr>> =
 /// `$host_cpu` for the compilation target. Extend the chain when porting to
 /// a new architecture — an explicit "unknown" keeps path construction
 /// greppable rather than silently wrong.
-pub(crate) const target_arch_str: &str = if cfg!(target_arch = "x86_64") {
+pub(crate) const target_arch_str: &str = if cfg!(target_arch = "wasm32") {
+    "wasm32"
+} else if cfg!(target_arch = "x86_64") {
     "x86_64"
 } else if cfg!(target_arch = "aarch64") {
     "aarch64"
@@ -279,7 +296,9 @@ pub(crate) const target_arch_str: &str = if cfg!(target_arch = "x86_64") {
 };
 
 /// `-$host_os` for the compilation target.
-const os_triple_suffix: &str = if cfg!(all(windows, target_env = "gnu")) {
+const os_triple_suffix: &str = if isWasm {
+    "-wasip1"
+} else if cfg!(all(windows, target_env = "gnu")) {
     "-windows-gnu"
 } else if cfg!(windows) {
     "-windows-msvc"

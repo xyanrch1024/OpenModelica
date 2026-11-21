@@ -2,6 +2,7 @@
 //! `finishCompile`, `emitStandalone`, `runSimulationWasmtime`.
 
 use super::*;
+use openmodelica_sim_meta::omclog;
 
 /// Mirror `-n` into the engine, before anything reaches the JIT.
 pub(super) fn sync_engine_threading() -> Result<()> {
@@ -15,7 +16,7 @@ pub(super) fn sync_engine_threading() -> Result<()> {
 /// buffer (so `getErrorString` / OMEdit show it) and the failure is returned so
 /// translation fails — as the other codegen targets do — never a stderr print or
 /// a panic (a panic would trap the wasm instance and lose the buffered message).
-pub fn translateModel(simCode: SimCode::SimCode) -> Result<()> {
+pub fn translateModel(simCode: metamodelica::Ref<SimCode::SimCode>) -> Result<()> {
     sync_engine_threading()?;
     sim_runtime::start_runtime_compile();
     let prefix = simCode.fileNamePrefix.to_string();
@@ -45,11 +46,26 @@ pub fn translateModel(simCode: SimCode::SimCode) -> Result<()> {
 fn init_success_line() -> String {
     let steps = sim_driver::init_homotopy_steps();
     if steps == 0 {
-        "LOG_SUCCESS       | info    | The initialization finished successfully without homotopy method.".to_string()
+        success_line("The initialization finished successfully without homotopy method.")
     } else {
         let local = if sim_driver::init_homotopy_local() { "local " } else { "" };
-        format!("LOG_SUCCESS       | info    | The initialization finished successfully with {steps} {local}homotopy steps.")
+        success_line(&format!("The initialization finished successfully with {steps} {local}homotopy steps."))
     }
+}
+
+/// One line of the run's own log in the format the driver's lines use: a
+/// `<message>` element under `-logFormat=xml` (as the native runtime's `success`
+/// writes it), so OMEdit parses the whole log, else `text`, the C text layout.
+fn log_line(stream: omclog::Stream, ty: omclog::LogType, text: &str, msg: &str) -> String {
+    if omclog::is_xml() {
+        omclog::xml_element(ty, stream, false, msg, &[])
+    } else {
+        format!("{text}\n")
+    }
+}
+
+fn success_line(msg: &str) -> String {
+    log_line(omclog::SUCCESS, omclog::INFO, &format!("LOG_SUCCESS       | info    | {msg}"), msg)
 }
 
 /// A run reports itself through `<prefix>.log` alone, which `simulate` returns as
@@ -82,12 +98,12 @@ pub fn runSimulation(fileNamePrefix: ArcStr, resultFile: ArcStr, simflags: ArcSt
     // A failed run keeps the init line too, as C does.
     let init_done = init_output.is_some();
     let init_out = init_output.unwrap_or_default();
-    let init_seg = if init_done { format!("{init_out}{init_line}\n") } else { init_out };
+    let init_seg = if init_done { format!("{init_out}{init_line}") } else { init_out };
     let log = match &res {
         // Init prints, the init line, then the sim prints and the final success.
         Ok(()) => format!(
-            "{init_seg}{sim_output}\
-             LOG_SUCCESS       | info    | The simulation finished successfully.\n{post_output}"
+            "{init_seg}{sim_output}{}{post_output}",
+            success_line("The simulation finished successfully.")
         ),
         // Chattering abort (`-abortSlowSimulation`): the driver's output carries the
         // chattering + aborting lines.
@@ -101,14 +117,16 @@ pub fn runSimulation(fileNamePrefix: ArcStr, resultFile: ArcStr, simflags: ArcSt
         {
             format!("{init_seg}{sim_output}")
         }
-        Err(e) => format!(
-            "{init_seg}{sim_output}LOG_ERROR         | error   | wasm-jit simulation failed: {}\n",
-            with_engine_detail(e)
-        ),
+        Err(e) => {
+            let msg = format!("wasm-jit simulation failed: {}", with_engine_detail(e));
+            let line = log_line(omclog::STDOUT, omclog::ERROR, &format!("LOG_ERROR         | error   | {msg}"), &msg);
+            format!("{init_seg}{sim_output}{line}")
+        }
     };
     // C's `freeNonlinearSystems`, the last thing a simulation executable logs.
-    let log = if openmodelica_sim_meta::omclog::active(openmodelica_sim_meta::omclog::NLS) {
-        format!("{log}LOG_NLS           | info    | free non-linear system solvers\n")
+    let log = if omclog::active(omclog::NLS) {
+        let msg = "free non-linear system solvers";
+        format!("{log}{}", log_line(omclog::NLS, omclog::INFO, &format!("LOG_NLS           | info    | {msg}"), msg))
     } else {
         log
     };
@@ -169,6 +187,20 @@ pub fn finishCompile(fileNamePrefix: ArcStr) -> Result<()> {
         Err(_) => {}
     }
     let missing = missing_ext_symbols(&model.ext_imports, &model.ext_libs);
+    if !missing.is_empty() && !native_externals_allowed() {
+        let names: Vec<&str> = missing.iter().map(|s| s.name.as_str()).collect();
+        let mut msg = format!(
+            "CodegenWasmJit: no wasm library defines the model's `external \"C\"` function(s) `{}`, \
+             and OMC_WASM_NATIVE_EXTERNALS=0 refuses the native ones",
+            names.join("`, `")
+        );
+        for note in &model.ext_lib_notes {
+            msg.push_str("\n  ");
+            msg.push_str(note);
+        }
+        record_error(msg);
+        return Err("CodegenWasmJit: external \"C\" implementation unavailable");
+    }
     if let Err(e) = sim_runtime::prepare_native_externals(&model, &missing) {
         record_error(format!("CodegenWasmJit: the model's `external \"C\"` implementations are unavailable:\n{e}"));
         return Err("CodegenWasmJit: external \"C\" implementation unavailable");
@@ -184,7 +216,7 @@ pub fn finishCompile(fileNamePrefix: ArcStr) -> Result<()> {
 /// separate `wasmtime` process. Native only (the omc wasm build cannot `wasm-merge`).
 /// A failure is recorded to the Error buffer and returned so translation fails.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn emitStandalone(simCode: SimCode::SimCode) -> Result<()> {
+pub fn emitStandalone(simCode: metamodelica::Ref<SimCode::SimCode>) -> Result<()> {
     let prefix = simCode.fileNamePrefix.to_string();
     let _ = std::fs::remove_file(format!("{prefix}.wasm"));
     let bytes = emit_standalone_module(&simCode).map_err(|e| {
@@ -201,7 +233,7 @@ pub fn emitStandalone(simCode: SimCode::SimCode) -> Result<()> {
 /// The omc wasm build cannot `wasm-merge` the standalone module; record why and
 /// fail so translation reports it rather than emitting a silent empty module.
 #[cfg(target_arch = "wasm32")]
-pub fn emitStandalone(simCode: SimCode::SimCode) -> Result<()> {
+pub fn emitStandalone(simCode: metamodelica::Ref<SimCode::SimCode>) -> Result<()> {
     let _ = simCode;
     let msg = "CodegenWasmJit: simCodeTarget=wasm (standalone export) is unavailable in the wasm omc build";
     record_error(msg.to_string());
@@ -231,7 +263,7 @@ pub fn runSimulationWasmtime(fileNamePrefix: ArcStr, resultFile: ArcStr, simflag
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn run_wasmtime_inner(prefix: &str, result_file: &str, _simflags: &str) -> Result<()> {
+fn run_wasmtime_inner(prefix: &str, result_file: &str, simflags: &str) -> Result<()> {
     use std::process::Command;
     let module = format!("{prefix}.wasm");
     if !std::path::Path::new(&module).exists() {
@@ -251,6 +283,7 @@ fn run_wasmtime_inner(prefix: &str, result_file: &str, _simflags: &str) -> Resul
         .arg("--dir")
         .arg(".::.")
         .arg(&module)
+        .args(split_simflags(simflags))
         .status()
         .map_err(|e| "cannot run (is it on PATH? override with OMC_WASMTIME)")?;
     if !status.success() {

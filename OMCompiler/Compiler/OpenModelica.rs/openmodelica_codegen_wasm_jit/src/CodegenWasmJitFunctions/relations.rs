@@ -4,11 +4,11 @@ use super::*;
 
 pub(super) fn compile_relation(
     ctx: &mut FnCtx,
-    e1: &Arc<DAE::Exp>,
+    e1: &metamodelica::Ref<DAE::Exp>,
     op: &DAE::Operator,
-    e2: &Arc<DAE::Exp>,
+    e2: &metamodelica::Ref<DAE::Exp>,
     index: i32,
-    asub: &Option<(Arc<DAE::Exp>, i32, i32)>,
+    asub: &Option<(metamodelica::Ref<DAE::Exp>, i32, i32)>,
 ) -> Result<WTy> {
     use DAE::Operator as O;
     // String comparisons go through the runtime: equality via `rt_streq`,
@@ -58,15 +58,17 @@ pub(super) fn compile_relation(
 /// (`0 <= index < n_relations`).
 fn compile_relation_indexed(
     ctx: &mut FnCtx,
-    e1: &Arc<DAE::Exp>,
+    e1: &metamodelica::Ref<DAE::Exp>,
     op: &DAE::Operator,
-    e2: &Arc<DAE::Exp>,
+    e2: &metamodelica::Ref<DAE::Exp>,
     index: i32,
-    asub: &Option<(Arc<DAE::Exp>, i32, i32)>,
+    asub: &Option<(metamodelica::Ref<DAE::Exp>, i32, i32)>,
 ) -> Result<WTy> {
     use DAE::Operator as O;
+    let time_event = time_event_trigger(e1, op, e2, index, asub).is_some();
     let real_ineq = operand_type_of_relation(op)? == WTy::F64
-        && matches!(op, O::LESS { .. } | O::LESSEQ { .. } | O::GREATER { .. } | O::GREATEREQ { .. });
+        && matches!(op, O::LESS { .. } | O::LESSEQ { .. } | O::GREATER { .. } | O::GREATEREQ { .. })
+        && !time_event;
     let data = ctx.sim()?.data_local;
     // Region bases: `relations[]` (live), `relationsPre[]` (held) and the held
     // snapshot the hysteresis band's direction reads. Element `k` is at
@@ -98,7 +100,11 @@ fn compile_relation_indexed(
     ctx.emit(we::Instruction::I32Add); // data + eff_index*4
     ctx.emit(we::Instruction::LocalSet(slot));
     if zc_context {
-        if real_ineq {
+        // A time event switches it, so the root function never sees it move.
+        if time_event {
+            ctx.emit(we::Instruction::LocalGet(slot));
+            ctx.emit(we::Instruction::I32Load(mem_arg(dir_off, 2)));
+        } else if real_ineq {
             compile_relation_hyst(ctx, e1, op, e2, slot, dir_off)?;
         } else {
             compile_relation_fresh(ctx, e1, op, e2)?;
@@ -145,9 +151,9 @@ fn compile_relation_indexed(
 /// `tolZC` is read from `SimData` (`zctol_off`).
 fn compile_relation_hyst(
     ctx: &mut FnCtx,
-    e1: &Arc<DAE::Exp>,
+    e1: &metamodelica::Ref<DAE::Exp>,
     op: &DAE::Operator,
-    e2: &Arc<DAE::Exp>,
+    e2: &metamodelica::Ref<DAE::Exp>,
     slot: u32,
     dir_off: u32,
 ) -> Result<()> {
@@ -202,17 +208,22 @@ fn compile_relation_hyst(
 
 /// Emit `diff <op> (±eps)`, leaving an i32 boolean. `dir` is the current relation
 /// value; it selects which side of the band the boundary sits on so the relation
-/// resists flipping.
+/// resists flipping. On the band edge `dir` decides too, so a band of width zero
+/// keeps the current value (C's `LessZC`/`GreaterZC`).
 fn emit_hyst_cmp(ctx: &mut FnCtx, op: &DAE::Operator, diff: u32, eps: u32, dir: bool) -> Result<()> {
     use DAE::Operator as O;
     use we::Instruction as I;
-    // (comparison, whether the +eps edge applies for this direction).
-    let (cmp, plus) = match op {
-        O::LESSEQ { .. } => (I::F64Lt, dir),
-        O::LESS { .. } => (I::F64Le, dir),
-        O::GREATER { .. } => (I::F64Ge, !dir),
-        O::GREATEREQ { .. } => (I::F64Gt, !dir),
+    let less = match op {
+        O::LESS { .. } | O::LESSEQ { .. } => true,
+        O::GREATER { .. } | O::GREATEREQ { .. } => false,
         other => return Err("CodegenWasmJit: non-inequality in hysteresis path"),
+    };
+    // (comparison, whether the +eps edge applies for this direction).
+    let (cmp, plus) = match (less, dir) {
+        (true, true) => (I::F64Le, true),
+        (true, false) => (I::F64Lt, false),
+        (false, true) => (I::F64Ge, false),
+        (false, false) => (I::F64Gt, true),
     };
     ctx.emit(I::LocalGet(diff));
     ctx.emit(I::LocalGet(eps));
@@ -226,7 +237,7 @@ fn emit_hyst_cmp(ctx: &mut FnCtx, op: &DAE::Operator, diff: u32, eps: u32, dir: 
 /// Leave `max(|nominal(e1)|, |nominal(e2)|)` — the scale term of the hysteresis
 /// band — on the stack as an f64, from the same `getExpNominal` derivation C's
 /// `daeExpNominalTmp` uses.
-fn emit_relation_nominal(ctx: &mut FnCtx, e1: &Arc<DAE::Exp>, e2: &Arc<DAE::Exp>) -> Result<()> {
+fn emit_relation_nominal(ctx: &mut FnCtx, e1: &metamodelica::Ref<DAE::Exp>, e2: &metamodelica::Ref<DAE::Exp>) -> Result<()> {
     let n1 = nominal_exp(e1);
     let n2 = nominal_exp(e2);
     match (nominal_const(&n1), nominal_const(&n2)) {
@@ -244,9 +255,28 @@ fn emit_relation_nominal(ctx: &mut FnCtx, e1: &Arc<DAE::Exp>, e2: &Arc<DAE::Exp>
     Ok(())
 }
 
-fn nominal_exp(e: &Arc<DAE::Exp>) -> Arc<DAE::Exp> {
-    openmodelica_backend::SimCodeUtil::getExpNominal(Arc::clone(e))
-        .unwrap_or_else(|_| Arc::new(DAE::Exp::RCONST { real: 1.0.into() }))
+/// C's `timeEventTrigger`: the `e` of a relation `time >= e` / `time < e` that
+/// only switches when time reaches it, so it needs no hysteresis band.
+pub(crate) fn time_event_trigger(
+    e1: &metamodelica::Ref<DAE::Exp>,
+    op: &DAE::Operator,
+    e2: &metamodelica::Ref<DAE::Exp>,
+    index: i32,
+    asub: &Option<(metamodelica::Ref<DAE::Exp>, i32, i32)>,
+) -> Option<metamodelica::Ref<DAE::Exp>> {
+    let rel = metamodelica::Ref::new(DAE::Exp::RELATION {
+        exp1: e1.clone(),
+        operator: op.clone(),
+        exp2: e2.clone(),
+        index,
+        optionExpisASUB: asub.clone(),
+    });
+    openmodelica_codegen_util::SimCodeCodegenUtil::timeEventTrigger(&rel).ok().flatten()
+}
+
+fn nominal_exp(e: &metamodelica::Ref<DAE::Exp>) -> metamodelica::Ref<DAE::Exp> {
+    openmodelica_codegen_util::SimCodeCodegenUtil::getExpNominal(e.clone())
+        .unwrap_or_else(|_| metamodelica::Ref::new(DAE::Exp::RCONST { real: 1.0.into() }))
 }
 
 fn nominal_const(e: &DAE::Exp) -> Option<f64> {
@@ -328,7 +358,7 @@ fn relation_operand_sigty(op: &DAE::Operator) -> Result<SigTy> {
 pub(super) fn compile_call(
     ctx: &mut FnCtx,
     path: &Absyn::Path,
-    args: &List<Arc<DAE::Exp>>,
+    args: &List<metamodelica::Ref<DAE::Exp>>,
     attr: &DAE::CallAttributes,
 ) -> Result<Vec<SigTy>> {
     // A call through a function-reference variable: `call_indirect` on the
@@ -340,27 +370,34 @@ pub(super) fn compile_call(
         return closures::compile_fnptr_call(ctx, name, args);
     }
     let mangled = mangle(path)?;
-    // A call to another generated function. Heap arguments are passed as owned
-    // (+1) references — a generated function *consumes* its heap parameters
-    // (they are released at its scope exit), so the caller does not release them
-    // after the call.
+    if let Some(outs) = compile_flat_call(ctx, &mangled, args)? {
+        let results = ctx.by_name[&mangled].sig.results.clone();
+        for (vals, r) in outs.iter().zip(&results) {
+            match flat_fields(r) {
+                Some(fields) => box_flat(ctx, &fields.clone(), vals)?,
+                None => ctx.emit(we::Instruction::LocalGet(vals[0])),
+            }
+        }
+        return Ok(results);
+    }
+    // A call to another generated function. String and array arguments are
+    // passed as owned (+1) references, which the callee releases at its scope
+    // exit; record arguments are borrowed (see `compile_call_args`).
     if let Some(info) = ctx.by_name.get(&mangled) {
         let params = info.sig.params.clone();
         let results = info.sig.results.clone();
         let index = info.index;
-        let argv: Vec<&Arc<DAE::Exp>> = (&**args).into_iter().collect();
+        let argv: Vec<&metamodelica::Ref<DAE::Exp>> = (&**args).into_iter().collect();
         if argv.len() != params.len() {
             return Err("CodegenWasmJit: call argument count mismatch");
         }
-        for (a, p) in argv.iter().zip(params.iter()) {
-            let w = compile_exp(ctx, a)?;
-            coerce(ctx, w, p.wty());
-        }
+        let temps = compile_call_args(ctx, &argv, &params)?;
         // C's `SIM_PROF_TICK_FN` / `SIM_PROF_ACC_FN` around a profiled call.
         let clock = prof_fn_clock(ctx, &mangled);
         emit_prof(ctx, clock, "rt_prof_tick")?;
         ctx.emit(we::Instruction::Call(index));
         emit_prof(ctx, clock, "rt_prof_acc")?;
+        release_record_temps(ctx, &temps)?;
         return Ok(results);
     }
     // A call whose result is a record and which is not a generated function is a
@@ -374,11 +411,11 @@ pub(super) fn compile_call(
         return Ok(vec![rty]);
     }
     // Otherwise it must be a (builtin) math/string function.
-    let name = AbsynUtil::pathLastIdent(Arc::new(path.clone())).to_string();
+    let name = AbsynUtil::pathLastIdent(&metamodelica::Ref::new(path.clone())).to_string();
     // `print(s)`: write the String to the model's stdout via the host `rt_print`.
     // A void procedure, so it yields no result; the owned handle is released after.
     if name == "print" {
-        let argv: Vec<&Arc<DAE::Exp>> = (&**args).into_iter().collect();
+        let argv: Vec<&metamodelica::Ref<DAE::Exp>> = (&**args).into_iter().collect();
         if argv.len() != 1 {
             return Err("CodegenWasmJit: print expects one argument");
         }
@@ -399,4 +436,56 @@ pub(super) fn compile_call(
         return compile_spatial_distribution(ctx, args).map(|_| vec![SigTy::Real, SigTy::Real]);
     }
     compile_math_builtin(ctx, &name, args, attr).map(|s| vec![s])
+}
+
+/// Push the arguments of a call to a generated function. A record parameter is
+/// borrowed: a record local is passed as is, and any other record value goes
+/// through a temp the caller releases after the call (returned here).
+pub(super) fn compile_call_args(
+    ctx: &mut FnCtx,
+    argv: &[&metamodelica::Ref<DAE::Exp>],
+    params: &[SigTy],
+) -> Result<Vec<u32>> {
+    let mut temps = Vec::new();
+    for (a, p) in argv.iter().zip(params.iter()) {
+        if matches!(p, SigTy::Record { .. }) {
+            if let Some(idx) = record_local(ctx, a) {
+                ctx.emit(we::Instruction::LocalGet(idx));
+                continue;
+            }
+            compile_exp(ctx, a)?;
+            let t = ctx.alloc_temp(WTy::I32);
+            ctx.emit(we::Instruction::LocalTee(t));
+            temps.push(t);
+            continue;
+        }
+        let w = compile_exp(ctx, a)?;
+        coerce(ctx, w, p.wty());
+    }
+    Ok(temps)
+}
+
+pub(super) fn release_record_temps(ctx: &mut FnCtx, temps: &[u32]) -> Result<()> {
+    for t in temps {
+        ctx.emit(we::Instruction::LocalGet(*t));
+        ctx.emit(we::Instruction::Call(rt_index("rt_record_release")?));
+    }
+    Ok(())
+}
+
+/// The wasm local holding `e` when it is a plain reference to a record local of
+/// a function body (sim-mode crefs may name model variables instead).
+pub(super) fn record_local(ctx: &FnCtx, e: &DAE::Exp) -> Option<u32> {
+    if ctx.sim.is_some() {
+        return None;
+    }
+    let DAE::Exp::CREF { componentRef, .. } = e else { return None };
+    let DAE::ComponentRef::CREF_IDENT { ident, subscriptLst, .. } = &**componentRef else { return None };
+    if !subscriptLst.is_empty() {
+        return None;
+    }
+    match ctx.locals.get(ident.as_str()) {
+        Some((idx, SigTy::Record { .. })) => Some(*idx),
+        _ => None,
+    }
 }

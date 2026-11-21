@@ -1,7 +1,9 @@
 TEST = ../../../rtest -v
 
 TESTFILES = \
+	WhenIfStatements.mos \
 bug1228.mos \
+divisionByZeroAtEvent.mos \
 bug2667.mos \
 bug2718.mos \
 bug2752.mos \
@@ -11,6 +13,8 @@ bug3358.mos \
 bug4419.mos \
 ChatteringEventsTest1.mos \
 ChatteringEventsTest2.mos \
+ChatteringEventsTestXML.mos \
+WasmJitInfoJson.mos \
 CheckEvents.mos \
 cseOutsideNoEvent.mos \
 DelayZeroCrossing.mos \

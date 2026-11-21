@@ -39,7 +39,8 @@
 
 #![allow(non_snake_case)]
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+use crate::CodegenWasmJitFunctions::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 use std::sync::Arc;
 
@@ -56,17 +57,17 @@ use openmodelica_simcode_types::SimCodeFunction;
 use openmodelica_frontend_dump::ComponentReferenceBasics;
 
 use crate::CodegenWasmJitFunctions::{
-    ArrayGroup, Attr, AttrTargets, BUILTINS, ConstGroup, ENV_EXTRA, ExtCallSig, FnCtx, FnInfo, Literals, NLS_BASE_GLOBAL, NLS_HIST_GLOBAL, NlsJob, RT_BUILTINS,
-    ProfPlan, ScatterGroup, SimCtx, SimSlot, WTy, WTyVal, compile_function, compile_linear_system, compile_linear_system_analytic,
+    ArrayGroup, Attr, AttrTargets, AttrTargetMap, BUILTINS, ConstGroup, ENV_EXTRA, ExtCallSig, FnCtx, FnInfo, Literals, NLS_BASE_GLOBAL, NLS_HIST_GLOBAL, NlsJob, RT_BUILTINS,
+    ProfPlan, ScatterGroup, SimCtx, SimSlot, SlotMap, VarTable, KeyTable, StartExps, StartSlot, AliasTarget, split_elem_key, WTy, WTyVal, compile_function, compile_linear_system, compile_linear_system_analytic,
     compile_linear_system_analytic_csc, compile_linear_system_symbolic,
     ClockInit, ClockUpdate,
-    IterSlot, NlsResidual, NlsResiduals, backup_known_outputs, residual_rows, restore_known_outputs,
+    IterBlock, IterSlot, NlsResidual, NlsResiduals, backup_known_outputs, residual_rows, restore_known_outputs,
     emit_nls_load_body, emit_nls_jac_body, emit_nls_jac_csc_body, nls_use_sparse,
     emit_entwined_assign, emit_generic_assign, emit_resizable_assign,
     emit_nls_residual_body, emit_nls_residual_prologue, emit_nls_residual_epilogue,
-    emit_nls_residual_store, emit_solve_nls_call, external_import_sig, external_known,
+    emit_nls_residual_store, nls_residuals_all_scalar, emit_solve_nls_call, external_import_sig, external_known,
     external_general_why, note_declined_external, reset_declined_externals,
-    function_signature, rt_index, sim_cref_key, sim_const_store,
+    function_signature, rt_index, sim_cref_key, resolve_sim_key, flat_sim_key, sim_const_store, ConstSlot,
     emit_sim_const_stores,
 };
 
@@ -79,7 +80,7 @@ use openmodelica_sim_meta::simflags;
 use openmodelica_sim_meta::{
     var_filter, BaseClockMeta, BaseUnit, DisplayUnit, FmiVr, JacAInfo, Layout as SimLayout,
     MetaKind as ResultKind, MetaVar as ResultVar, Neg, SimMeta, StateSetInfo, SubClockMeta,
-    UnitDef, VarTy,
+    UnitDef, VarArray, VarTy, expand_var_arrays,
 };
 
 // Engine selected at compile time; same module interface across all three
@@ -140,13 +141,12 @@ use openmodelica_wasm_jit::FMI3_ME_ADAPTER;
 use openmodelica_wasm_jit::FMI3_MECS_ADAPTER;
 /// LAPACK for the `external "FORTRAN 77"` calls of `Modelica.Math.Matrices`, which
 /// a host-free FMU has no system library to resolve.
-use openmodelica_wasm_jit::LAPACK_DYLINK;
 /// The solvers the me_cs adapter's embedded driver calls, one side module each.
 use openmodelica_wasm_jit::{sundials_dylink_available as sundials_available, SOLVER_LIBRARIES};
 /// The external-"C" FMU artifacts, linked in only when the model uses `external
 /// "C"`. Any is empty when that omc was built without the toolchain.
 use openmodelica_wasm_jit::{
-    external_c_available, EXTERNAL_C_DYLINK, LIBC_PIC, USERTAB_DYLINK, WASI_P1_ADAPTER,
+    external_c_available, LIBC_PIC, USERTAB_DYLINK, WASI_P1_ADAPTER,
 };
 
 // Small shared helpers: list iteration, constant folding of literal
@@ -195,6 +195,9 @@ pub use standalone::*;
 #[path = "CodegenWasmJit/ext_libs.rs"]
 mod ext_libs;
 pub(crate) use ext_libs::*;
+#[path = "CodegenWasmJit/prebuilt.rs"]
+mod prebuilt;
+pub(crate) use prebuilt::*;
 
 // Byte-level rewrites of emitted wasm modules: `dylink.0` sections, import
 // module renames, dropping imports/exports, scanning imports and exports.
@@ -230,6 +233,10 @@ pub use fmu::*;
 #[path = "CodegenWasmJit/var_map.rs"]
 mod var_map;
 pub(crate) use var_map::*;
+
+#[path = "CodegenWasmJit/resizable.rs"]
+mod resizable;
+pub(crate) use resizable::*;
 
 // Zero crossings, relations, `sample()` and clock collection.
 #[path = "CodegenWasmJit/events.rs"]

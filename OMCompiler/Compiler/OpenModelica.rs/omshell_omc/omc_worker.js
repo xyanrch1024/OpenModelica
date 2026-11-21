@@ -42,6 +42,8 @@ import init, {
 // OMEdit web client). A named import of a missing export would break the worker
 // for OMShell/OMNotebook, so reach it through the namespace and feature-detect it.
 import * as OmcModule from "./omc/OpenModelicaCompiler.js";
+import { installWasmBlobs } from "./wasm-blobs.js";
+import { installFmuAot } from "./fmu-aot.js";
 
 // Self-ID so a page console shows which omc_worker.js loaded (cache diagnosis).
 console.log("omc_worker.js loaded (WASI file surface)");
@@ -55,6 +57,8 @@ console.log("omc_worker.js loaded (WASI file surface)");
 //   [3] generation main→both  bumped per op so a stale read is ignored
 // Null-safe until the main thread hands over the buffer (`controlBuf`/`cancelBuf`).
 let controlView = null;
+// Set once the page hands over a port to the FMU native-platform compiler.
+let fmuAot = false;
 globalThis.__omcPollCancel = () => (controlView ? Atomics.load(controlView, 0) : 0);
 globalThis.__omcReportProgress = (permille, phase) => {
   // Guard length so an older 4-byte (cancel-only) buffer doesn't throw.
@@ -192,6 +196,14 @@ async function doInit(installMsl) {
   if (typeof OmcModule.omc_enable_progress_sink === "function") {
     OmcModule.omc_enable_progress_sink();
   }
+  // The bundle's side modules (feature-detected).
+  if (typeof OmcModule.omc_enable_wasm_blobs === "function") {
+    installWasmBlobs();
+    OmcModule.omc_enable_wasm_blobs();
+  }
+  if (fmuAot && typeof OmcModule.omc_enable_fmu_aot === "function") {
+    OmcModule.omc_enable_fmu_aot();
+  }
   // The browser omc has no pre-installed library, so install the MSL to make the
   // shell immediately usable. Best-effort: a failure (e.g. no network) only
   // surfaces its diagnostics, it does not stop the shell from starting. A client
@@ -203,7 +215,11 @@ async function doInit(installMsl) {
     message = cleanError(omc_eval("getErrorString()"));
   }
   const version = unquote(trim(omc_eval("getVersion()")));
-  return { kind: "ready", ok: true, version, message };
+  const fmuPlatforms =
+    fmuAot && typeof OmcModule.omc_fmu_platforms === "function" ? OmcModule.omc_fmu_platforms() : [];
+  const fmuCsSolvers =
+    typeof OmcModule.omc_fmu_cs_solvers === "function" ? OmcModule.omc_fmu_cs_solvers() : [];
+  return { kind: "ready", ok: true, version, message, fmuPlatforms, fmuCsSolvers };
 }
 
 // Plot commands the eval recorded, each with the bytes of its result file from
@@ -244,6 +260,11 @@ self.onmessage = async (e) => {
   // the old name for the same message (a 4-byte cancel-only buffer).
   if (msg.cmd === "controlBuf" || msg.cmd === "cancelBuf") {
     try { controlView = msg.buf ? new Int32Array(msg.buf) : null; } catch (_) { controlView = null; }
+    return;
+  }
+  if (msg.cmd === "fmuAotPort") {
+    installFmuAot(msg.port);
+    fmuAot = true;
     return;
   }
   await ready;
@@ -290,6 +311,17 @@ self.onmessage = async (e) => {
       let written = 0;
       try { written = wasi_write_files(msg.entries); } catch (e) { written = -1; }
       self.postMessage({ kind: "vfsPutManyResult", id: msg.id, written });
+    } else if (msg.cmd === "vfsLoadZip") {
+      // A zipped library the GUI picked: unzipped straight into this store, so
+      // loadFile finds the Resources/ next to the .mo.
+      let written = -1;
+      let error = "";
+      try {
+        written = OmcModule.omc_vfs_load_zip(msg.mount, msg.bytes);
+      } catch (e) {
+        error = String(e);
+      }
+      self.postMessage({ kind: "vfsLoadZipResult", id: msg.id, written, error });
     } else if (msg.cmd === "vfsRemove") {
       // File or whole subtree; the store's directories are implicit.
       let ok = false;

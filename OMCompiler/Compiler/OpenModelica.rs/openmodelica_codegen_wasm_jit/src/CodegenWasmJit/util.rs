@@ -9,6 +9,11 @@ pub(crate) fn lst<T: Clone>(l: &List<T>) -> impl Iterator<Item = &T> {
     l.iter()
 }
 
+/// Iterate a `SimVar` list by the records themselves.
+pub(crate) fn svs(l: &List<metamodelica::Ref<SimCodeVar::SimVar>>) -> impl Iterator<Item = &SimCodeVar::SimVar> {
+    l.iter().map(|v| &**v)
+}
+
 /// Record the reason as an `INTERNAL_ERROR` so `getErrorString()` (and OMEdit)
 /// show it and the scripting layer treats the build as failed. Does NOT panic: a
 /// panic traps the wasm instance, after which the buffered error can't be read
@@ -54,7 +59,7 @@ pub(super) fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-pub(super) fn const_real(e: &Option<Arc<DAE::Exp>>) -> Option<f64> {
+pub(super) fn const_real(e: &Option<metamodelica::Ref<DAE::Exp>>) -> Option<f64> {
     match e.as_deref()? {
         DAE::Exp::RCONST { real } => Some(real.into_inner()),
         DAE::Exp::ICONST { integer } => Some(*integer as f64),
@@ -62,7 +67,7 @@ pub(super) fn const_real(e: &Option<Arc<DAE::Exp>>) -> Option<f64> {
     }
 }
 
-pub(super) fn const_int(e: &Option<Arc<DAE::Exp>>) -> Option<i32> {
+pub(super) fn const_int(e: &Option<metamodelica::Ref<DAE::Exp>>) -> Option<i32> {
     match e.as_deref()? {
         DAE::Exp::ICONST { integer } => Some(*integer),
         DAE::Exp::BCONST { bool } => Some(*bool as i32),
@@ -71,14 +76,14 @@ pub(super) fn const_int(e: &Option<Arc<DAE::Exp>>) -> Option<i32> {
     }
 }
 
-pub(super) fn const_str(e: &Option<Arc<DAE::Exp>>) -> Option<String> {
+pub(super) fn const_str(e: &Option<metamodelica::Ref<DAE::Exp>>) -> Option<String> {
     match e.as_deref()? {
         DAE::Exp::SCONST { string } => Some(string.to_string()),
         _ => None,
     }
 }
 
-pub(super) fn dump_exp(e: &Arc<DAE::Exp>) -> String {
+pub(super) fn dump_exp(e: &metamodelica::Ref<DAE::Exp>) -> String {
     openmodelica_frontend_dump::ExpressionBasics::printExpStr(e.clone())
         .map(|s| s.to_string())
         .unwrap_or_default()
@@ -86,8 +91,8 @@ pub(super) fn dump_exp(e: &Arc<DAE::Exp>) -> String {
 
 /// A fresh `T_REAL` type for synthesizing the lhs `CREF` expression of a simple
 /// assignment (the type is not consulted on the simulation cref path).
-pub(crate) fn t_real() -> Arc<DAE::Type> {
-    Arc::new(DAE::Type::T_REAL { varLst: metamodelica::nil() })
+pub(crate) fn t_real() -> metamodelica::Ref<DAE::Type> {
+    metamodelica::Ref::new(DAE::Type::T_REAL { varLst: metamodelica::nil() })
 }
 
 pub(crate) fn count<T: Clone>(list: &List<T>) -> usize {

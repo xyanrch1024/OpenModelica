@@ -818,6 +818,7 @@ void freeSparsePattern(SPARSE_PATTERN *spp)
  * @brief Distance-1 column coloring of a CSC sparse pattern.
  *
  * Two columns may share a color only if they have no non-zero row in common.
+ * The rows of every column are sorted and made unique first.
  * Uses ColPack's partial distance-two column coloring when available, with
  * a greedy C-only fallback.
  * The fallback uses the existing cscToCsr helper to build the row→columns map, then
@@ -833,6 +834,36 @@ void freeSparsePattern(SPARSE_PATTERN *spp)
  * @param nRows  Number of rows in the Jacobian.
  * @param nCols  Number of columns (== size of sp->colorCols).
  */
+static int compareUnsigned(const void* a, const void* b)
+{
+  const unsigned int x = *(const unsigned int*) a, y = *(const unsigned int*) b;
+  return (x > y) - (x < y);
+}
+
+/**
+ * @brief Sorts the rows of every column and removes duplicates in place.
+ *
+ * Runtime built patterns can contain the same entry twice, e.g. an array seed
+ * over a whole dimension and one of its elements in the same row.
+ */
+static void sortUniqueSparsePattern(SPARSE_PATTERN* sp, unsigned int nCols)
+{
+  unsigned int col, nz, start, end, out = 0;
+  for (col = 0; col < nCols; col++) {
+    start = sp->leadindex[col];
+    end = sp->leadindex[col + 1];
+    qsort(sp->index + start, end - start, sizeof(unsigned int), compareUnsigned);
+    sp->leadindex[col] = out;
+    for (nz = start; nz < end; nz++) {
+      if (nz == start || sp->index[nz] != sp->index[nz - 1]) {
+        sp->index[out++] = sp->index[nz];
+      }
+    }
+  }
+  sp->leadindex[nCols] = out;
+  sp->nnz = out;
+}
+
 void computeColumnColoring(SPARSE_PATTERN* sp, unsigned int nRows, unsigned int nCols)
 {
   if (!sp || !sp->colorCols) return;
@@ -840,6 +871,7 @@ void computeColumnColoring(SPARSE_PATTERN* sp, unsigned int nRows, unsigned int 
     sp->maxColors = 0;
     return;
   }
+  sortUniqueSparsePattern(sp, nCols);
 
 #if defined(OMC_HAVE_COLPACK)
   if (computeColPackColumnColoring(
@@ -965,6 +997,7 @@ FILE * openSparsePatternFile(DATA* data, threadData_t *threadData, const char* f
   if (pFile == NULL) {
     throwStreamPrint(threadData, "Could not open sparsity pattern file %s.", fullPath);
   }
+  omc_rc_release((void*) fullPath);
   return pFile;
 }
 
@@ -1074,33 +1107,9 @@ JACOBIAN_METHOD checkJacobianMethod(threadData_t* threadData, JACOBIAN_AVAILABIL
   }
 
   /* Log Jacobian method */
-  switch (jacobianMethod)
-  {
-  case INTERNALNUMJAC:
-    infoStreamPrint(OMC_LOG_JAC, 0, "Using Jacobian method: Internal numerical Jacobian.");
-    break;
-  case NUMJAC:
-    infoStreamPrint(OMC_LOG_JAC, 0, "Using Jacobian method: Numerical Jacobian.");
-    break;
-  case COLOREDNUMJAC:
-    infoStreamPrint(OMC_LOG_JAC, 0, "Using Jacobian method: Colored numerical Jacobian.");
-    break;
-  case SYMJAC:
-    infoStreamPrint(OMC_LOG_JAC, 0, "Using Jacobian method: Symbolical Jacobian.");
-    break;
-  case COLOREDSYMJAC:
-    infoStreamPrint(OMC_LOG_JAC, 0, "Using Jacobian method: Colored symbolical Jacobian.");
-    break;
-  case COLOREDSYMJACADJ:
-    infoStreamPrint(OMC_LOG_JAC, 0, "Using Jacobian method: Colored symbolical adjoint Jacobian.");
-    break;
-  case BICOLOREDSYMJAC:
-    infoStreamPrint(OMC_LOG_JAC, 0, "Using Jacobian method: Bicolored symbolical bidirectional Jacobian.");
-    break;
-  default:
-    throwStreamPrint(threadData, "Unhandled case in setJacobianMethod");
-    break;
-  }
+  assertStreamPrint(threadData, jacobianMethod > JAC_UNKNOWN && jacobianMethod < JAC_MAX, "Unhandled case in setJacobianMethod");
+  infoStreamPrint(OMC_LOG_JAC, 0, "Using Jacobian method: %s.", JACOBIAN_METHOD_NAME[jacobianMethod]);
+
   return jacobianMethod;
 }
 
@@ -1249,10 +1258,11 @@ void freeSymbolicOdeJacobian(DATA* data)
 void freeNonlinearPattern(NONLINEAR_PATTERN *nlp)
 {
   if (nlp != NULL) {
-    free(nlp->indexVar); nlp->indexVar = NULL;
-    free(nlp->indexEqn); nlp->indexEqn = NULL;
-    free(nlp->columns);  nlp->columns = NULL;
-    free(nlp->rows);     nlp->rows = NULL;
+    free(nlp->indexVar);
+    free(nlp->indexEqn);
+    free(nlp->columns);
+    free(nlp->rows);
+    free(nlp);
   }
 }
 

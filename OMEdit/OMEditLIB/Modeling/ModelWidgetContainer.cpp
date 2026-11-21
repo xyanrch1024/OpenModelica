@@ -54,11 +54,13 @@
 #include "OMS/ModelDialog.h"
 #include "OMS/SystemSimulationInformationDialog.h"
 #include "Util/ResourceCache.h"
+#include "Util/Style.h"
 #include "Util/NavigationManager.h"
 #include "Plotting/PlotWindowContainer.h"
 #include "Util/NetworkAccessManager.h"
 #include "QuickInsertWidget.h"
 
+#include <QApplication>
 #include <QNetworkReply>
 #include <QMessageBox>
 #include <QMenu>
@@ -963,6 +965,8 @@ void GraphicsView::addElementToView(ModelInstance::Component *pComponent, bool i
   GraphicsView *pIconGraphicsView = mpModelWidget->getIconGraphicsView();
   GraphicsView *pDiagramGraphicsView = mpModelWidget->getDiagramGraphicsView();
 
+  // Hide the protected elements if the view is diagram view and the access is documentation or lower.
+  bool hideProtected = isDiagramView() && mpModelWidget->getLibraryTreeItem() && mpModelWidget->getLibraryTreeItem()->getAccess() <= LibraryTreeItem::documentation;
   // if element is of connector type.
   if (pComponent && pComponent->isConnector()) {
     // Connector type elements exists on icon view as well
@@ -1002,6 +1006,9 @@ void GraphicsView::addElementToView(ModelInstance::Component *pComponent, bool i
         pIconGraphicsView->clearSelection(pIconElement);
       }
     }
+  }
+  if (hideProtected) {
+    pDiagramElement->setVisible(pComponent->isPublic());
   }
 }
 
@@ -2112,11 +2119,7 @@ void GraphicsView::bringForward(ShapeAnnotation *pShape)
     return;
   }
   // swap the shapes in the list
-#if QT_VERSION >= QT_VERSION_CHECK(5, 13, 0)
   mShapesList.swapItemsAt(shapeIndex, shapeIndex + 1);
-#else // QT_VERSION_CHECK
-  mShapesList.swap(shapeIndex, shapeIndex + 1);
-#endif // QT_VERSION_CHECK
   // update the shapes z index
   for (int i = 0 ; i < mShapesList.size() ; i++) {
     mShapesList.at(i)->setZValue(i + 1);
@@ -2156,11 +2159,7 @@ void GraphicsView::sendBackward(ShapeAnnotation *pShape)
     return;
   }
   // swap the shapes in the list
-#if QT_VERSION >= QT_VERSION_CHECK(5, 13, 0)
   mShapesList.swapItemsAt(shapeIndex - 1, shapeIndex);
-#else // QT_VERSION_CHECK
-  mShapesList.swap(shapeIndex - 1, shapeIndex);
-#endif // QT_VERSION_CHECK
   // update the shapes z index
   for (int i = 0 ; i < mShapesList.size() ; i++) {
     mShapesList.at(i)->setZValue(i + 1);
@@ -4462,11 +4461,7 @@ void GraphicsView::dropEvent(QDropEvent *event)
     QDataStream dataStream(&itemData, QIODevice::ReadOnly);
     QString className;
     dataStream >> className;
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     if (addComponent(className, mapToScene(event->position().toPoint()))) {
-#else
-    if (addComponent(className, mapToScene(event->pos()))) {
-#endif
       event->accept();
     } else {
       event->ignore();
@@ -4484,11 +4479,11 @@ void GraphicsView::drawBackground(QPainter *painter, const QRectF &rect)
   QPen grayPen(QBrush(QColor(192, 192, 192)), 0);
   QPen lightGrayPen(QBrush(QColor(229, 229, 229)), 0);
   if (mpModelWidget->getLibraryTreeItem()->isSystemLibrary() || mpModelWidget->isElementMode() || isVisualizationView()) {
-    painter->setBrush(QBrush(Qt::white, Qt::SolidPattern));
+    painter->setBrush(QBrush(Style::readOnlyViewBackgroundColor(), Qt::SolidPattern));
   } else if (isIconView()) {
-    painter->setBrush(QBrush(QColor(229, 244, 255), Qt::SolidPattern));
+    painter->setBrush(QBrush(Style::iconViewBackgroundColor(), Qt::SolidPattern));
   } else {
-    painter->setBrush(QBrush(QColor(242, 242, 242), Qt::SolidPattern));
+    painter->setBrush(QBrush(Style::diagramViewBackgroundColor(), Qt::SolidPattern));
   }
   // draw scene rectangle white background
   painter->setPen(Qt::NoPen);
@@ -4848,11 +4843,7 @@ void GraphicsView::mouseDoubleClickEvent(QMouseEvent *event)
       });
       connect(menu, &QuickInsertWidget::destroyed, &loop, &QEventLoop::quit);
 
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
       menu->showAt(event->globalPosition().toPoint());
-#else
-      menu->showAt(event->globalPos());
-#endif
       loop.exec(); // blocking until loop.quit() call
 
       if (!selectedClass.isEmpty()) {
@@ -5254,7 +5245,6 @@ void GraphicsView::resizeEvent(QResizeEvent *event)
  */
 void GraphicsView::wheelEvent(QWheelEvent *event)
 {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 6, 0)
   static QPoint angleDelta = QPoint(0, 0);
   angleDelta += event->angleDelta();
   QPoint numDegrees = angleDelta / 8;
@@ -5281,29 +5271,6 @@ void GraphicsView::wheelEvent(QWheelEvent *event)
       QGraphicsView::wheelEvent(event);
     }
   }
-#else // QT_VERSION_CHECK
-  int numDegrees = event->delta() / 8;
-  int numSteps = numDegrees * 3;
-  bool controlModifier = event->modifiers().testFlag(Qt::ControlModifier);
-  bool shiftModifier = event->modifiers().testFlag(Qt::ShiftModifier);
-  // If Ctrl key is pressed and user has scrolled vertically then Zoom In/Out based on the scroll distance.
-  if (event->orientation() == Qt::Vertical && controlModifier) {
-    if (event->delta() > 0) {
-      zoomIn();
-    } else {
-      zoomOut();
-    }
-  } else if ((event->orientation() == Qt::Horizontal) || (event->orientation() == Qt::Vertical && shiftModifier)) {
-    // If Shift key is pressed and user has scrolled vertically then scroll the horizontal scrollbars.
-    // If user has scrolled horizontally then scroll the horizontal scrollbars.
-    horizontalScrollBar()->setValue(horizontalScrollBar()->value() - numSteps);
-  } else if (event->orientation() == Qt::Vertical) {
-    // If user has scrolled vertically then scroll the vertical scrollbars.
-    verticalScrollBar()->setValue(verticalScrollBar()->value() - numSteps);
-  } else {
-    QGraphicsView::wheelEvent(event);
-  }
-#endif // QT_VERSION_CHECK
 }
 
 /*!
@@ -5325,7 +5292,7 @@ WelcomePageWidget::WelcomePageWidget(QWidget *pParent)
   // main frame
   QFrame *pMainFrame = new QFrame;
   pMainFrame->setContentsMargins(0, 0, 0, 0);
-  pMainFrame->setStyleSheet("QFrame{color:gray;}");
+  pMainFrame->setStyleSheet(Style::welcomePageMainFrameStyleSheet());
   // top frame
   QFrame *pTopFrame = new QFrame;
   pTopFrame->setStyleSheet("QFrame{background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #828282, stop: 1 #5e5e5e);}");
@@ -5352,7 +5319,7 @@ WelcomePageWidget::WelcomePageWidget(QWidget *pParent)
   // RecentFiles Frame
   QFrame *pRecentFilesFrame = new QFrame;
   pRecentFilesFrame->setFrameShape(QFrame::StyledPanel);
-  pRecentFilesFrame->setStyleSheet("QFrame{background-color: white;}");
+  pRecentFilesFrame->setStyleSheet(Style::welcomePagePanelStyleSheet());
   // recent items list
   Label *pRecentFilesLabel = Utilities::getHeadingLabel(tr("Recent Files"));
   mpNoRecentFileLabel = new Label(tr("No recent files found."));
@@ -5380,7 +5347,7 @@ WelcomePageWidget::WelcomePageWidget(QWidget *pParent)
   // RecentModels Frame
   QFrame *pRecentModelsFrame = new QFrame;
   pRecentModelsFrame->setFrameShape(QFrame::StyledPanel);
-  pRecentModelsFrame->setStyleSheet("QFrame{background-color: white;}");
+  pRecentModelsFrame->setStyleSheet(Style::welcomePagePanelStyleSheet());
   // recent models list. The models opened in the model view are kept in their own list so that
   // the recent files list is not cluttered with them.
   Label *pRecentModelsLabel = Utilities::getHeadingLabel(tr("Recent Models"));
@@ -5409,7 +5376,7 @@ WelcomePageWidget::WelcomePageWidget(QWidget *pParent)
   // LatestNews Frame
   mpLatestNewsFrame = new QFrame;
   mpLatestNewsFrame->setFrameShape(QFrame::StyledPanel);
-  mpLatestNewsFrame->setStyleSheet("QFrame{background-color: white;}");
+  mpLatestNewsFrame->setStyleSheet(Style::welcomePagePanelStyleSheet());
   /* Read the show latest news settings */
   if (!OptionsDialog::instance()->getGeneralSettingsPage()->getShowLatestNewsCheckBox()->isChecked()) {
     mpLatestNewsFrame->setVisible(false);
@@ -6137,7 +6104,6 @@ void ModelWidget::createModelWidgetComponents()
       }
       mpMainLayout->addWidget(mpDiagramGraphicsView, 1);
       mpMainLayout->addWidget(mpIconGraphicsView, 1);
-      mpUndoStack->clear();
     } else if (mpLibraryTreeItem->isText()) {
       pViewButtonsHorizontalLayout->addWidget(mpTextViewToolButton);
       QFileInfo fileInfo(mpLibraryTreeItem->getFileName());
@@ -6837,16 +6803,17 @@ void ModelWidget::updateViewButtonsBasedOnAccess()
 {
   if (mCreateModelWidgetComponents) {
     LibraryTreeItem::Access access = mpLibraryTreeItem->getAccess();
+    // We enable diagram view so we can see public components same as we did in GraphicsView::drawElements(). See #15263.
     switch (access) {
       case LibraryTreeItem::icon:
-        mpIconViewToolButton->setChecked(true);
-        mpDiagramViewToolButton->setEnabled(false);
+        mpDiagramViewToolButton->setEnabled(true);
+        mpDiagramViewToolButton->setChecked(true);
         mpTextViewToolButton->setEnabled(false);
         mpDocumentationViewToolButton->setEnabled(false);
         break;
       case LibraryTreeItem::documentation:
-        mpIconViewToolButton->setChecked(true);
-        mpDiagramViewToolButton->setEnabled(false);
+        mpDiagramViewToolButton->setEnabled(true);
+        mpDiagramViewToolButton->setChecked(true);
         mpTextViewToolButton->setEnabled(false);
         mpDocumentationViewToolButton->setEnabled(true);
         break;
@@ -8629,11 +8596,7 @@ void ModelWidgetContainer::printModel()
       ModelicaEditor *pModelicaEditor = dynamic_cast<ModelicaEditor*>(pModelWidget->getEditor());
       // set print options if text is selected
       if (pModelicaEditor->getPlainTextEdit()->textCursor().hasSelection()) {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
         pPrintDialog->setOption(QAbstractPrintDialog::PrintSelection);
-#else
-        pPrintDialog->addEnabledOption(QAbstractPrintDialog::PrintSelection);
-#endif
       }
       // open print dialog
       if (pPrintDialog->exec() == QDialog::Accepted) {

@@ -110,7 +110,7 @@ public
   package PseudoBucket
     // While collecting, a bucket accumulates its equations and crefs in pointers
     // so that adding one costs a single cons.
-    type Bucket = tuple<Mode, Boolean, Pointer<list<Integer>>, PointerCyclic<list<ComponentRef>>>;
+    type Bucket = tuple<Mode, Boolean, Pointer<list<Integer>>, Pointer<list<ComponentRef>>>;
 
     function create
       "recollects subsets of multi-dimensional equations that have to be solved in the same way.
@@ -134,7 +134,7 @@ public
       Integer eqn_arr_idx;
       Boolean multi, fresh;
       Pointer<list<Integer>> idx_ptr;
-      PointerCyclic<list<ComponentRef>> cref_ptr;
+      Pointer<list<ComponentRef>> cref_ptr;
       Value val;
     algorithm
       // add each equation to a bucket if solved the same way
@@ -155,7 +155,7 @@ public
           if fresh then
             order := (mode, multi, idx_ptr, cref_ptr) :: order;
           elseif multi then
-            PointerCyclic.update(cref_ptr, cref :: PointerCyclic.access(cref_ptr));
+            Pointer.update(cref_ptr, cref :: Pointer.access(cref_ptr));
           end if;
           Pointer.update(idx_ptr, eqn_scal_idx :: Pointer.access(idx_ptr));
         end if;
@@ -165,7 +165,7 @@ public
       for bucket in order loop
         (mode, multi, idx_ptr, cref_ptr) := bucket;
         if multi then
-          val := Value.MULTI_VAL(PointerCyclic.access(cref_ptr), Pointer.access(idx_ptr));
+          val := Value.MULTI_VAL(Pointer.access(cref_ptr), Pointer.access(idx_ptr));
         else
           val := Value.SINGLE_VAL(listHead(mode.crefs), Pointer.access(idx_ptr));
         end if;
@@ -188,7 +188,7 @@ public
       input Integer eqn_arr_idx;
       input array<list<Bucket>> per_eqn;
       output Pointer<list<Integer>> idx_ptr;
-      output PointerCyclic<list<ComponentRef>> cref_ptr;
+      output Pointer<list<ComponentRef>> cref_ptr;
       output Boolean fresh = false;
     protected
       Mode m;
@@ -201,7 +201,7 @@ public
         end if;
       end for;
       idx_ptr := Pointer.create({});
-      cref_ptr := PointerCyclic.create(if multi then mode.crefs else {});
+      cref_ptr := Pointer.create(if multi then mode.crefs else {});
       fresh := true;
       arrayUpdate(per_eqn, eqn_arr_idx, (mode, multi, idx_ptr, cref_ptr) :: per_eqn[eqn_arr_idx]);
     end getBucket;
@@ -325,17 +325,20 @@ public
     array<Integer> data = Adjacency.IntMatrix.entries(m);
     Integer N = arrayLength(matching.var_to_eqn);
     Integer M = arrayLength(matching.eqn_to_var);
+    array<Integer> call_eqn, call_pos;
     Integer eqn;
   algorithm
     number := arrayCreate(M, -1);
     lowlink := arrayCreate(M, -1);
     onStack := arrayCreate(M, false);
+    call_eqn := arrayCreate(M, 0);
+    call_pos := arrayCreate(M, 0);
 
     // loop over all variables and find their component
     for var in 1:N loop
       eqn := matching.var_to_eqn[var];
       if eqn > 0 and number[eqn] == -1 then
-        (stack, index, comps) := strongConnect(m, data, matching.var_to_eqn, eqn, stack, index, number, lowlink, onStack, comps);
+        (stack, index, comps) := strongConnect(m, data, matching.var_to_eqn, eqn, stack, index, number, lowlink, onStack, call_eqn, call_pos, comps);
       end if;
     end for;
 
@@ -343,6 +346,8 @@ public
     GCExt.free(number);
     GCExt.free(lowlink);
     GCExt.free(onStack);
+    GCExt.free(call_eqn);
+    GCExt.free(call_pos);
 
     // reverse for correct ordering
     comps := listReverse(comps);
@@ -647,7 +652,12 @@ public
           (m_local, matching_local, map_back) := getLocalSystem(m, matching, List.flatten(list(getEqnIndices(n) for n in node_comp)), var_loc);
           sorted_body_components := tarjanScalar(m_local, matching_local);
           sorted_body_indices := mapFlatten(sorted_body_components, map_back);
-          comp := StrongComponent.createPseudoEntwined(sorted_body_indices, matching.eqn_to_var, mapping, vars, eqns, node_comp);
+          if List.any(node_comp, isAlgebraicLoop) or List.compareLength(sorted_body_components, sorted_body_indices) <> 0 then
+            // an algebraic loop can not be interleaved with the other equations, solve all of them together
+            comp := StrongComponent.createPseudoScalar(sorted_body_indices, matching.eqn_to_var, mapping, vars, eqns);
+          else
+            comp := StrongComponent.createPseudoEntwined(sorted_body_indices, matching.eqn_to_var, mapping, vars, eqns, node_comp);
+          end if;
         then comp;
 
         // fallback: pure scalar or algebraic loop phase III nodes (body components not actually sorted)
@@ -658,6 +668,16 @@ public
     end collapse;
 
   protected
+    function isAlgebraicLoop
+      input SuperNode node;
+      output Boolean b;
+    algorithm
+      b := match node
+        case ALGEBRAIC_LOOP() then true;
+        else false;
+      end match;
+    end isAlgebraicLoop;
+
     function mapFlatten
       "flattens the components and maps the local indices back to global ones"
       input list<list<Integer>> components;
@@ -868,20 +888,81 @@ protected
   end getLocalSystem;
 
   function strongConnect
-    "author: lochel, kabdelhak"
+    "author: lochel, kabdelhak
+    Iterative depth-first search, the recursion depth would be the length of
+    the longest dependency chain."
     input Adjacency.IntMatrix m             "normal adjacency matrix";
     input array<Integer> data               "its entry buffer";
     input array<Integer> var_to_eqn         "eqn := var_to_eqn[var]";
-    input Integer eqn                       "current equation index";
+    input Integer root                      "equation to start from";
     input output list<Integer> stack        "equation stack";
     input output Integer index              "component index";
     input array<Integer> number             "auxiliary array";
     input array<Integer> lowlink            "represents the component groups";
     input array<Boolean> onStack            "true if eqn index is on the stack";
+    input array<Integer> call_eqn           "depth-first search stack: equation";
+    input array<Integer> call_pos           "depth-first search stack: next entry of m to visit";
     input output list<list<Integer>> comps  "accumulator for components";
   protected
     list<Integer> SCC;
-    Integer eqn2, cand;
+    Integer depth, eqn, eqn2, k, cand;
+  algorithm
+    depth := 1;
+    (stack, index) := strongConnectVisit(m, root, depth, stack, index, number, lowlink, onStack, call_eqn, call_pos);
+
+    while depth > 0 loop
+      eqn := call_eqn[depth];
+      k := call_pos[depth];
+      if k < m.start[eqn] + m.len[eqn] then
+        arrayUpdate(call_pos, depth, k + 1);
+        cand := data[k];
+        if cand > 0 then
+          eqn2 := var_to_eqn[cand];
+          if eqn2 > 0 and eqn2 <> eqn then
+            if number[eqn2] == -1 then
+              // Successor eqn2 has not yet been visited; descend into it
+              depth := depth + 1;
+              (stack, index) := strongConnectVisit(m, eqn2, depth, stack, index, number, lowlink, onStack, call_eqn, call_pos);
+            elseif onStack[eqn2] then
+              // Successor eqn2 is in the stack and hence in the current SCC
+              arrayUpdate(lowlink, eqn, intMin(lowlink[eqn], number[eqn2]));
+            end if;
+          end if;
+        end if;
+      else
+        // If eqn is a root node, pop the stack and generate an SCC
+        if lowlink[eqn] == number[eqn] then
+          eqn2::stack := stack;
+          arrayUpdate(onStack, eqn2, false);
+          SCC := {eqn2};
+          while eqn <> eqn2 loop
+            eqn2::stack := stack;
+            arrayUpdate(onStack, eqn2, false);
+            SCC := eqn2::SCC;
+          end while;
+          comps := MetaModelica.Dangerous.listReverseInPlace(SCC)::comps;
+        end if;
+
+        depth := depth - 1;
+        if depth > 0 then
+          eqn2 := call_eqn[depth];
+          arrayUpdate(lowlink, eqn2, intMin(lowlink[eqn2], lowlink[eqn]));
+        end if;
+      end if;
+    end while;
+  end strongConnect;
+
+  function strongConnectVisit
+    input Adjacency.IntMatrix m;
+    input Integer eqn;
+    input Integer depth;
+    input output list<Integer> stack;
+    input output Integer index;
+    input array<Integer> number;
+    input array<Integer> lowlink;
+    input array<Boolean> onStack;
+    input array<Integer> call_eqn;
+    input array<Integer> call_pos;
   algorithm
     // Set the depth index for eqn to the smallest unused index
     arrayUpdate(number, eqn, index);
@@ -889,38 +970,9 @@ protected
     arrayUpdate(onStack, eqn, true);
     index := index + 1;
     stack := eqn::stack;
-
-    // Consider successors of eqn, without building a list of them per node
-    for k in m.start[eqn]:m.start[eqn] + m.len[eqn] - 1 loop
-      cand := data[k];
-      if cand > 0 then
-        eqn2 := var_to_eqn[cand];
-        if eqn2 > 0 and eqn2 <> eqn then
-          if number[eqn2] == -1 then
-            // Successor eqn2 has not yet been visited; recurse on it
-            (stack, index, comps) := strongConnect(m, data, var_to_eqn, eqn2, stack, index, number, lowlink, onStack, comps);
-            arrayUpdate(lowlink, eqn, intMin(lowlink[eqn], lowlink[eqn2]));
-          elseif onStack[eqn2] then
-            // Successor eqn2 is in the stack and hence in the current SCC
-            arrayUpdate(lowlink, eqn, intMin(lowlink[eqn], number[eqn2]));
-          end if;
-        end if;
-      end if;
-    end for;
-
-    // If eqn is a root node, pop the stack and generate an SCC
-    if lowlink[eqn] == number[eqn] then
-      eqn2::stack := stack;
-      arrayUpdate(onStack, eqn2, false);
-      SCC := {eqn2};
-      while eqn <> eqn2 loop
-        eqn2::stack := stack;
-        arrayUpdate(onStack, eqn2, false);
-        SCC := eqn2::SCC;
-      end while;
-      comps := MetaModelica.Dangerous.listReverseInPlace(SCC)::comps;
-    end if;
-  end strongConnect;
+    arrayUpdate(call_eqn, depth, eqn);
+    arrayUpdate(call_pos, depth, m.start[eqn]);
+  end strongConnectVisit;
 
 
   annotation(__OpenModelica_Interface="nbackend");

@@ -58,6 +58,9 @@ pub(super) fn builtin_index(name: &str) -> Option<u32> {
 /// `sim_data` is C's `data` (0 outside a simulation), which an FMU heads the logged
 /// block with the time from.
 ///
+/// `rt_assert_when` is `rt_assert` for a when-body, which runs only at its event:
+/// never suppressed, so it always answers 1.
+///
 /// `rt_assert_warning(cond, msg, file, sline, scol, eline, ecol, isReadOnly, initial)`
 /// records a *non-fatal* (AssertionLevel.warning) violation — the string handles
 /// (dumped condition, message, file) plus source position — for the driver to
@@ -83,6 +86,11 @@ pub(super) fn builtin_index(name: &str) -> Option<u32> {
 pub(crate) const ENV_EXTRA: &[(&str, &[WTy], &[WTy])] = &[
     (
         "rt_assert",
+        &[WTy::I32, WTy::I32, WTy::I32, WTy::I32, WTy::I32, WTy::I32, WTy::I32, WTy::I32, WTy::I32, WTy::I32],
+        &[WTy::I32],
+    ),
+    (
+        "rt_assert_when",
         &[WTy::I32, WTy::I32, WTy::I32, WTy::I32, WTy::I32, WTy::I32, WTy::I32, WTy::I32, WTy::I32, WTy::I32],
         &[WTy::I32],
     ),
@@ -178,6 +186,7 @@ pub(crate) const RT_BUILTINS: &[(&str, &[WTy], &[WTy])] = &[
     ("rt_array_ew_f64", &[WTy::I32, WTy::I32, WTy::I32], &[WTy::I32]),
     ("rt_array_scalar_i32", &[WTy::I32, WTy::I32, WTy::I32, WTy::I32], &[WTy::I32]),
     ("rt_array_scalar_f64", &[WTy::I32, WTy::F64, WTy::I32, WTy::I32], &[WTy::I32]),
+    ("rt_array_div_sim_f64", &[WTy::I32, WTy::F64, WTy::I32, WTy::F64, WTy::I32], &[WTy::I32]),
     ("rt_array_neg_i32", &[WTy::I32], &[WTy::I32]),
     ("rt_array_neg_f64", &[WTy::I32], &[WTy::I32]),
     ("rt_array_transpose", &[WTy::I32], &[WTy::I32]),
@@ -382,5 +391,5 @@ pub(crate) fn rt_index(name: &str) -> Result<u32> {
 /// `generateFunctionName` (`AbsynUtil.pathStringUnquoteReplaceDot(path, "_")`).
 /// Used as the key that resolves a `CALL` to one of the generated functions.
 pub(crate) fn mangle(path: &Absyn::Path) -> Result<String> {
-    Ok(AbsynUtil::pathStringUnquoteReplaceDot(Arc::new(path.clone()), arcstr::literal!("_"))?.to_string())
+    Ok(AbsynUtil::pathStringUnquoteReplaceDot(&metamodelica::Ref::new(path.clone()), arcstr::literal!("_"))?.to_string())
 }

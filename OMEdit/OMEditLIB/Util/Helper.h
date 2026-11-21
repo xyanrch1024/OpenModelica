@@ -63,6 +63,7 @@ public:
   static QString OpenModelicaUsersGuideVersion;
   static QString OMEditInternal;
   static QString OMCServerName;
+  static QString modelicaFigureTitle;
   static QString omFileTypes;
   static QString omEncryptedFileTypes;
   static QString omnotebookFileTypes;
@@ -82,6 +83,7 @@ public:
   static QString jarFileTypes;
   static QString visualizationFileTypes;
   static QString subModelFileTypes;
+  static QString drawioFileTypes;
   static int treeIndentation;
   static QSize iconSize;
   static int tabWidth;
@@ -250,6 +252,8 @@ public:
   static QString search;
   static QString findUsage;
   static QString findUsageTip;
+  static QString classDiagram;
+  static QString classDiagramTip;
   static QString duplicate;
   static QString duplicateTip;
   static QString unloadClass;

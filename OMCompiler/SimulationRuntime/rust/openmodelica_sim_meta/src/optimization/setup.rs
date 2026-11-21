@@ -1051,7 +1051,7 @@ fn initial_guess_sim(data: &mut OptData, o: i32) -> Result<i32> {
         .iter()
         .map(|&i| data.names.get(i as usize).map(String::as_str).unwrap_or(""))
         .collect();
-    let mut ext = crate::extinput::ExtInputHook::load_reals(&opt.inputs, &input_names);
+    let mut ext = crate::extinput::ExtInputHook::load_reals(&opt.inputs, &input_names, data.model.layout.real_off);
     // The file drives the inputs for the guess only; the Ipopt iterations take
     // theirs from `vopt`.
     let _armed = ext.as_mut().map(crate::extinput::arm);
@@ -1263,7 +1263,7 @@ pub(crate) fn res2file(data: &mut OptData) -> Result<()> {
         1 => vec![1.0],
         n => {
             omclog::error!(omclog::STDOUT, false, "Not support np = {n}");
-            return Err("CodegenWasmJit: unsupported number of collocation points");
+            return Err("unsupported number of collocation points");
         }
     };
     let vopt = core::mem::take(&mut data.ipop.vopt);

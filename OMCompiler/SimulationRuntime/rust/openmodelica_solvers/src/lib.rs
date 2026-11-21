@@ -62,6 +62,7 @@ macro_rules! omclog_error {
     };
 }
 
+pub mod atomic64;
 pub mod clock;
 pub mod counters;
 pub mod dassl;
@@ -89,9 +90,36 @@ pub const IDA: bool = cfg!(sundials);
 /// Solver errors are the C runtime's messages, which are all static.
 pub type Result<T> = core::result::Result<T, &'static str>;
 
+/// C's `retValIntegrator != 0`: the solver has logged why it gave up.
+pub const SOLVER_FAILED_ERR: &str = "integrator failed";
+
 /// C's `MINIMAL_STEP_SIZE` (`simulation/solver/epsilon.h`), the bisection's
 /// absolute tolerance.
 pub const MINIMAL_STEP_SIZE: f64 = 1e-12;
+
+/// What [`Ode::catch_begin`] displaced, for [`Ode::catch_end`] to restore.
+#[derive(Clone, Copy, Default)]
+pub struct ModelCatch {
+    pub stage: i32,
+    pub hit: i32,
+}
+
+/// [`Ode::eval`] inside its own catch (C's `gbode_fODE`): `Ok(false)` if the model
+/// threw, which is absorbed rather than propagated.
+pub fn eval_caught(ode: &mut dyn Ode, t: f64, y: &[f64], f: &mut [f64]) -> Result<bool> {
+    let c = ode.catch_begin();
+    let run = ode.eval(t, y, f);
+    let threw = ode.catch_end(c);
+    run.map(|()| !threw)
+}
+
+/// [`eval_caught`] of the fast states' equations only ([`Ode::eval_fast`]).
+pub fn eval_caught_fast(ode: &mut dyn Ode, t: f64, y: &[f64], f: &mut [f64]) -> Result<bool> {
+    let c = ode.catch_begin();
+    let run = ode.eval_fast(t, y, f);
+    let threw = ode.catch_end(c);
+    run.map(|()| !threw)
+}
 
 /// What a solver needs of the model: the ODE right-hand side, the zero-crossing
 /// functions, and the sparsity its finite-difference Jacobian can exploit.
@@ -108,6 +136,14 @@ pub trait Ode {
     /// on is current.
     fn eval_zc(&mut self, t: f64, y: &[f64], zc: &mut [f64]) -> Result<()>;
 
+    /// C's `updateContinuousSystem` then `saveZeroCrossings` at the accepted end of
+    /// a step: `f` and `zc` there, after the model recorded the point (`delay`,
+    /// `spatialDistribution`), which the crossings then see. `false`: nothing was
+    /// done, and the caller evaluates both itself.
+    fn accept(&mut self, _t: f64, _y: &[f64], _f: &mut [f64], _zc: &mut [f64]) -> Result<bool> {
+        Ok(false)
+    }
+
     /// State nominals, for the error norm and the finite-difference step. One
     /// per state; an empty slice means "one".
     fn nominals(&self) -> &[f64] {
@@ -122,6 +158,12 @@ pub trait Ode {
     /// State `max` attributes, for the finite-difference step's sign choice.
     /// Empty ⇒ unbounded.
     fn maxs(&self) -> &[f64] {
+        &[]
+    }
+
+    /// State `min` attributes, which KINSOL's sign constraints read. Empty ⇒
+    /// unbounded.
+    fn mins(&self) -> &[f64] {
         &[]
     }
 
@@ -150,11 +192,51 @@ pub trait Ode {
         false
     }
 
+    /// The whole `df/dy` into `j`, the pattern's values in CSC with rows in
+    /// [`Ode::jac_rows_by_col`] order, through the symbolic Jacobian in the
+    /// direction(s) `method` names. `false` ⇒ the model cannot.
+    fn jacobian_matrix(
+        &mut self,
+        _t: f64,
+        _y: &[f64],
+        _method: crate::simflags::JacobianMethod,
+        _j: &mut [f64],
+    ) -> bool {
+        false
+    }
+
     /// C's `setContext(JACOBIAN)` around a finite-difference Jacobian, and the
     /// `ALGEBRAIC` it restores to. A model whose runtime has no such state
     /// leaves both alone.
     fn set_context_jacobian(&mut self) {}
     fn set_context_algebraic(&mut self) {}
+
+    /// C's `updateEvalSelection`: the equations [`Ode::eval_fast`] evaluates are
+    /// those the derivatives of `fast` depend on.
+    fn select_fast_states(&mut self, _fast: &[usize]) {}
+
+    /// C's `gbode_fODE` with `evalSelectionFast`: [`Ode::eval`] of the selected
+    /// equations only, the other derivatives in `f` left as the model had them.
+    /// A model that cannot select evaluates them all.
+    fn eval_fast(&mut self, t: f64, y: &[f64], f: &mut [f64]) -> Result<()> {
+        self.eval(t, y, f)
+    }
+
+    /// Leave `zc` in the model as its zero-crossing values, as C's
+    /// `checkForEvents` restores `zeroCrossings` after probing them.
+    fn restore_zc(&mut self, _zc: &[f64]) {}
+
+    /// C's `MMC_TRY_INTERNAL(simulationJumpBuffer)` around the evaluations up to
+    /// [`Ode::catch_end`]: a model error in them is absorbed there instead of
+    /// reaching the caller's step, and `catch_end` reports it — as does a
+    /// nonlinear system that failed, which C's generated code throws for.
+    fn catch_begin(&mut self) -> ModelCatch {
+        ModelCatch::default()
+    }
+
+    fn catch_end(&mut self, _c: ModelCatch) -> bool {
+        false
+    }
 
     /// Right-hand-side evaluations so far, for the solver statistics.
     fn calls(&self) -> u64 {

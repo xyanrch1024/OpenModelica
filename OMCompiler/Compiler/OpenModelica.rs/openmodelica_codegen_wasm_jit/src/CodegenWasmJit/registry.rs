@@ -8,7 +8,7 @@ use super::*;
 /// `runSimulation` (during `simulate`) in the same process.
 pub(super) fn sim_models() -> &'static Mutex<HashMap<String, Arc<SimModel>>> {
     static MODELS: OnceLock<Mutex<HashMap<String, Arc<SimModel>>>> = OnceLock::new();
-    MODELS.get_or_init(|| Mutex::new(HashMap::new()))
+    MODELS.get_or_init(|| Mutex::new(HashMap::default()))
 }
 
 /// A model kernel a wasm FMU can be built around. Only kernels an export can
@@ -24,7 +24,7 @@ pub(super) struct FmuKernel {
 /// than lowering it again. Keyed by file-name prefix.
 pub(super) fn fmu_kernels() -> &'static Mutex<HashMap<String, Arc<FmuKernel>>> {
     static KERNELS: OnceLock<Mutex<HashMap<String, Arc<FmuKernel>>>> = OnceLock::new();
-    KERNELS.get_or_init(|| Mutex::new(HashMap::new()))
+    KERNELS.get_or_init(|| Mutex::new(HashMap::default()))
 }
 
 /// Where a captured signal's values come from: the result file under the
@@ -149,7 +149,19 @@ pub(super) fn capture_last_sim(
     result_file: &str,
 ) {
     let Written { n_rows, first_row } = written;
-    let unit_of = |name: &str| model.var_units.get(name).cloned().unwrap_or_default();
+    // A resizable model's result variables are known for a run only.
+    let run_meta = model.meta_compact.resize.is_some().then(|| {
+        let mut m = model.meta_compact.clone();
+        if let Some(r) = m.resize.as_mut() {
+            r.jac_a = None;
+        }
+        openmodelica_sim_meta::simflags::with_flags(|f| m.with_flags(f))
+    });
+    let result_vars = run_meta.as_ref().map_or(model.result_vars(), |m| &m.vars[..]);
+    let at = |off: u32| run_meta.as_ref().and_then(|m| m.resize.as_ref()).map_or(off, |r| r.resolve_off(off));
+    let units: HashMap<&str, &str> =
+        result_vars.iter().filter(|v| !v.unit.is_empty()).map(|v| (v.name.as_str(), v.unit.as_str())).collect();
+    let unit_of = |name: &str| units.get(name).map(|u| u.to_string()).unwrap_or_default();
     let mut series = Vec::new();
     let mut param_idx = 0usize;
     // A signal aliases an earlier one when it reads the same underlying data: the
@@ -157,12 +169,12 @@ pub(super) fn capture_last_sim(
     // aliasing — several names, one stored column). Distinct columns are distinct
     // signals even when an equation keeps them near-equal (`der(h) = v` differs at
     // event rows), so both are plotted. First occurrence is canonical.
-    let mut seen_cols = HashSet::new();
-    let mut seen_param_offs = HashSet::new();
-    let mut param_value_by_off: HashMap<u32, f64> = HashMap::new();
+    let mut seen_cols = HashSet::default();
+    let mut seen_param_offs = HashSet::default();
+    let mut param_value_by_off: HashMap<u32, f64> = HashMap::default();
     // Row 0 of every signal, for the start values of the editable parameters.
-    let mut row0_by_name: HashMap<&str, f64> = HashMap::new();
-    for (v, &kept) in model.result_vars.iter().zip(keep) {
+    let mut row0_by_name: HashMap<&str, f64> = HashMap::default();
+    for (v, &kept) in result_vars.iter().zip(keep) {
         let (alias, row0, data) = match &v.kind {
             ResultKind::Time => continue,
             ResultKind::Column { col, negate } => {
@@ -210,7 +222,7 @@ pub(super) fn capture_last_sim(
             value: if p.is_start {
                 row0_by_name.get(p.name.as_str()).copied().unwrap_or(0.0)
             } else {
-                param_value_by_off.get(&p.off).copied().unwrap_or(0.0)
+                param_value_by_off.get(&at(p.off)).copied().unwrap_or(0.0)
             },
             enum_names: p.enum_names.clone(),
         })
@@ -226,7 +238,7 @@ pub(super) fn capture_last_sim(
         params,
         // Only what the model declares: a reader merges in the predefined
         // display units of the same name.
-        units: model.meta.units.clone(),
+        units: model.meta().units.clone(),
         stats: stats.clone(),
     });
 }

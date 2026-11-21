@@ -2,6 +2,7 @@
 //! `ProfPlan`, `NlsJob`, attribute targets, array/scatter/const groups, slots.
 
 use super::*;
+use openmodelica_sim_meta::Sz;
 
 /// The module's constant pool: every literal concatenated into the single
 /// passive data segment 0, since `memory.init` reads its segment at a source
@@ -70,6 +71,9 @@ pub(crate) struct FnCtx<'a> {
     /// skipped by `release_heap_locals` — currently the `for x in array` iterator,
     /// which aliases an element of the array that outlives the loop.
     pub(super) borrowed_locals: Vec<u32>,
+    /// Record locals still holding the null handle their first assignment
+    /// replaces, so that assignment has nothing to release.
+    pub(super) null_locals: Vec<u32>,
     /// Scratch pair shared by every [`emit_elem_ptr`] in the body: its sequence is
     /// straight-line, so one pair is enough.
     pub(super) elem_ptr_tmp: Option<(u32, u32)>,
@@ -90,6 +94,19 @@ pub(crate) struct FnCtx<'a> {
     /// [`ctrl_depth`](Self::ctrl_depth) of the block a failed solve branches out of,
     /// to hand the component to the strict set instead of reporting it unsolved.
     pub(super) dt_fallback: Option<u32>,
+    /// Record variables held as one wasm local per field (see `flat`).
+    pub(super) flat: HashMap<String, FlatVar>,
+    /// Per output: the name of its [`FlatVar`], if it is one.
+    pub(super) flat_outs: Vec<Option<String>>,
+    /// Flat outputs are returned field by field (a `$flat` variant), not boxed.
+    pub(super) flat_results: bool,
+    pub(super) size_locals: sizes::SizeLocals,
+}
+
+#[derive(Clone)]
+pub(crate) struct FlatVar {
+    pub(super) fields: FlatFields,
+    pub(super) locals: Vec<u32>,
 }
 
 /// Resolver for model variables when lowering simulation equations. Component
@@ -123,19 +140,22 @@ impl ProfPlan {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct SimCtx {
     /// wasm local index holding the `SimData` base pointer.
     pub(crate) data_local: u32,
     /// Canonical cref key (`super::sim_cref_key`) -> slot in `SimData`.
-    pub(crate) vars: Arc<HashMap<String, SimSlot>>,
+    pub(crate) vars: SlotMap,
     /// Canonical cref key -> its `start` value expression (for `$START.<cref>`),
     /// `None` when the variable has no explicit start (defaults to the type's
     /// zero). Stored separately from `vars` because `$START` reads the start
     /// attribute, not the live value.
-    pub(crate) starts: Arc<HashMap<String, Option<Arc<DAE::Exp>>>>,
+    pub(crate) starts: Arc<KeyTable<StartExps>>,
     /// State cref key -> its start-value slot; `$START.<key>` reads the slot when
     /// present, else the inline expression. Empty while building the fill function.
-    pub(crate) start_slots: Arc<HashMap<String, u32>>,
+    pub(crate) start_slots: Arc<KeyTable<StartSlot>>,
+    /// Alias cref key -> (target cref key, negation) for `$START.<alias>`.
+    pub(crate) start_aliases: Arc<KeyTable<AliasTarget>>,
     /// Canonical cref key of an *array-valued* model variable (the base name with
     /// no final subscript, e.g. `body.R_start.T`) -> the contiguous slot range its
     /// scalarized elements occupy. A whole-array reference reads/writes the range
@@ -147,7 +167,7 @@ pub(crate) struct SimCtx {
     pub(crate) scatter_groups: Arc<HashMap<String, ScatterGroup>>,
     /// `varKind = CONST` variables own no slot: a reference is the binding
     /// literal, as in C's `varArrayNameValues`.
-    pub(crate) consts: Arc<HashMap<String, Arc<DAE::Exp>>>,
+    pub(crate) consts: Arc<HashMap<String, metamodelica::Ref<DAE::Exp>>>,
     pub(crate) const_groups: Arc<HashMap<String, ConstGroup>>,
     /// External object cref key -> the mangled name of its class's destructor.
     pub(crate) extobj_dtors: Arc<HashMap<String, String>>,
@@ -199,6 +219,9 @@ pub(crate) struct SimCtx {
     /// True while lowering the `functionZeroCrossings` body: an indexed relation is
     /// then evaluated *fresh* (so a sign change is detectable) rather than held.
     pub(crate) zc_context: bool,
+    /// True while lowering a when-body, which runs only at its event: a violated
+    /// `assert()` there is never held (`rt_assert_when`).
+    pub(crate) when_body: bool,
     /// `SimData` byte offset of the zero-crossing hysteresis tolerance, written by
     /// the driver at run start from the run's tolerance. Continuous (Real) indexed
     /// relations use a ±`tolZC*(max(|a|,|b|)+max(nom))` band at events and in
@@ -207,7 +230,7 @@ pub(crate) struct SimCtx {
     pub(crate) zctol_off: u32,
     /// C's `data->localData[1]->realVars` as `(one past the live real region, the
     /// mirror's base)`; `None` when no linear system reads it.
-    pub(crate) old_real: Option<(u32, u32)>,
+    pub(crate) old_real: Option<(u32, u32, u32)>,
     /// `SimData` byte offset of `zeroCrossingsPre` — the previous accepted
     /// g-values, read by the `delayZeroCrossing` builtin in `zc_context`.
     pub(crate) zc_pre_off: u32,
@@ -225,18 +248,18 @@ pub(crate) struct SimCtx {
 pub(crate) struct ClockInit {
     pub(crate) off: u32,
     /// `RATIONAL_CLOCK`'s `resolution`; `None` is C's default of 1.
-    pub(crate) resolution: Option<Arc<DAE::Exp>>,
+    pub(crate) resolution: Option<metamodelica::Ref<DAE::Exp>>,
     /// `EVENT_CLOCK`'s `startInterval`, C's initial `stats.previousInterval`.
-    pub(crate) start_interval: Option<Arc<DAE::Exp>>,
+    pub(crate) start_interval: Option<metamodelica::Ref<DAE::Exp>>,
     pub(crate) sub_offs: Vec<u32>,
 }
 
 /// What one base clock's arm of `functionUpdateSynchronous` recomputes.
 pub(crate) enum ClockUpdate {
     /// `RATIONAL_CLOCK`: `intervalCounter`, and `interval` from it.
-    Rational(Arc<DAE::Exp>),
+    Rational(metamodelica::Ref<DAE::Exp>),
     /// `REAL_CLOCK`: `interval` directly.
-    Real(Arc<DAE::Exp>),
+    Real(metamodelica::Ref<DAE::Exp>),
     /// `INFERRED_CLOCK`, defaulted to `Clock(1, 1)`.
     Inferred,
     /// An event or solver clock has no interval to recompute.
@@ -278,6 +301,11 @@ pub(crate) struct NlsJob {
     /// `4k+3` holds the strict set's `solve(sim_data) -> solved` function — C's
     /// `strictTearingFunctionCall`, which `solveNLS` falls back to.
     pub(crate) casual: bool,
+    /// A system with runtime-sized unknowns: the size-table entry of `n`, and its
+    /// history, nominal and bounds blocks in `SimData` (`hist_off`, `nominal_off`,
+    /// `bounds_off`, tagged offsets) rather than in the module's blocks.
+    pub(crate) dyn_n: Option<u32>,
+    pub(crate) bounds_off: u32,
 }
 
 /// Per-system solver state for `n` unknowns: a count (padded to 8), C's
@@ -333,6 +361,31 @@ pub(crate) struct AttrTargets {
     pub(crate) start_offs: Vec<u32>,
 }
 
+/// The [`AttrTargets`] of the variables an attribute equation assigns, the only
+/// ones read.
+pub(crate) struct AttrTargetMap(HashMap<String, AttrTargets>);
+
+impl AttrTargetMap {
+    pub(crate) fn new(keys: impl IntoIterator<Item = String>) -> Self {
+        AttrTargetMap(keys.into_iter().map(|k| (k, AttrTargets::default())).collect())
+    }
+
+    pub(crate) fn of(&mut self, cr: &DAE::ComponentRef) -> Option<&mut AttrTargets> {
+        if self.0.is_empty() {
+            return None;
+        }
+        self.0.get_mut(&sim_cref_key(cr).ok()?)
+    }
+
+    pub(crate) fn of_key(&mut self, key: &str) -> Option<&mut AttrTargets> {
+        self.0.get_mut(key)
+    }
+
+    pub(crate) fn get(&self, key: &str) -> Option<&AttrTargets> {
+        self.0.get(key)
+    }
+}
+
 /// The contiguous `SimData` slot range backing one scalarized array model
 /// variable. The backend lays an array's scalar elements out consecutively in
 /// row-major order; this records the start offset and shape so a whole-array
@@ -346,9 +399,9 @@ pub(crate) struct ArrayGroup {
     /// The elements are heap handles (String), so a read borrows and must retain.
     pub(crate) heap: bool,
     /// Array dimension sizes (row-major, outermost first).
-    pub(crate) dims: Vec<u32>,
+    pub(crate) dims: Vec<Sz>,
     /// Product of `dims` (number of scalar elements).
-    pub(crate) total: u32,
+    pub(crate) total: Sz,
     /// The `dims.len() + 1` pieces an element key is spelled from, one subscript
     /// between each: `["module", ".x", ""]` -> `module[i].x[j]`.
     pub(crate) key_pieces: Vec<String>,
@@ -388,7 +441,220 @@ pub(crate) struct ScatterGroup {
 pub(crate) struct ConstGroup {
     pub(crate) wty: WTy,
     pub(crate) dims: Vec<u32>,
-    pub(crate) values: Vec<Arc<DAE::Exp>>,
+    pub(crate) values: Vec<metamodelica::Ref<DAE::Exp>>,
+}
+
+/// The model's cref key -> slot map, shadowed by the keys one Jacobian body binds
+/// to its own seed and column slots.
+#[derive(Clone)]
+pub(crate) struct SlotMap {
+    model: Arc<VarTable>,
+    overlay: Option<Arc<HashMap<String, SimSlot>>>,
+}
+
+impl SlotMap {
+    pub(crate) fn new(model: Arc<VarTable>) -> Self {
+        SlotMap { model, overlay: None }
+    }
+
+    pub(crate) fn with_overlay(&self, overlay: Arc<HashMap<String, SimSlot>>) -> Self {
+        SlotMap { model: self.model.clone(), overlay: Some(overlay) }
+    }
+
+    pub(crate) fn get(&self, key: &str) -> Option<SimSlot> {
+        self.overlay.as_ref().and_then(|o| o.get(key).copied()).or_else(|| self.model.get(key))
+    }
+
+    pub(crate) fn contains_key(&self, key: &str) -> bool {
+        self.get(key).is_some()
+    }
+}
+
+/// Split an element key `base[i][j]` into `base` and its 1-based indices.
+pub(crate) fn split_elem_key(key: &str) -> Option<(&str, Vec<i32>)> {
+    let mut rest = key;
+    let mut idx = Vec::new();
+    while let Some(stem) = rest.strip_suffix(']') {
+        let open = stem.rfind('[')?;
+        idx.push(stem[open + 1..].parse().ok()?);
+        rest = &stem[..open];
+    }
+    if idx.is_empty() {
+        return None;
+    }
+    idx.reverse();
+    Some((rest, idx))
+}
+
+/// The row-major position of `idx` in an array shaped `dims`, if in range.
+pub(crate) fn row_major_pos(dims: &[u32], idx: &[i32]) -> Option<u32> {
+    if dims.len() != idx.len() {
+        return None;
+    }
+    let mut lin = 0u32;
+    for (&d, &i) in dims.iter().zip(idx) {
+        if i < 1 || i as u32 > d {
+            return None;
+        }
+        lin = lin * d + (i as u32 - 1);
+    }
+    Some(lin)
+}
+
+/// [`row_major_pos`] for runtime sizes; the bounds are not checked.
+pub(crate) fn dyn_row_major_pos(dims: &[Sz], idx: &[i32]) -> Option<Sz> {
+    if dims.len() != idx.len() || idx.iter().any(|&i| i < 1) {
+        return None;
+    }
+    let mut lin = Sz::lit(0);
+    for (d, &i) in dims.iter().zip(idx) {
+        lin = lin * d.clone() + Sz::lit(i as i64 - 1);
+    }
+    Some(lin)
+}
+
+/// An array entry of a [`KeyTable`]: the value of its element at row-major `pos`.
+/// `suffix` is the element key's subscript part (`[2][1]`).
+pub(crate) trait ArrayEntry: Clone {
+    type Value: Clone;
+    fn element(&self, pos: u32, suffix: &str) -> Option<Self::Value>;
+    /// The element of a runtime-sized array at `idx` (1-based), row-major `pos`.
+    fn dyn_element(&self, _idx: &[i32], pos: &Sz, suffix: &str) -> Option<Self::Value> {
+        self.element(u32::try_from(pos.as_const()?).ok()?, suffix)
+    }
+}
+
+/// A cref-key table whose array variables are one entry each instead of one per
+/// element: `x[3]` resolves through the entry of `x`.
+#[derive(Clone)]
+pub(crate) struct KeyTable<A: ArrayEntry> {
+    scalars: HashMap<String, A::Value>,
+    arrays: HashMap<String, (A, Vec<u32>)>,
+    dyn_arrays: HashMap<String, (A, Vec<Sz>)>,
+}
+
+impl<A: ArrayEntry> Default for KeyTable<A> {
+    fn default() -> Self {
+        KeyTable { scalars: HashMap::default(), arrays: HashMap::default(), dyn_arrays: HashMap::default() }
+    }
+}
+
+impl<A: ArrayEntry> KeyTable<A> {
+    pub(crate) fn get(&self, key: &str) -> Option<A::Value> {
+        if let Some(v) = self.scalars.get(key) {
+            return Some(v.clone());
+        }
+        let (base, idx) = split_elem_key(key)?;
+        if let Some((entry, dims)) = self.arrays.get(base) {
+            return entry.element(row_major_pos(dims, &idx)?, &key[base.len()..]);
+        }
+        let (entry, dims) = self.dyn_arrays.get(base)?;
+        entry.dyn_element(&idx, &dyn_row_major_pos(dims, &idx)?, &key[base.len()..])
+    }
+
+    pub(crate) fn insert_dyn_array(&mut self, base: String, entry: A, dims: Vec<Sz>) {
+        self.dyn_arrays.insert(base, (entry, dims));
+    }
+
+    pub(crate) fn dyn_array(&self, base: &str) -> Option<&(A, Vec<Sz>)> {
+        self.dyn_arrays.get(base)
+    }
+
+    pub(crate) fn insert(&mut self, key: String, value: A::Value) {
+        self.scalars.insert(key, value);
+    }
+
+    pub(crate) fn insert_array(&mut self, base: String, entry: A, dims: Vec<u32>) {
+        self.arrays.insert(base, (entry, dims));
+    }
+
+    /// The entry of the whole array `base`.
+    pub(crate) fn array(&self, base: &str) -> Option<&(A, Vec<u32>)> {
+        self.arrays.get(base)
+    }
+}
+
+impl ArrayEntry for SimSlot {
+    type Value = SimSlot;
+    fn element(&self, pos: u32, _: &str) -> Option<SimSlot> {
+        if openmodelica_sim_meta::resize::is_dyn(self.off) {
+            return self.dyn_element(&[], &Sz::lit(pos as i64), "");
+        }
+        let stride = self.wty.bytes();
+        let pre = if self.pre != 0 { self.pre + pos * stride } else { 0 };
+        Some(SimSlot { off: self.off + pos * stride, pre, ..*self })
+    }
+    fn dyn_element(&self, _: &[i32], pos: &Sz, _: &str) -> Option<SimSlot> {
+        let stride = self.wty.bytes() as i64;
+        let at = |off: u32| sizes::sim_offset(&(sizes::off_sz(off) + pos.clone() * stride)).ok();
+        let pre = if self.pre != 0 { at(self.pre)? } else { 0 };
+        Some(SimSlot { off: at(self.off)?, pre, ..*self })
+    }
+}
+
+/// A start-value slot (the realVars `start` attribute region).
+#[derive(Clone, Copy)]
+pub(crate) struct StartSlot(pub(crate) u32);
+
+impl ArrayEntry for StartSlot {
+    type Value = u32;
+    fn element(&self, pos: u32, _: &str) -> Option<u32> {
+        Some(self.0 + pos * 8)
+    }
+    fn dyn_element(&self, _: &[i32], pos: &Sz, _: &str) -> Option<u32> {
+        sizes::sim_offset(&(sizes::off_sz(self.0) + pos.clone() * 8)).ok()
+    }
+}
+
+/// The elements' start expressions, row-major.
+#[derive(Clone)]
+pub(crate) struct StartExps(pub(crate) Arc<[Option<metamodelica::Ref<DAE::Exp>>]>);
+
+impl ArrayEntry for StartExps {
+    type Value = Option<metamodelica::Ref<DAE::Exp>>;
+    fn element(&self, pos: u32, _: &str) -> Option<Self::Value> {
+        self.0.get(pos as usize).cloned()
+    }
+    /// A runtime-sized array keeps its one whole-array start expression.
+    fn dyn_element(&self, idx: &[i32], _: &Sz, _: &str) -> Option<Self::Value> {
+        Some(self.0.first()?.as_ref().map(|e| crate::CodegenWasmJit::index_exp(e, idx)))
+    }
+}
+
+/// An alias array's target array key and negation.
+#[derive(Clone)]
+pub(crate) struct AliasTarget(pub(crate) String, pub(crate) Neg);
+
+impl ArrayEntry for AliasTarget {
+    type Value = (String, Neg);
+    fn element(&self, _: u32, suffix: &str) -> Option<(String, Neg)> {
+        Some((format!("{}{suffix}", self.0), self.1))
+    }
+}
+
+/// The model's variable slots. `$PRE.<key>` is the slot mirroring `<key>`'s in a
+/// region that carries pre-values.
+#[derive(Clone, Default)]
+pub(crate) struct VarTable {
+    pub(crate) slots: KeyTable<SimSlot>,
+    pub(crate) pre: Option<openmodelica_sim_meta::Layout>,
+}
+
+impl VarTable {
+    pub(crate) fn get(&self, key: &str) -> Option<SimSlot> {
+        if let Some(s) = self.slots.get(key) {
+            return Some(s);
+        }
+        let live = self.get(key.strip_prefix("$PRE.")?)?;
+        if live.pre != 0 {
+            return Some(SimSlot { off: live.pre, pre: 0, ..live });
+        }
+        Some(SimSlot { off: self.pre.as_ref()?.pre_slot_off(live.off)?, ..live })
+    }
+
+    pub(crate) fn insert(&mut self, key: String, slot: SimSlot) {
+        self.slots.insert(key, slot);
+    }
 }
 
 /// A scalar model variable's location within the `SimData` block.
@@ -405,6 +671,9 @@ pub(crate) struct SimSlot {
     /// an assignment releases the previous handle before storing the new (owned)
     /// one. Scalar Real/Integer/Boolean slots are not heap.
     pub(crate) heap: bool,
+    /// The `pre()` slot when it is not the layout's mirror of `off` (a resizable
+    /// model's); 0 otherwise.
+    pub(crate) pre: u32,
 }
 
 impl<'a> FnCtx<'a> {
@@ -455,9 +724,30 @@ impl<'a> FnCtx<'a> {
             we::Instruction::End => {
                 self.ctrl_depth = self.ctrl_depth.saturating_sub(1);
             }
+            we::Instruction::Call(f) if Some(f) == set_dim_index() && self.set_dim_inline() => return,
             _ => {}
         }
         self.instrs.push(i);
+    }
+
+    /// `i32.const axis; <push size>; call rt_array_set_dim` as a store into the
+    /// dim word, the array handle being below both on the stack.
+    fn set_dim_inline(&mut self) -> bool {
+        let n = self.instrs.len();
+        let (Some(we::Instruction::I32Const(axis)), Some(size)) = (self.instrs.get(n.wrapping_sub(2)), self.instrs.get(n.wrapping_sub(1)))
+        else {
+            return false;
+        };
+        let simple = matches!(size, we::Instruction::LocalGet(_) | we::Instruction::I32Const(_) | we::Instruction::GlobalGet(_));
+        if !simple || *axis < 0 {
+            return false;
+        }
+        let off = ARR_DIMS_OFF + *axis as u32 * 4;
+        let size = self.instrs.pop().unwrap();
+        self.instrs.pop();
+        self.instrs.push(size);
+        self.instrs.push(we::Instruction::I32Store(mem_arg(off, 2)));
+        true
     }
     pub(super) fn ctrl_depth(&self) -> u32 {
         self.ctrl_depth
@@ -515,7 +805,7 @@ impl<'a> FnCtx<'a> {
         n_params: u32,
     ) -> Self {
         FnCtx {
-            locals: HashMap::new(),
+            locals: HashMap::default(),
             extra_locals: Vec::new(),
             n_params, // local 0 = SimData pointer
             outputs: Vec::new(),
@@ -525,11 +815,16 @@ impl<'a> FnCtx<'a> {
             ctrl_depth: 0,
             loops: Vec::new(),
             borrowed_locals: Vec::new(),
+            null_locals: Vec::new(),
             elem_ptr_tmp: None,
             src_loc: None,
             sim: Some(sim),
             dt_local_cons: false,
             dt_fallback: None,
+            flat: HashMap::default(),
+            flat_outs: Vec::new(),
+            flat_results: false,
+            size_locals: Default::default(),
         }
     }
 
@@ -605,26 +900,21 @@ impl<'a> FnCtx<'a> {
     }
 
     /// Lower a list of algorithm statements into this context.
-    pub(crate) fn sim_stmts(&mut self, stmts: &List<Arc<DAE::Statement>>) -> Result<()> {
+    pub(crate) fn sim_stmts(&mut self, stmts: &List<metamodelica::Ref<DAE::Statement>>) -> Result<()> {
         compile_stmts(self, stmts)
     }
 
     /// Emit `savePreValues`: `pre := live` for each `(pre_off, live_off, bytes)`
     /// region (via `memory.copy` within `SimData`). Appended to the per-step
     /// function so a `when` edge test sees the previous step's values.
-    pub(crate) fn sim_save_pre_values(&mut self, regions: &[(u32, u32, u32)]) -> Result<()> {
-        let data = self.sim()?.data_local;
-        for &(dst_off, src_off, bytes) in regions {
-            if bytes == 0 {
+    pub(crate) fn sim_save_pre_values(&mut self, regions: &[(u32, u32, Sz)]) -> Result<()> {
+        for (dst_off, src_off, bytes) in regions {
+            if bytes.as_const() == Some(0) {
                 continue;
             }
-            self.emit(we::Instruction::LocalGet(data));
-            self.emit(we::Instruction::I32Const(dst_off as i32));
-            self.emit(we::Instruction::I32Add);
-            self.emit(we::Instruction::LocalGet(data));
-            self.emit(we::Instruction::I32Const(src_off as i32));
-            self.emit(we::Instruction::I32Add);
-            self.emit(we::Instruction::I32Const(bytes as i32));
+            self.emit_sim_addr(*dst_off)?;
+            self.emit_sim_addr(*src_off)?;
+            self.emit_size(bytes)?;
             self.emit(we::Instruction::MemoryCopy { src_mem: 0, dst_mem: 0 });
         }
         Ok(())
@@ -637,7 +927,7 @@ impl<'a> FnCtx<'a> {
     /// the time events. `samples[k] = (startExp, intervalExp)`.
     pub(crate) fn emit_init_sample(
         &mut self,
-        samples: &[(Arc<DAE::Exp>, Arc<DAE::Exp>)],
+        samples: &[(metamodelica::Ref<DAE::Exp>, metamodelica::Ref<DAE::Exp>)],
         sample_off: u32,
     ) -> Result<()> {
         let data = self.sim()?.data_local;
@@ -749,25 +1039,20 @@ impl<'a> FnCtx<'a> {
         Ok(())
     }
 
-    /// Emit `functionUpdateBoundVariableAttributes`: the constant per-state
-    /// `nominal`, then each attribute equation, into the slots the solvers read
-    /// (C's `updateBoundVariableAttributes` + `updateStaticDataOfNonlinearSystems`).
+    /// Emit `functionUpdateBoundVariableAttributes`: the constant `defaults`
+    /// (ascending by offset), then each attribute equation, into the slots the
+    /// solvers read (C's `updateBoundVariableAttributes` +
+    /// `updateStaticDataOfNonlinearSystems`).
     pub(crate) fn emit_update_bound_attrs(
         &mut self,
-        defaults: &[(u32, f64)],
-        int_defaults: &[(u32, i32)],
-        attrs: &[(Attr, Arc<DAE::Exp>, AttrTargets, u32, Option<SimSlot>)],
+        defaults: &[(u32, ConstSlot)],
+        dyn_defaults: &[(u32, Sz, ConstSlot, u32)],
+        attrs: &[(Attr, metamodelica::Ref<DAE::Exp>, AttrTargets, u32, Option<SimSlot>)],
     ) -> Result<()> {
         let data = self.sim()?.data_local;
-        for (off, value) in defaults {
-            self.emit(we::Instruction::LocalGet(data));
-            self.emit(we::Instruction::F64Const((*value).into()));
-            self.emit(we::Instruction::F64Store(mem_arg(*off, 3)));
-        }
-        for (off, value) in int_defaults {
-            self.emit(we::Instruction::LocalGet(data));
-            self.emit(we::Instruction::I32Const(*value));
-            self.emit(we::Instruction::I32Store(mem_arg(*off, 2)));
+        emit_const_slots(self, defaults)?;
+        for (off, n, v, stride) in dyn_defaults {
+            emit_fill_slots(self, *off, n, *v, *stride)?;
         }
         if attrs.is_empty() {
             return Ok(());
@@ -784,19 +1069,19 @@ impl<'a> FnCtx<'a> {
             if matches!(attr, Attr::Nominal) {
                 for off in &targets.nom_offs {
                     // C's `dassl.c`: `atol[i] = tol * fmax(fabs(nominal), 1e-32)`.
-                    self.emit(we::Instruction::LocalGet(data));
+                    let rel = self.emit_sim_base(*off)?;
                     self.emit(we::Instruction::LocalGet(raw));
                     self.emit(we::Instruction::F64Abs);
                     self.emit(we::Instruction::F64Const(1e-32f64.into()));
                     self.emit(we::Instruction::F64Max);
-                    self.emit(we::Instruction::F64Store(mem_arg(*off, 3)));
+                    self.emit(we::Instruction::F64Store(mem_arg(rel, 3)));
                 }
             }
             if matches!(attr, Attr::Max) {
                 for off in &targets.max_offs {
-                    self.emit(we::Instruction::LocalGet(data));
+                    let rel = self.emit_sim_base(*off)?;
                     self.emit(we::Instruction::LocalGet(raw));
-                    self.emit(we::Instruction::F64Store(mem_arg(*off, 3)));
+                    self.emit(we::Instruction::F64Store(mem_arg(rel, 3)));
                 }
             }
             let raw_offs: &[u32] = match attr {
@@ -806,20 +1091,20 @@ impl<'a> FnCtx<'a> {
                 Attr::Start => &targets.start_offs,
             };
             for off in raw_offs {
-                self.emit(we::Instruction::LocalGet(data));
+                let rel = self.emit_sim_base(*off)?;
                 self.emit(we::Instruction::LocalGet(raw));
-                self.emit(we::Instruction::F64Store(mem_arg(*off, 3)));
+                self.emit(we::Instruction::F64Store(mem_arg(rel, 3)));
             }
             // C's `postExp`: `<var> = $START.<var>`, but not for a String, whose slot
             // holds a reference-counted handle.
             if let Some(slot) = var.filter(|s| s.negate == Neg::None && !s.heap) {
-                self.emit(we::Instruction::LocalGet(data));
+                let rel = self.emit_sim_base(slot.off)?;
                 self.emit(we::Instruction::LocalGet(raw));
                 match slot.wty {
-                    WTy::F64 => self.emit(we::Instruction::F64Store(mem_arg(slot.off, 3))),
+                    WTy::F64 => self.emit(we::Instruction::F64Store(mem_arg(rel, 3))),
                     _ => {
                         self.emit(we::Instruction::I32TruncSatF64S);
-                        self.emit(we::Instruction::I32Store(mem_arg(slot.off, 2)));
+                        self.emit(we::Instruction::I32Store(mem_arg(rel, 2)));
                     }
                 }
             }
@@ -861,12 +1146,12 @@ impl<'a> FnCtx<'a> {
 
     /// Store each real variable's declared `start` value in its start attribute
     /// slot at `off`.
-    pub(crate) fn emit_init_start_values(&mut self, starts: &[(f64, u32)]) -> Result<()> {
-        let data = self.sim()?.data_local;
-        for (value, off) in starts {
-            self.emit(we::Instruction::LocalGet(data));
-            self.emit(we::Instruction::F64Const((*value).into()));
-            self.emit(we::Instruction::F64Store(mem_arg(*off, 3)));
+    pub(crate) fn emit_init_start_values(&mut self, starts: &[(f64, u32)], fills: &[(u32, Sz, f64)]) -> Result<()> {
+        let mut stores: Vec<(u32, ConstSlot)> = starts.iter().map(|&(v, off)| (off, ConstSlot::f64(v))).collect();
+        stores.sort_by_key(|&(off, _)| off);
+        emit_const_slots(self, &stores)?;
+        for (off, n, v) in fills {
+            emit_fill_slots(self, *off, n, ConstSlot::f64(*v), 8)?;
         }
         Ok(())
     }
@@ -913,7 +1198,7 @@ impl<'a> FnCtx<'a> {
     /// the band direction. `None` entries keep their index without a store.
     pub(crate) fn emit_update_relations(
         &mut self,
-        relations: &[Option<Arc<DAE::Exp>>],
+        relations: &[Option<metamodelica::Ref<DAE::Exp>>],
         relations_off: u32,
     ) -> Result<()> {
         let data = self.sim()?.data_local;
@@ -933,11 +1218,46 @@ impl<'a> FnCtx<'a> {
         Ok(())
     }
 
+    /// Emit `functionNextTimeEvent`: replace the time in `SimData` by the earliest
+    /// later `trigger`, or `f64::MAX`.
+    pub(crate) fn emit_next_time_event(&mut self, triggers: &[metamodelica::Ref<DAE::Exp>]) -> Result<()> {
+        use we::Instruction as I;
+        let data = self.sim()?.data_local;
+        let now = self.alloc_temp(WTy::F64);
+        let next = self.alloc_temp(WTy::F64);
+        let te = self.alloc_temp(WTy::F64);
+        self.emit(I::LocalGet(data));
+        self.emit(I::F64Load(mem_arg(0, 3)));
+        self.emit(I::LocalSet(now));
+        self.emit(I::F64Const(f64::MAX.into()));
+        self.emit(I::LocalSet(next));
+        for e in triggers {
+            let w = compile_exp(self, e)?;
+            coerce(self, w, WTy::F64);
+            self.emit(I::LocalSet(te));
+            self.emit(I::LocalGet(te));
+            self.emit(I::LocalGet(now));
+            self.emit(I::F64Gt);
+            self.emit(I::LocalGet(te));
+            self.emit(I::LocalGet(next));
+            self.emit(I::F64Lt);
+            self.emit(I::I32And);
+            self.emit(I::If(we::BlockType::Empty));
+            self.emit(I::LocalGet(te));
+            self.emit(I::LocalSet(next));
+            self.emit(I::End);
+        }
+        self.emit(I::LocalGet(data));
+        self.emit(I::LocalGet(next));
+        self.emit(I::F64Store(mem_arg(0, 3)));
+        Ok(())
+    }
+
     /// Emit `functionStoreDelayed`: `rt_delay_store(idx, time, e, d, dmax)` per
     /// `delay(...)` expression (C's `function_storeDelayed`).
     pub(crate) fn emit_store_delayed(
         &mut self,
-        delayed: &[(i32, Arc<DAE::Exp>, Arc<DAE::Exp>, Arc<DAE::Exp>)],
+        delayed: &[(i32, metamodelica::Ref<DAE::Exp>, metamodelica::Ref<DAE::Exp>, metamodelica::Ref<DAE::Exp>)],
     ) -> Result<()> {
         let data = self.sim()?.data_local;
         for (idx, e, d, dmax) in delayed {
@@ -1068,12 +1388,12 @@ impl<'a> FnCtx<'a> {
     /// must be saved after each step.
     pub(crate) fn sim_when(
         &mut self,
-        conditions: &List<Arc<DAE::ComponentRef>>,
+        conditions: &List<metamodelica::Ref<DAE::ComponentRef>>,
         stmts: &List<openmodelica_backend_types::BackendDAE::WhenOperator>,
-        else_when: &Option<Arc<openmodelica_simcode_types::SimCode::SimEqSystem>>,
+        else_when: &Option<metamodelica::Ref<openmodelica_simcode_types::SimCode::SimEqSystem>>,
     ) -> Result<()> {
         use we::Instruction as I;
-        let conds: Vec<&Arc<DAE::ComponentRef>> = (&**conditions).into_iter().collect();
+        let conds: Vec<&metamodelica::Ref<DAE::ComponentRef>> = (&**conditions).into_iter().collect();
         // Edge guard: OR of `cond && !pre(cond)`; an empty condition list never
         // fires (C emits `0`).
         if conds.is_empty() {
@@ -1093,9 +1413,11 @@ impl<'a> FnCtx<'a> {
             }
         }
         self.emit(I::If(we::BlockType::Empty));
+        let outer = self.set_when_body(true);
         for op in &**stmts {
             self.lower_when_op(op)?;
         }
+        self.set_when_body(outer);
         if let Some(ew) = else_when {
             self.emit(I::Else);
             match &**ew {
@@ -1107,6 +1429,11 @@ impl<'a> FnCtx<'a> {
         }
         self.emit(I::End);
         Ok(())
+    }
+
+    /// Enter or leave a when-body; returns the previous state.
+    pub(super) fn set_when_body(&mut self, on: bool) -> bool {
+        self.sim.as_mut().is_some_and(|s| core::mem::replace(&mut s.when_body, on))
     }
 
     fn lower_when_op(&mut self, op: &openmodelica_backend_types::BackendDAE::WhenOperator) -> Result<()> {
@@ -1130,6 +1457,124 @@ impl<'a> FnCtx<'a> {
     /// `return`/fall-through value handling appropriate for the function.
     pub(crate) fn finish_sim(mut self) -> (Vec<we::ValType>, Vec<we::Instruction<'static>>) {
         self.emit(we::Instruction::End);
+        let prologue = self.size_prologue();
+        if !prologue.is_empty() {
+            self.instrs.splice(0..0, prologue);
+        }
         (self.extra_locals, self.instrs)
     }
+}
+
+fn set_dim_index() -> Option<u32> {
+    static INDEX: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *INDEX.get_or_init(|| rt_index("rt_array_set_dim").ok())
+}
+
+/// Functions split out of an equation body, called through a module table of
+/// their own, so a large system's equations neither exceed wasmtime's function
+/// body limit nor get compiled once per entry point evaluating them.
+struct Outlined {
+    types: [u32; 2],
+    table: u32,
+    fns: Vec<(we::Function, u32)>,
+    by_body: HashMap<Vec<u8>, u32>,
+}
+
+thread_local! {
+    static OUTLINED: std::cell::RefCell<Option<Outlined>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Collects outlined functions for table `table` while alive; `types` are the
+/// `(SimData*) -> ()` and `(SimData*, i32) -> ()` type indices.
+pub(crate) struct OutlineScope;
+
+impl OutlineScope {
+    pub(crate) fn begin(types: [u32; 2], table: u32) -> OutlineScope {
+        OUTLINED.with(|o| *o.borrow_mut() = Some(Outlined { types, table, fns: Vec::new(), by_body: HashMap::default() }));
+        OutlineScope
+    }
+
+    /// The outlined functions and their types, in table slot order; lowering after
+    /// this inlines again.
+    pub(crate) fn finish(&self) -> Vec<(we::Function, u32)> {
+        OUTLINED.with(|o| o.borrow_mut().take().map(|o| o.fns).unwrap_or_default())
+    }
+}
+
+impl Drop for OutlineScope {
+    fn drop(&mut self) {
+        OUTLINED.with(|o| *o.borrow_mut() = None);
+    }
+}
+
+fn outlining() -> bool {
+    OUTLINED.with(|o| o.borrow().is_some())
+}
+
+const OUTLINE_BUDGET: usize = 4096;
+
+pub(crate) const OUTLINE_MIN_UNITS: usize = 64;
+
+impl FnCtx<'_> {
+    /// Lower `n` units (`lower(sub, i)`) into outlined functions and call them from
+    /// here, passing local `arg` on as the outlined function's local 1. `false` when
+    /// no module is collecting, leaving the caller to lower them inline.
+    pub(crate) fn emit_outlined(
+        &mut self,
+        n: usize,
+        arg: Option<u32>,
+        mut lower: impl FnMut(&mut FnCtx, usize) -> Result<()>,
+    ) -> Result<bool> {
+        if !outlining() {
+            return Ok(false);
+        }
+        let data = self.sim()?.data_local;
+        let mut sim = self.sim()?.clone();
+        sim.data_local = 0;
+        let mut i = 0;
+        while i < n {
+            let n_params = 1 + arg.is_some() as u32;
+            let mut sub = FnCtx::new_sim_params(sim.clone(), self.by_name, &mut *self.literals, n_params);
+            while i < n {
+                lower(&mut sub, i)?;
+                i += 1;
+                if sub.instr_len() >= OUTLINE_BUDGET {
+                    break;
+                }
+            }
+            let (locals, instrs) = sub.finish_sim();
+            let mut f = we::Function::new(locals.into_iter().map(|t| (1u32, t)));
+            for ins in &instrs {
+                f.instruction(ins);
+            }
+            let (slot, ty, table) = outline_fn(f, arg.is_some()).ok_or("CodegenWasmJit: outlined function outside a module")?;
+            self.emit(we::Instruction::LocalGet(data));
+            if let Some(arg) = arg {
+                self.emit(we::Instruction::LocalGet(arg));
+            }
+            self.emit(we::Instruction::I32Const(slot as i32));
+            self.emit(we::Instruction::CallIndirect { type_index: ty, table_index: table });
+        }
+        Ok(true)
+    }
+}
+
+/// `f`'s slot, type and table, reusing an identical body's slot; `None` when no
+/// module is collecting.
+fn outline_fn(f: we::Function, with_arg: bool) -> Option<(u32, u32, u32)> {
+    use wasm_encoder::Encode;
+    OUTLINED.with(|o| {
+        let mut o = o.borrow_mut();
+        let o = o.as_mut()?;
+        let ty = o.types[with_arg as usize];
+        let mut body = ty.to_le_bytes().to_vec();
+        f.encode(&mut body);
+        if let Some(&slot) = o.by_body.get(&body) {
+            return Some((slot, ty, o.table));
+        }
+        let slot = o.fns.len() as u32;
+        o.fns.push((f, ty));
+        o.by_body.insert(body, slot);
+        Some((slot, ty, o.table))
+    })
 }

@@ -49,16 +49,24 @@ pub(super) fn compile_exp(ctx: &mut FnCtx, exp: &DAE::Exp) -> Result<WTy> {
             if let Some(wty) = compile_sim_cref_read(ctx, componentRef)? {
                 return Ok(wty);
             }
+            if let Some((v, i)) = flat_field_ref(ctx, componentRef) {
+                ctx.emit(we::Instruction::LocalGet(v.locals[i]));
+                return Ok(v.fields[i].1.wty());
+            }
             // A qualified cref `base[..].f1[..].….fn[..]`: descend through nested
             // records (and arrays of records) to the final field.
             if let DAE::ComponentRef::CREF_QUAL { .. } = &**componentRef {
                 return compile_cref_read_qual(ctx, componentRef);
             }
             // A scalar/whole-value reference, or a subscripted array element.
-            let DAE::ComponentRef::CREF_IDENT { ident, subscriptLst, .. } = &**componentRef else {
+            let DAE::ComponentRef::CREF_IDENT { ident, identType, subscriptLst } = &**componentRef else {
                 return Err("CodegenWasmJit: unsupported component reference");
             };
             let name = ident.to_string();
+            if let Some(v) = flat_cref(ctx, componentRef).cloned() {
+                box_flat(ctx, &v.fields, &v.locals)?;
+                return Ok(WTy::I32);
+            }
             let (idx, sty) = ctx
                 .locals
                 .get(&name)
@@ -84,7 +92,7 @@ pub(super) fn compile_exp(ctx: &mut FnCtx, exp: &DAE::Exp) -> Result<WTy> {
                 // the element straight out of it; only a heap element is retained.
                 if is_scalar_index(subscriptLst, rank) {
                     let idx_exps = index_subscripts(subscriptLst, rank)?;
-                    emit_elem_addr(ctx, idx, &elem, &idx_exps)?;
+                    emit_elem_addr(ctx, idx, &elem, &idx_exps, static_dims(identType).as_deref())?;
                     elem_load(ctx, &elem);
                     retain_on_stack(ctx, &elem)?;
                     Ok(elem.wty())
@@ -245,7 +253,7 @@ pub(super) fn compile_exp(ctx: &mut FnCtx, exp: &DAE::Exp) -> Result<WTy> {
 /// Name the expression we could not lower in a recorded message; the `Result`
 /// error is a `&'static str`.
 fn unsupported_exp(exp: &DAE::Exp) -> &'static str {
-    let shown = openmodelica_frontend_dump::ExpressionBasics::printExpStr(Arc::new(exp.clone()))
+    let shown = openmodelica_frontend_dump::ExpressionBasics::printExpStr(metamodelica::Ref::new(exp.clone()))
         .map(|s| s.to_string())
         .unwrap_or_default();
     crate::CodegenWasmJit::record_error(format!(
@@ -411,10 +419,10 @@ pub(super) fn operand_sigty(e1: &DAE::Exp, e2: &DAE::Exp) -> Result<SigTy> {
 /// The value expression an identity builtin wraps. C's `daeExpCall` returns the
 /// argument's own expression for these, so the call's type *is* the argument's --
 /// which matters where the frontend left the call itself untyped.
-fn identity_builtin_arg(exp: &DAE::Exp) -> Option<Arc<DAE::Exp>> {
+fn identity_builtin_arg(exp: &DAE::Exp) -> Option<metamodelica::Ref<DAE::Exp>> {
     let DAE::Exp::CALL { path, expLst, .. } = exp else { return None };
-    let name = AbsynUtil::pathLastIdent(path.clone());
-    let args: Vec<&Arc<DAE::Exp>> = (&**expLst).into_iter().collect();
+    let name = AbsynUtil::pathLastIdent(&path);
+    let args: Vec<&metamodelica::Ref<DAE::Exp>> = (&**expLst).into_iter().collect();
     match (name.as_str(), args.len()) {
         ("smooth", 2) => Some(args[1].clone()),
         ("noEvent", 1) | ("$getPart", 1) => Some(args[0].clone()),
@@ -423,7 +431,7 @@ fn identity_builtin_arg(exp: &DAE::Exp) -> Option<Arc<DAE::Exp>> {
 }
 
 /// The type of a call *as a value*: its first output (`daeExpCall`).
-fn call_value_ty(ty: &Arc<DAE::Type>) -> Arc<DAE::Type> {
+fn call_value_ty(ty: &metamodelica::Ref<DAE::Type>) -> metamodelica::Ref<DAE::Type> {
     match &**ty {
         DAE::Type::T_TUPLE { types, .. } => {
             (&**types).into_iter().next().cloned().unwrap_or_else(|| ty.clone())
@@ -575,7 +583,7 @@ pub(super) fn compile_binary(ctx: &mut FnCtx, e1: &DAE::Exp, op: &DAE::Operator,
         Ok(s) => s,
         Err(_) => operand_sigty(e1, e2).map_err(|e| {
             let show = |x: &DAE::Exp| {
-                openmodelica_frontend_dump::ExpressionBasics::printExpStr(Arc::new(x.clone()))
+                openmodelica_frontend_dump::ExpressionBasics::printExpStr(metamodelica::Ref::new(x.clone()))
                     .map(|s| s.to_string())
                     .unwrap_or_default()
             };
@@ -599,10 +607,10 @@ pub(super) fn compile_binary(ctx: &mut FnCtx, e1: &DAE::Exp, op: &DAE::Operator,
     let wty = sig.wty();
     // POW has no wasm instruction. Mirror the C target's scalar-power dispatch
     // exactly: a literal `0.5` exponent is `sqrt` (with a negative-base check),
-    // an integer-literal exponent is exponentiation by squaring
-    // (`rt_real_int_pow`), and everything else is the generic `rt_real_pow`
-    // (negative-base / odd-root / nan-inf handling). Keeping the same three-way
-    // choice as C keeps the output byte-identical.
+    // `^2`, `^3` and `^4` are multiplications, any other integer-literal exponent
+    // is exponentiation by squaring (`rt_real_int_pow`), and everything else is
+    // the generic `rt_real_pow` (negative-base / odd-root / nan-inf handling).
+    // Keeping the same choice as C keeps the output byte-identical.
     if matches!(op, O::POW { .. }) {
         if exp_is_half(e2) {
             // sqrt(base); a negative base is an invalid root. `rt_invalid_root`
@@ -613,33 +621,52 @@ pub(super) fn compile_binary(ctx: &mut FnCtx, e1: &DAE::Exp, op: &DAE::Operator,
             ctx.emit(we::Instruction::LocalTee(bt));
             ctx.emit(we::Instruction::F64Const(0.0f64.into()));
             ctx.emit(we::Instruction::F64Lt);
-            ctx.emit(we::Instruction::If(we::BlockType::Empty));
+            emit_unlikely_if(ctx, we::BlockType::Empty);
             ctx.emit(we::Instruction::LocalGet(bt));
             ctx.emit(we::Instruction::F64Const(0.5f64.into()));
             emit_src_loc(ctx);
             ctx.emit(we::Instruction::Call(rt_index("rt_invalid_root")?));
             release_heap_locals(ctx)?;
-            push_outputs(ctx);
+            push_outputs(ctx)?;
             ctx.emit(we::Instruction::Return);
             ctx.emit(we::Instruction::End);
             ctx.emit(we::Instruction::LocalGet(bt));
             ctx.emit(we::Instruction::F64Sqrt);
             return Ok(WTy::F64);
         }
-        let rt = if let Some(n) = real_exp_int_lit(e2) {
+        if let Some(n @ 2..=4) = real_exp_int_lit(e2) {
+            let a = compile_exp(ctx, e1)?;
+            coerce(ctx, a, WTy::F64);
+            let t = ctx.alloc_temp(WTy::F64);
+            ctx.emit(we::Instruction::LocalTee(t));
+            ctx.emit(we::Instruction::LocalGet(t));
+            ctx.emit(we::Instruction::F64Mul);
+            match n {
+                3 => {
+                    ctx.emit(we::Instruction::LocalGet(t));
+                    ctx.emit(we::Instruction::F64Mul);
+                }
+                4 => {
+                    ctx.emit(we::Instruction::LocalTee(t));
+                    ctx.emit(we::Instruction::LocalGet(t));
+                    ctx.emit(we::Instruction::F64Mul);
+                }
+                _ => {}
+            }
+            if wty == WTy::I32 {
+                ctx.emit(we::Instruction::I32TruncF64S);
+                return Ok(WTy::I32);
+            }
+            return Ok(WTy::F64);
+        }
+        if let Some(n) = real_exp_int_lit(e2) {
             let a = compile_exp(ctx, e1)?;
             coerce(ctx, a, WTy::F64);
             ctx.emit(we::Instruction::I32Const(n));
-            "rt_real_int_pow"
+            ctx.emit(we::Instruction::Call(rt_index("rt_real_int_pow")?));
         } else {
-            let a = compile_exp(ctx, e1)?;
-            coerce(ctx, a, WTy::F64);
-            let b = compile_exp(ctx, e2)?;
-            coerce(ctx, b, WTy::F64);
-            emit_src_loc(ctx);
-            "rt_real_pow"
-        };
-        ctx.emit(we::Instruction::Call(rt_index(rt)?));
+            emit_real_pow(ctx, e1, e2)?;
+        }
         // Integer power keeps Integer type in Modelica: truncate back.
         if wty == WTy::I32 {
             ctx.emit(we::Instruction::I32TruncF64S);
@@ -714,16 +741,16 @@ fn emit_div_zero_guard(
         ctx.emit(I::I32Const(0));
         ctx.emit(I::I32Eq);
     }
-    ctx.emit(I::If(we::BlockType::Empty));
-    let exp = Arc::new(DAE::Exp::BINARY {
-        exp1: Arc::new(e1.clone()),
+    emit_unlikely_if(ctx, we::BlockType::Empty);
+    let exp = metamodelica::Ref::new(DAE::Exp::BINARY {
+        exp1: metamodelica::Ref::new(e1.clone()),
         operator: op.clone(),
-        exp2: Arc::new(e2.clone()),
+        exp2: metamodelica::Ref::new(e2.clone()),
     });
     emit_shared_str(ctx, &format!("Division by zero {} in function context", dumped_exp(&exp)?));
     ctx.emit(I::Call(rt_index("rt_throw_stream")?));
     release_heap_locals(ctx)?;
-    push_outputs(ctx);
+    push_outputs(ctx)?;
     ctx.emit(I::Return);
     ctx.emit(I::End);
     ctx.emit(I::LocalGet(t));
@@ -751,10 +778,10 @@ fn emit_div_sim(ctx: &mut FnCtx, e2: &DAE::Exp) -> Result<WTy> {
     ctx.emit(I::F64Const(0.0f64.into()));
     ctx.emit(I::F64Eq);
     ctx.emit(I::I32Or);
-    ctx.emit(I::If(we::BlockType::Result(we::ValType::F64)));
+    emit_unlikely_if(ctx, we::BlockType::Result(we::ValType::F64));
     ctx.emit(I::LocalGet(ta));
     ctx.emit(I::LocalGet(tb));
-    emit_shared_str(ctx, &dumped_exp(&Arc::new(e2.clone()))?);
+    emit_shared_str(ctx, &dumped_exp(e2)?);
     let data = ctx.sim()?.data_local;
     ctx.emit(I::LocalGet(data));
     ctx.emit(I::F64Load(mem_arg(0, 3))); // `time` — `SimData` offset 0
@@ -764,4 +791,52 @@ fn emit_div_sim(ctx: &mut FnCtx, e2: &DAE::Exp) -> Result<WTy> {
     ctx.emit(I::LocalGet(res));
     ctx.emit(I::End);
     Ok(WTy::F64)
+}
+
+/// `e1 ^ e2` for a run-time exponent: `rt_real_pow`'s ordinary branch (a
+/// non-negative base or a zero exponent, and a finite result) is the plain `pow`
+/// builtin, so the call into the runtime is left to negative bases and errors.
+fn emit_real_pow(ctx: &mut FnCtx, e1: &DAE::Exp, e2: &DAE::Exp) -> Result<()> {
+    use we::Instruction as I;
+    let f64_block = we::BlockType::Result(we::ValType::F64);
+    let (base, exp, r) = (ctx.alloc_temp(WTy::F64), ctx.alloc_temp(WTy::F64), ctx.alloc_temp(WTy::F64));
+    let a = compile_exp(ctx, e1)?;
+    coerce(ctx, a, WTy::F64);
+    ctx.emit(I::LocalSet(base));
+    let b = compile_exp(ctx, e2)?;
+    coerce(ctx, b, WTy::F64);
+    ctx.emit(I::LocalSet(exp));
+    let fallback = |ctx: &mut FnCtx| -> Result<()> {
+        ctx.emit(I::LocalGet(base));
+        ctx.emit(I::LocalGet(exp));
+        emit_src_loc(ctx);
+        ctx.emit(I::Call(rt_index("rt_real_pow")?));
+        Ok(())
+    };
+    ctx.emit(I::LocalGet(base));
+    ctx.emit(I::F64Const(0.0.into()));
+    ctx.emit(I::F64Ge);
+    ctx.emit(I::LocalGet(exp));
+    ctx.emit(I::F64Const(0.0.into()));
+    ctx.emit(I::F64Eq);
+    ctx.emit(I::I32Or);
+    ctx.emit(I::If(f64_block));
+    ctx.emit(I::LocalGet(base));
+    ctx.emit(I::LocalGet(exp));
+    ctx.emit(I::Call(builtin_index("pow").ok_or("CodegenWasmJit: pow builtin missing")?));
+    ctx.emit(I::LocalTee(r));
+    // `r - r` is 0 only for a finite `r`.
+    ctx.emit(I::LocalGet(r));
+    ctx.emit(I::F64Sub);
+    ctx.emit(I::F64Const(0.0.into()));
+    ctx.emit(I::F64Eq);
+    ctx.emit(I::If(f64_block));
+    ctx.emit(I::LocalGet(r));
+    ctx.emit(I::Else);
+    fallback(ctx)?;
+    ctx.emit(I::End);
+    ctx.emit(I::Else);
+    fallback(ctx)?;
+    ctx.emit(I::End);
+    Ok(())
 }

@@ -58,6 +58,10 @@ BindingInvalidType2.mo \
 BindingInvalidType3.mo \
 BindingInvalidType4.mo \
 BindingInvalidType5.mo \
+BlockConnector1.mo \
+BlockConnector2.mo \
+BlockConnector3.mo \
+BlockConnector4.mo \
 bindings1.mo \
 bindings4.mo \
 bindings7.mo \
@@ -153,6 +157,7 @@ CevalFuncArray3.mo \
 CevalFuncArray4.mo \
 CevalFuncArray5.mo \
 CevalFuncArray6.mo \
+CevalFuncArray7.mo \
 CevalFuncAssert1.mo \
 CevalFuncAssert2.mo \
 CevalFuncFor1.mo \
@@ -545,6 +550,7 @@ Final6.mo \
 Final7.mo \
 ForConnect1.mo \
 ForConnect2.mo \
+ForConnect3.mo \
 ForEquation1.mo \
 ForEquation2.mo \
 ForEquation3.mo \
@@ -552,6 +558,7 @@ ForEquation4.mo \
 ForEquation5.mo \
 ForEquation6.mo \
 ForEquation7.mo \
+ForEquation8.mo \
 ForEquationEnum1.mo \
 ForEquationEnum2.mo \
 ForEquationNonParam.mo \
@@ -633,6 +640,8 @@ FuncBuiltinSqrt.mo \
 FuncBuiltinSubSample1.mo \
 FuncBuiltinSubSample2.mo \
 FuncBuiltinSum.mo \
+FuncBuiltinSum2.mo \
+FuncBuiltinSum3.mo \
 FuncBuiltinSuperSample1.mo \
 FuncBuiltinSuperSample2.mo \
 FuncBuiltinSymmetric.mo \
@@ -674,6 +683,11 @@ FuncUnknownDim3.mo \
 FuncViaComp.mo \
 FuncViaComp2.mo \
 FuncViaComp3.mo \
+FuncViaComp4.mo \
+FuncViaComp5.mo \
+FuncViaComp6.mo \
+FuncViaComp7.mo \
+FuncViaComp8.mo \
 FuncVectorization1.mo \
 FuncVectorization2.mo \
 FuncVectorization3.mo \
@@ -737,14 +751,27 @@ FunctionUnitialized1.mo \
 FunctionUnitialized2.mo \
 FunctionUnitialized3.mo \
 FunctionUnitialized4.mo \
+FunctionUnitialized5.mo \
+FunctionUnitialized6.mo \
+FunctionUnitialized7.mo \
+FunctionUnitialized8.mo \
 HGTComponentPair1.mo \
 HGTDisabled1.mo \
+HGTArray1.mo \
 HGTError1.mo \
 HGTError2.mo \
 HGTError3.mo \
 HGTError4.mo \
 HGTError5.mo \
 HGTError6.mo \
+HGTError7.mo \
+HGTError8.mo \
+HGTError10.mo \
+HGTError11.mo \
+HGTError12.mo \
+HGTError9.mo \
+HGTFor1.mo \
+HGTIf1.mo \
 HGTLevel1.mo \
 HGTModelon1.mo \
 HGTNotSupported1.mo \
@@ -754,6 +781,8 @@ IfConnect1.mo \
 IfConnect2.mo \
 IfConnect3.mo \
 IfConnect4.mo \
+IfConnect5.mo \
+IfConnect6.mo \
 IfEquation1.mo \
 IfEquation2.mo \
 IfEquation3.mo \
@@ -789,6 +818,7 @@ IfExpression19.mo \
 IfExpression20.mo \
 IfExpression21.mo \
 IfExpression22.mo \
+IntegerArithmeticCast1.mo \
 IfEquationInvalidCond1.mo \
 ih1.mo \
 ih2.mo \
@@ -846,6 +876,7 @@ InnerOuter10.mo \
 InnerOuter11.mo \
 InnerOuter12.mo \
 InnerOuter13.mo \
+InnerOuter14.mo \
 InnerOuterClass1.mo \
 InnerOuterConnect1.mo \
 InnerOuterDuplicate1.mo \
@@ -940,6 +971,7 @@ MultiInheritanceRedeclare2.mo \
 NoEvent1.mo \
 NoEvent2.mo \
 NonConnectorFlow1.mo \
+NonLiteralRange1.mo \
 NonexistentRedeclareModifier1.mo \
 NonexistentRedeclareModifier2.mo \
 NonFixedConstant1.mo \

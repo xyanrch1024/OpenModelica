@@ -66,8 +66,10 @@ import ExpressionBasics;
 import ExpressionSimplify;
 import ExpressionSolve;
 import Flags;
+import FlagsUtil;
 import GCExt;
 import Global;
+import HandGuidedTearing;
 import List;
 import Matching;
 import MetaModelica.Dangerous;
@@ -77,6 +79,7 @@ import Util;
 import Sorting;
 import System;
 import ElementSource;
+import SimCodeCodegenUtil;
 
 // =============================================================================
 // section for type definitions
@@ -305,6 +308,8 @@ protected function traverseComponent "author: Frenkel TUD 2012-05"
 protected
   constant Boolean debug = false;
   Boolean debugFlag = Flags.isSet(Flags.TEARING_DUMP) or Flags.isSet(Flags.TEARING_DUMPVERBOSE);
+  Boolean is_hgt;
+  list<Integer> hgt_vars, hgt_eqns;
 algorithm
   strongComponentIndexOut := match inComp
     case BackendDAE.EQUATIONSYSTEM(jac=BackendDAE.FULL_JACOBIAN()) algorithm
@@ -317,6 +322,15 @@ algorithm
     then (strongComponentIndexOut + 1);
     else strongComponentIndexOut;
   end match;
+
+  // Components with hand guided tearing items are always torn as the user
+  // specified, regardless of the tearing settings and whether tearing pays off.
+  (is_hgt, hgt_vars, hgt_eqns) := HandGuidedTearing.componentItems(inComp, isyst, ishared);
+  if is_hgt then
+    oComp := handGuidedTearing(inComp, isyst, ishared, hgt_vars, hgt_eqns);
+    outRunMatching := true;
+    return;
+  end if;
 
   (oComp, outRunMatching) := match inComp
     local
@@ -577,8 +591,8 @@ algorithm
   costTornSparse := buildTorn + solveCost(rt, intReal(nnzA), true);
 
   // costed at the format the backend will emit for each
-  costUntorn := if BackendDAEUtil.useSparseSolver(n, nnz, isLinear) then costSparse else costDense;
-  costTorn := if BackendDAEUtil.useSparseSolver(t, nnzA, isLinear) then costTornSparse else costTornDense;
+  costUntorn := if SimCodeCodegenUtil.useSparseSolver(n, nnz, isLinear) then costSparse else costDense;
+  costTorn := if SimCodeCodegenUtil.useSparseSolver(t, nnzA, isLinear) then costTornSparse else costTornDense;
 
   if Flags.isSet(Flags.TEARING_COST) then
     print("[tearingCost] component " + intString(strongComponentIndex) + " " + (if isLinear then "LS" else "NLS")
@@ -589,8 +603,8 @@ algorithm
           + " digitsLost=" + realString(digitsLost) + " valuedCoeffs=" + intString(valued) + "/" + intString(nnz)
           + " cost dense=" + realString(costDense) + " sparse=" + realString(costSparse)
           + " tornDense=" + realString(costTornDense) + " tornSparse=" + realString(costTornSparse)
-          + " format=" + (if BackendDAEUtil.useSparseSolver(n, nnz, isLinear) then "sparse" else "dense")
-          + " tornFormat=" + (if BackendDAEUtil.useSparseSolver(t, nnzA, isLinear) then "sparse" else "dense") + "\n");
+          + " format=" + (if SimCodeCodegenUtil.useSparseSolver(n, nnz, isLinear) then "sparse" else "dense")
+          + " tornFormat=" + (if SimCodeCodegenUtil.useSparseSolver(t, nnzA, isLinear) then "sparse" else "dense") + "\n");
   end if;
 
   // a nonlinear system's cost is its Newton iterations, which this does not model
@@ -624,6 +638,9 @@ algorithm
     case BackendDAE.RESIDUAL_EQUATION() algorithm
       exp := dEqn.exp;
       for i in 1:3 loop
+        if Expression.isScalarConst(exp) then
+          break;
+        end if;
         (exp, _) := Expression.traverseExpBottomUp(exp, substituteKnownVar, globalKnownVars);
         (exp, _) := ExpressionSimplify.simplify(exp);
       end for;
@@ -2358,14 +2375,7 @@ algorithm
   // dependency is intended: even when initialization still succeeds, the start value (a guess) is
   // never actually used to initialize the variable.
   for baseCref in cyclicBaseCrefs loop
-    Error.addCompilerWarning("Initialization start-value cycle: the start attribute of '" +
-      ComponentReferenceBasics.printComponentRefStr(baseCref) +
-      "' depends, directly or transitively, on the variable itself. The start attribute defines the " +
-      "initial value of '" + ComponentReferenceBasics.printComponentRefStr(baseCref) + "' and therefore " +
-      "cannot be computed from it, so this start value cannot be used to initialize the variable (see " +
-      "Modelica Specification section 4.9.6). This is possibly a modeling error; if unintended, give '" +
-      ComponentReferenceBasics.printComponentRefStr(baseCref) + "' a start value that does not depend on " +
-      "itself. Use the transformational debugger to inspect the dependency chain.");
+    BackendDAEUtil.warnStartValueCycle(baseCref);
   end for;
   // ticket #15433: a $START.x->x cycle is NECESSARY but NOT SUFFICIENT to need the degree-1
   // forcing. Such a cycle is always an ill-posed start value (the start attribute of x cannot be
@@ -2665,8 +2675,8 @@ algorithm
          inSimulation and BackendVariable.isStateVar(var) and not listMember(index, always) then
         always := index :: always;
 
-      // Also prefer variables with start value
-      elseif preferTVarsWithStartValue and BackendVariable.varHasStartValue(var) then
+      // Also prefer variables with start value that is not just the default of their type
+      elseif preferTVarsWithStartValue and BackendVariable.varHasStartValue(var) and not BackendVariable.varStartFromType(var) then
         prefer := index :: prefer;
       end if;
     end if;
@@ -3679,15 +3689,37 @@ protected function preferAvoidVariables
   input list<Integer> preferAvoidIn;
   input Real factor;
 protected
-  Integer preferAvoidVar, pos;
+  array<Integer> pointsArr, firstPos "1-based position of each variable in varsIn";
+  Integer pos, maxVar;
 algorithm
-  for preferAvoidVar in preferAvoidIn loop
-    try
-      pos := List.position(preferAvoidVar,varsIn);
-      points := List.set(points,pos,realInt(realMul(factor,intReal(listGet(points,pos)))));
-    else
-    end try;
+  if listEmpty(preferAvoidIn) then
+    return;
+  end if;
+  maxVar := List.fold(varsIn, intMax, 0);
+  firstPos := arrayCreate(maxVar, 0);
+  pos := 1;
+  for v in varsIn loop
+    if v > 0 and firstPos[v] == 0 then
+      firstPos[v] := pos;
+    end if;
+    pos := pos + 1;
   end for;
+  pointsArr := listArray(points);
+  for preferAvoidVar in preferAvoidIn loop
+    if preferAvoidVar > 0 and preferAvoidVar <= maxVar then
+      pos := firstPos[preferAvoidVar];
+    else
+      try
+        pos := List.position(preferAvoidVar, varsIn);
+      else
+        pos := 0;
+      end try;
+    end if;
+    if pos > 0 and pos <= arrayLength(pointsArr) then
+      pointsArr[pos] := realInt(realMul(factor, intReal(pointsArr[pos])));
+    end if;
+  end for;
+  points := arrayList(pointsArr);
 end preferAvoidVariables;
 
 
@@ -5685,6 +5717,265 @@ algorithm
   end if;
 end simpleMatching;
 
+
+protected function handGuidedTearing
+  "Tears a strong component that contains hand guided tearing items, see
+   doc/HGT_design.md section 8.6. The user's iteration variables and residual
+   equations are fixed; the other equations are causalized, and as long as that
+   gets stuck an additional iteration variable is selected (OCT: \"the
+   automatic algorithm will kick in and finalize the tearing\"), unless
+   --hgtOnly is set. The equations that remain unassigned become additional
+   residual equations."
+  input BackendDAE.StrongComponent inComp;
+  input BackendDAE.EqSystem isyst;
+  input BackendDAE.Shared ishared;
+  input list<Integer> userTVars "local indices";
+  input list<Integer> userResiduals "local indices";
+  output BackendDAE.StrongComponent ocomp;
+protected
+  list<Integer> eindex, vindx, tvars, user_rows, order = {}, caus_eq, e_exp, evars, unassigned,
+                auto_rows, residuals, discrete_vars;
+  Boolean linear, mixed, finished = false, stuck;
+  Integer size, e, t;
+  BackendDAE.EqSystem subsyst;
+  BackendDAE.EquationArray eqns;
+  BackendDAE.Variables vars;
+  list<BackendDAE.Equation> eqn_lst;
+  list<BackendDAE.Var> var_lst;
+  BackendDAE.AdjacencyMatrix m, mt, m1, mt1;
+  BackendDAE.AdjacencyMatrixEnhanced me;
+  BackendDAE.AdjacencyMatrixTEnhanced meT;
+  array<list<Integer>> map_eqn_row;
+  array<Integer> map_row_eqn, ass1, ass2 = arrayCreate(0, -1);
+  BackendDAE.InnerEquations inner_equations;
+  Boolean debugFlag = Flags.isSet(Flags.TEARING_DUMP) or Flags.isSet(Flags.TEARING_DUMPVERBOSE);
+algorithm
+  (eindex, vindx, linear, mixed) := match inComp
+    case BackendDAE.EQUATIONSYSTEM()
+      then (inComp.eqns, inComp.vars, BackendDAEUtil.getLinearfromJacType(inComp.jacType), inComp.mixedSystem);
+    case BackendDAE.SINGLEEQUATION()
+      then ({inComp.eqn}, {inComp.var}, false, false);
+  end match;
+
+  // Subsystem of the component, like in userDefinedTearing.
+  size := listLength(vindx);
+  eqn_lst := BackendEquation.getList(eindex, BackendEquation.getEqnsFromEqSystem(isyst));
+  eqns := BackendEquation.listEquation(eqn_lst);
+  var_lst := List.map1r(vindx, BackendVariable.getVarAt, BackendVariable.daeVars(isyst));
+  vars := BackendVariable.listVar1(var_lst);
+  subsyst := BackendDAEUtil.createEqSystem(vars, eqns);
+  (subsyst, m, mt, _, _) := BackendDAEUtil.getAdjacencyMatrixScalar(subsyst, BackendDAE.NORMAL(), NONE(), BackendDAEUtil.isInitializationDAE(ishared));
+  m := Array.map(m, deleteNegativeEntries);
+  mt := Array.map(mt, deleteNegativeEntries);
+  // The user chose the iteration variables, so the other equations are solved
+  // for whatever is analytically possible (like --tearingStrictness=casual),
+  // independent of the global tearing strictness. Otherwise e.g. m = k*sqrt(pa - pb)
+  // is not solved for pa and the user's choice would be overridden.
+  (me, meT, map_eqn_row, map_row_eqn) := BackendDAEUtil.getAdjacencyMatrixEnhancedScalar(subsyst, ishared, true);
+
+  user_rows := List.flatten(list(map_eqn_row[i] for i in userResiduals));
+  discrete_vars := findDiscrete(var_lst);
+  tvars := userTVars;
+
+  if debugFlag then
+    print("\nTearing type: hand guided\n");
+    print("User iteration variables (local): " + stringDelimitList(List.map(userTVars, intString), ",") + "\n");
+    print("User residual equations (local): " + stringDelimitList(List.map(userResiduals, intString), ",") + "\n");
+  end if;
+
+  while not finished loop
+    ass1 := arrayCreate(size, -1);
+    ass2 := arrayCreate(size, -1);
+    markTVarsOrResiduals(tvars, ass1);
+    markTVarsOrResiduals(user_rows, ass2);
+
+    m1 := arrayCopy(m);
+    mt1 := arrayCopy(mt);
+    deleteEntriesFromAdjacencyMatrix(m1, mt1, tvars);
+    deleteRowsFromAdjacencyMatrix(mt1, tvars);
+    deleteEntriesFromAdjacencyMatrix(mt1, m1, user_rows);
+    deleteRowsFromAdjacencyMatrix(m1, user_rows);
+
+    // Causalize as far as possible.
+    order := {};
+    caus_eq := traverseCollectiveEqnsforAssignable(ass2, m1, map_eqn_row);
+    stuck := false;
+
+    while not listEmpty(caus_eq) and not stuck loop
+      try
+        (e, e_exp, evars) := getNextSolvableEqn(caus_eq, m1, me, ass1, ass2, map_eqn_row, map_row_eqn, ass1);
+        makeAssignment(e_exp, evars, ass1, ass2, m1, mt1);
+        order := e :: order;
+        caus_eq := traverseCollectiveEqnsforAssignable(ass2, m1, map_eqn_row);
+      else
+        stuck := true;
+      end try;
+    end while;
+
+    unassigned := list(v for v guard arrayGet(ass1, v) < 0 in 1:size);
+
+    if listEmpty(unassigned) then
+      finished := true;
+    else
+      if Flags.getConfigBool(Flags.HGT_ONLY) then
+        Error.addMessage(Error.HGT_NOT_SOLVABLE, {hgtResidualNames(userResiduals, eindex, isyst),
+          "the equations {" + stringDelimitList(list(BackendDump.equationString(
+            BackendEquation.get(eqns, map_row_eqn[r])) for r guard arrayGet(ass2, r) < 0 in 1:size), "; ") +
+          "} can not be solved for the variables {" + stringDelimitList(list(ComponentReferenceBasics.printComponentRefStr(
+            BackendVariable.varCref(listGet(var_lst, v))) for v in unassigned), ", ") + "}"});
+        fail();
+      end if;
+
+      t := selectAdditionalTearingVar(unassigned, discrete_vars, ass2, mt1);
+      tvars := t :: tvars;
+
+      if debugFlag then
+        print("Additional iteration variable (local): " + intString(t) + "\n");
+      end if;
+    end if;
+  end while;
+
+  // The equations that are still unassigned are additional residual equations.
+  auto_rows := list(r for r guard arrayGet(ass2, r) < 0 in 1:size);
+
+  if listLength(user_rows) + listLength(auto_rows) <> listLength(tvars) then
+    Error.addMessage(Error.HGT_TEARING_FAILED, {hgtResidualNames(userResiduals, eindex, isyst),
+      "the number of residual equations (" + intString(listLength(user_rows) + listLength(auto_rows)) +
+      ") differs from the number of iteration variables (" + intString(listLength(tvars)) + ")"});
+    fail();
+  end if;
+
+  residuals := List.unique(list(map_row_eqn[r] for r in listAppend(user_rows, auto_rows)));
+  inner_equations := hgtInnerEquations(listReverse(order), eindex, vindx, ass2, map_eqn_row, subsyst, ishared);
+
+  ocomp := BackendDAE.TORNSYSTEM(BackendDAE.TEARINGSET(selectFromList_rev(vindx, listReverse(tvars)),
+    selectFromList_rev(eindex, residuals), inner_equations, BackendDAE.EMPTY_JACOBIAN()), NONE(), linear, mixed);
+
+  if debugFlag then
+    print("Iteration variables (local): " + stringDelimitList(List.map(listReverse(tvars), intString), ",") + "\n");
+    print("Residual equations (local): " + stringDelimitList(List.map(residuals, intString), ",") + "\n");
+    print("Automatically added: " + intString(listLength(auto_rows)) + "\n\n");
+  end if;
+end handGuidedTearing;
+
+protected function hgtInnerEquations
+  "Creates the inner equations of a hand guided tearing block. An equation that
+   is only solvable by inverting a non-linear function (e.g. m = k*sqrt(dp)
+   solved as dp = (m/k)^2) can lose a branch of the original equation. For such
+   equations a constraint checks the original equation at runtime, the code
+   generation makes it an assert, so the non-linear solver rejects the point
+   instead of converging to a spurious root."
+  input list<Integer> order "local equation indices";
+  input list<Integer> eindex "global equation indices";
+  input list<Integer> vindex "global variable indices";
+  input array<Integer> ass2;
+  input array<list<Integer>> mapEqnIncRow;
+  input BackendDAE.EqSystem subsyst;
+  input BackendDAE.Shared shared;
+  output BackendDAE.InnerEquations innerEquations = {};
+protected
+  BackendDAE.AdjacencyMatrixEnhanced me_strict;
+  String strictness;
+  list<Integer> rows, vars;
+  Integer row, v, geqn;
+  list<Integer> gvars;
+  DAE.Exp lhs, rhs, diff, tol;
+  BackendDAE.InnerEquation ie;
+algorithm
+  // Solvability without inverting non-linear functions. tryToSolveOrDerive also
+  // solves if the global strictness is casual, so use strict here explicitly.
+  strictness := Flags.getConfigString(Flags.TEARING_STRICTNESS);
+  FlagsUtil.setConfigString(Flags.TEARING_STRICTNESS, "strict");
+  try
+    (me_strict, _, _, _) := BackendDAEUtil.getAdjacencyMatrixEnhancedScalar(subsyst, shared, false);
+  else
+    FlagsUtil.setConfigString(Flags.TEARING_STRICTNESS, strictness);
+    fail();
+  end try;
+  FlagsUtil.setConfigString(Flags.TEARING_STRICTNESS, strictness);
+
+  for e in order loop
+    rows := mapEqnIncRow[e];
+    vars := list(ass2[r] for r in rows);
+    geqn := listGet(eindex, e);
+    gvars := selectFromList_rev(vindex, vars);
+    ie := BackendDAE.INNEREQUATION(eqn = geqn, vars = gvars);
+
+    if listLength(rows) == 1 then
+      row := listHead(rows);
+      v := listHead(vars);
+
+      ie := match BackendEquation.get(BackendEquation.getEqnsFromEqSystem(subsyst), e)
+        case BackendDAE.EQUATION(exp = lhs, scalar = rhs)
+          guard not List.any(me_strict[row], function isSolvableEntryFor(var = v))
+          algorithm
+            // abs(lhs - rhs) <= 1e-8 * (abs(lhs) + abs(rhs) + 1)
+            diff := Expression.makePureBuiltinCall("abs", {Expression.expSub(lhs, rhs)}, DAE.T_REAL_DEFAULT);
+            tol := Expression.expMul(DAE.RCONST(1e-8), Expression.expAdd(Expression.expAdd(
+                     Expression.makePureBuiltinCall("abs", {lhs}, DAE.T_REAL_DEFAULT),
+                     Expression.makePureBuiltinCall("abs", {rhs}, DAE.T_REAL_DEFAULT)), DAE.RCONST(1.0)));
+          then
+            BackendDAE.INNEREQUATIONCONSTRAINTS(eqn = geqn, vars = gvars,
+              cons = {DAE.CONSTRAINT_DT(DAE.RELATION(diff, DAE.LESSEQ(DAE.T_REAL_DEFAULT), tol, -1, NONE()), true)});
+        else ie;
+      end match;
+    end if;
+
+    innerEquations := ie :: innerEquations;
+  end for;
+
+  innerEquations := listReverse(innerEquations);
+end hgtInnerEquations;
+
+protected function isSolvableEntryFor
+  input BackendDAE.AdjacencyMatrixElementEnhancedEntry entry;
+  input Integer var;
+  output Boolean b;
+protected
+  Integer v;
+  BackendDAE.Solvability s;
+algorithm
+  (v, s, _) := entry;
+  b := v == var and solvable(s);
+end isSolvableEntryFor;
+
+protected function selectAdditionalTearingVar
+  "Selects an additional iteration variable for hand guided tearing: the
+   continuous variable that occurs in most of the unassigned equations."
+  input list<Integer> unassignedVars;
+  input list<Integer> discreteVars;
+  input array<Integer> ass2;
+  input BackendDAE.AdjacencyMatrixT mt;
+  output Integer tvar = -1;
+protected
+  Integer count, best = -1;
+algorithm
+  for v in unassignedVars loop
+    if not listMember(v, discreteVars) then
+      count := listLength(list(r for r guard arrayGet(ass2, r) < 0 in mt[v]));
+
+      if count > best then
+        best := count;
+        tvar := v;
+      end if;
+    end if;
+  end for;
+
+  if tvar < 0 then
+    Error.addMessage(Error.HGT_TEARING_FAILED, {"", "only discrete variables are left to select as iteration variables"});
+    fail();
+  end if;
+end selectAdditionalTearingVar;
+
+protected function hgtResidualNames
+  input list<Integer> localEqns;
+  input list<Integer> eindex;
+  input BackendDAE.EqSystem syst;
+  output String str;
+algorithm
+  str := stringDelimitList(list(Util.getOptionOrDefault(HandGuidedTearing.equationName(
+    BackendEquation.get(syst.orderedEqs, listGet(eindex, i))), intString(i)) for i in localEqns), ", ");
+end hgtResidualNames;
 
 annotation(__OpenModelica_Interface="backend");
 end Tearing;
